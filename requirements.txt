@@ -1,2 +1,7 @@
-streamlit
-openai
+streamlit>=1.50.0
+huggingface_hub
+langchain-community
+langchain-text-splitters
+pypdf
+faiss-cpu
+sentence-transformers
