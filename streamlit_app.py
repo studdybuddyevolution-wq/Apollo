@@ -124,22 +124,24 @@ col_left, col_mid, col_right = st.columns([2.8, 4.7, 2.5], gap="large")
 
 # ================= LEFT COLUMN: THE TRIFECTA INGESTION ENGINE =================
 with col_left:
-    # 1. GitHub Module
+    # 1. GitHub Form
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 🐙 GITHUB REPOSITORY")
-    github_url = st.text_input("URL", placeholder="https://github.com/user/repo", label_visibility="collapsed", key="gh_in")
-    if st.button("INDEX REPO", use_container_width=True):
-        if github_url:
-            with st.spinner("Cloning code to Vector DB..."):
-                files, err = fetch_github_repo_files(github_url)
-                if files:
-                    docs = [Document(page_content=f"File: {f['path']}\n\n{f['content']}", metadata={"source": f"GitHub: {f['path']}"}) for f in files]
-                    chunks = text_splitter.split_documents(docs)
-                    if st.session_state.vector_db is None: st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
-                    else: st.session_state.vector_db.add_documents(chunks)
-                    st.session_state.node_count += len(chunks)
-                    st.success(f"Indexed {len(chunks)} code blocks.")
-                else: st.error(err)
+    with st.form("github_form", clear_on_submit=False):
+        github_url = st.text_input("URL", placeholder="https://github.com/user/repo", label_visibility="collapsed", key="gh_in")
+        submit_gh = st.form_submit_button("INDEX REPO", use_container_width=True)
+        
+    if submit_gh and github_url:
+        with st.spinner("Cloning code to Vector DB..."):
+            files, err = fetch_github_repo_files(github_url)
+            if files:
+                docs = [Document(page_content=f"File: {f['path']}\n\n{f['content']}", metadata={"source": f"GitHub: {f['path']}"}) for f in files]
+                chunks = text_splitter.split_documents(docs)
+                if st.session_state.vector_db is None: st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                else: st.session_state.vector_db.add_documents(chunks)
+                st.session_state.node_count += len(chunks)
+                st.success(f"Indexed {len(chunks)} code blocks.")
+            else: st.error(err)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # 2. File Upload Module
@@ -158,25 +160,65 @@ with col_left:
                     st.success(f"Indexed {len(chunks)} document blocks.")
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # 3. Web Research Module
+    # 3. Web Research Form (Now Context-Managed with Fallback Architecture)
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 🌐 WEB RESEARCH")
-    research_topic = st.text_input("Topic", placeholder="e.g. Next-Gen AI Models", label_visibility="collapsed", key="web_in")
-    if st.button("INDEX LIVE WEB", use_container_width=True):
-        if research_topic:
-            with st.spinner("Scraping live internet..."):
+    with st.form("web_research_form", clear_on_submit=False):
+        research_topic = st.text_input("Topic", placeholder="e.g. Next-Gen AI Models", label_visibility="collapsed", key="web_in")
+        submit_web = st.form_submit_button("INDEX LIVE WEB", use_container_width=True)
+        
+    if submit_web and research_topic:
+        with st.spinner("Scraping live internet..."):
+            results = []
+            error_details = None
+            
+            # Step A: Attempt standard API backend with context manager
+            try:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(research_topic, max_results=8))
+            except Exception as e:
+                error_details = f"API Engine Error: {e}"
+            
+            # Step B: Sequential Fallback to Scraper Backend if API returned empty/failed
+            if not results:
                 try:
-                    results = DDGS().text(research_topic, max_results=12)
-                    if results:
-                        compiled_text = f"--- WEB RESEARCH: {research_topic} ---\n\n"
-                        for res in results: compiled_text += f"Title: {res.get('title')}\nURL: {res.get('href')}\nSummary: {res.get('body')}\n\n"
-                        doc = [Document(page_content=compiled_text, metadata={"source": f"Web Search: {research_topic}"})]
-                        chunks = text_splitter.split_documents(doc)
-                        if st.session_state.vector_db is None: st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
-                        else: st.session_state.vector_db.add_documents(chunks)
-                        st.session_state.node_count += len(chunks)
-                        st.success(f"Indexed {len(chunks)} live web blocks.")
-                except Exception as e: st.error(f"Search Error: {e}")
+                    with DDGS() as ddgs:
+                        results = list(ddgs.text(research_topic, backend="html", max_results=8))
+                except Exception as e:
+                    error_details = f"{error_details} | HTML Engine Error: {e}" if error_details else f"HTML Engine Error: {e}"
+            
+            # Step C: Sequential Fallback to Lite Backend layout
+            if not results:
+                try:
+                    with DDGS() as ddgs:
+                        results = list(ddgs.text(research_topic, backend="lite", max_results=8))
+                except Exception:
+                    pass
+
+            # Process alignment if payload verified
+            if results:
+                compiled_text = f"--- WEB RESEARCH: {research_topic} ---\n\n"
+                for res in results: 
+                    compiled_text += f"Title: {res.get('title', 'No Title')}\nURL: {res.get('href', '')}\nSummary: {res.get('body', '')}\n\n"
+                
+                doc = [Document(page_content=compiled_text, metadata={"source": f"Web Search: {research_topic}"})]
+                chunks = text_splitter.split_documents(doc)
+                
+                if st.session_state.vector_db is None: 
+                    st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                else: 
+                    st.session_state.vector_db.add_documents(chunks)
+                
+                st.session_state.node_count += len(chunks)
+                st.success(f"Indexed {len(chunks)} live web blocks.")
+            else:
+                st.error(
+                    f"❌ WEB SEARCH BLOCKED BY DUCKDUGKO\n\n"
+                    f"The search returned 0 entries. Because this app is hosted on cloud infra, DuckDuckGo "
+                    f"is rate-limiting or blocking the shared server IP address.\n\n"
+                    f"**Internal Engine Diagnostics:** {error_details if error_details else 'No explicit crash code. Anti-scraping firewall silently returned an empty page.'}\n\n"
+                    f"💡 *Bypass Tip: To search live web cleanly without IP blocks, run your streamlit app locally on your machine (using your home residential IP) or drop a raw text/PDF download into the local workspace box above!*"
+                )
     st.markdown("</div>", unsafe_allow_html=True)
 
     # 4. System Workspace
