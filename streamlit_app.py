@@ -1,15 +1,18 @@
 import os
 import time
 import tempfile
+import requests
 import streamlit as st
 from huggingface_hub import InferenceClient
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.documents import Document
+from duckduckgo_search import DDGS
 
 # 1. Page Configuration & Title
-st.set_page_config(layout="wide", page_title="APOLLO", page_icon="☀️")
+st.set_page_config(layout="wide", page_title="APOLLO ULTIMATE", page_icon="☀️")
 
 # 2. Setup High-Availability Cloud Inference Engine
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -32,174 +35,42 @@ def get_text_splitter():
 embedder = get_embedding_model()
 text_splitter = get_text_splitter()
 
-# 4. State Management Matrix
-if "vector_db" not in st.session_state:
-    st.session_state.vector_db = None
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "response_time" not in st.session_state:
-    st.session_state.response_time = "0.00s"
-if "source_reference" not in st.session_state:
-    st.session_state.source_reference = "<div class='source-box'>Awaiting data vector alignment...</div>"
-if "node_count" not in st.session_state:
-    st.session_state.node_count = 0
+# 4. Data Ingestion Helper Functions
+@st.cache_data(show_spinner=False)
+def fetch_github_repo_files(repo_url):
+    try:
+        parts = repo_url.replace("https://github.com/", "").strip("/").split("/")
+        if len(parts) < 2: return None, "Invalid GitHub URL format."
+        owner, repo = parts[0], parts[1]
+        
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/main?recursive=1"
+        response = requests.get(api_url)
+        if response.status_code != 200: 
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/master?recursive=1"
+            response = requests.get(api_url)
+            
+        if response.status_code == 200:
+            tree = response.json().get("tree", [])
+            files_data = []
+            allowed_extensions = ('.py', '.md', '.txt', '.json', '.js', '.ts', '.html', '.css', '.java', '.cpp')
+            count = 0
+            for item in tree:
+                if item.get("type") == "blob" and item.get("path", "").endswith(allowed_extensions):
+                    if count >= 30: break # Cap at 30 files
+                    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/{item['path']}"
+                    file_resp = requests.get(raw_url)
+                    if file_resp.status_code != 200:
+                        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/{item['path']}"
+                        file_resp = requests.get(raw_url)
+                    
+                    if file_resp.status_code == 200:
+                        files_data.append({"path": item['path'], "content": file_resp.text})
+                        count += 1
+            return files_data, None
+        return None, "Failed to access repository."
+    except Exception as e:
+        return None, str(e)
 
-# 5. Advanced CSS Injection: Premium Crimson, Gold & Gemini-style Scroll Architecture
-st.markdown("""
-<style>
-    /* Global System Core Layout */
-    .stApp {
-        background-color: #000000 !important;
-        background-image: 
-            radial-gradient(circle at 50% 15%, rgba(255, 60, 60, 0.12) 0%, transparent 60%),
-            radial-gradient(circle at 85% 80%, rgba(0, 120, 255, 0.06) 0%, transparent 50%) !important;
-        color: #ffffff !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    
-    /* Cyber Glass Cards */
-    .cyber-card {
-        background: rgba(10, 12, 18, 0.65) !important;
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        border-radius: 20px;
-        padding: 22px;
-        margin-bottom: 20px;
-        box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.8);
-    }
-    
-    .system-title {
-        font-size: 2.6rem;
-        font-weight: 900;
-        letter-spacing: 10px;
-        text-align: center;
-        text-transform: uppercase;
-        background: linear-gradient(135deg, #ffffff 0%, #ffaa00 50%, #ff3333 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 3px;
-        text-shadow: 0 0 35px rgba(255, 170, 0, 0.15);
-    }
-    
-    .system-subtitle {
-        font-size: 0.75rem;
-        color: #666666;
-        text-transform: uppercase;
-        letter-spacing: 4px;
-        text-align: center;
-        margin-bottom: 25px;
-    }
-
-    /* Gemini-Style Animated Greeting Entry */
-    .gemini-greeting {
-        font-size: 2.2rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #ffffff 30%, #ffaa00 70%, #ff4444 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-top: 100px;
-        margin-bottom: 10px;
-        animation: fadeIn 1.2s ease-out forwards;
-        text-align: left;
-    }
-    
-    .gemini-subgreeting {
-        font-size: 1.2rem;
-        color: #888888;
-        margin-bottom: 40px;
-        animation: fadeIn 1.6s ease-out forwards;
-        text-align: left;
-    }
-
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(15px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    
-    /* Dynamic Performance Telemetry Displays */
-    .metric-card {
-        background: rgba(15, 20, 32, 0.5) !important;
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(0, 150, 255, 0.15) !important;
-        border-radius: 12px;
-        padding: 14px;
-        text-align: center;
-        transition: all 0.3s ease;
-    }
-    .metric-card:hover {
-        border-color: rgba(0, 150, 255, 0.4);
-        box-shadow: 0 0 15px rgba(0, 150, 255, 0.15);
-    }
-    .metric-value { 
-        font-size: 24px; 
-        font-weight: 800; 
-        color: #00bfff; 
-        text-shadow: 0 0 10px rgba(0, 191, 255, 0.3); 
-    }
-    .metric-title { 
-        font-size: 10px; 
-        color: #888888; 
-        text-transform: uppercase; 
-        letter-spacing: 1px; 
-    }
-    
-    /* Source Matrix Viewer */
-    .source-box {
-        background: rgba(15, 5, 5, 0.5) !important;
-        backdrop-filter: blur(12px);
-        border-left: 3px solid #ff3333;
-        border-top: 1px solid rgba(255, 51, 51, 0.08);
-        border-right: 1px solid rgba(255, 51, 51, 0.08);
-        border-bottom: 1px solid rgba(255, 51, 51, 0.08);
-        padding: 14px;
-        border-radius: 4px 12px 12px 4px;
-        font-size: 13px;
-        color: #cccccc;
-        max-height: 480px;
-        overflow-y: auto;
-    }
-
-    /* Asymmetric Chat Injections */
-    div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from user"]) {
-        background: linear-gradient(135deg, #cc2222 0%, #881111 100%) !important;
-        border-radius: 24px 24px 4px 24px !important;
-        color: white !important;
-        border: none !important;
-        margin-left: 10% !important;
-        box-shadow: 0 4px 15px rgba(204, 34, 34, 0.15);
-    }
-    
-    div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from assistant"]) {
-        background: rgba(0, 35, 70, 0.35) !important;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(0, 150, 255, 0.25) !important;
-        border-radius: 24px 24px 24px 4px !important;
-        color: #e2e8f0 !important;
-        margin-right: 10% !important;
-        box-shadow: 0 0 20px rgba(0, 150, 255, 0.1);
-    }
-
-    /* Interactive Inputs Style Alignment */
-    div[data-testid="stChatInput"] textarea {
-        background-color: #070709 !important;
-        border: 1px solid rgba(255, 255, 255, 0.08) !important;
-        color: white !important;
-        border-radius: 14px !important;
-    }
-    div[data-testid="stChatInput"] textarea:focus {
-        border-color: #ffaa00 !important;
-        box-shadow: 0 0 10px rgba(255, 170, 0, 0.25) !important;
-    }
-    section[data-testid="stFileUploadDropzone"] {
-        background-color: rgba(15, 15, 20, 0.4) !important;
-        border: 1px dashed rgba(255, 51, 51, 0.25) !important;
-        border-radius: 14px !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# 6. File Processing Execution Path
 def process_uploaded_files(files):
     docs = []
     for f in files:
@@ -208,70 +79,129 @@ def process_uploaded_files(files):
             tmp.write(f.read())
             path = tmp.name
         try:
-            if suffix == ".pdf":
-                loader = PyPDFLoader(path)
-                docs.extend(loader.load())
-            elif suffix == ".txt":
-                loader = TextLoader(path, encoding="utf-8")
-                docs.extend(loader.load())
-        except Exception as e:
-            st.error(f"Execution Error Parsing {f.name}: {e}")
+            if suffix == ".pdf": docs.extend(PyPDFLoader(path).load())
+            elif suffix == ".txt": docs.extend(TextLoader(path, encoding="utf-8").load())
+        except Exception: pass
         finally:
-            if os.path.exists(path):
-                os.unlink(path)
+            if os.path.exists(path): os.unlink(path)
     return docs
 
+# 5. State Management Matrix
+if "vector_db" not in st.session_state: st.session_state.vector_db = None
+if "chat_history" not in st.session_state: st.session_state.chat_history = []
+if "response_time" not in st.session_state: st.session_state.response_time = "0.00s"
+if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box'>Awaiting data vector alignment...</div>"
+if "node_count" not in st.session_state: st.session_state.node_count = 0
+
+# 6. Advanced CSS Injection
+st.markdown("""
+<style>
+    .stApp { background-color: #000000 !important; background-image: radial-gradient(circle at 50% 15%, rgba(255, 60, 60, 0.12) 0%, transparent 60%), radial-gradient(circle at 85% 80%, rgba(0, 120, 255, 0.06) 0%, transparent 50%) !important; color: #ffffff !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .cyber-card { background: rgba(10, 12, 18, 0.65) !important; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 20px; padding: 22px; margin-bottom: 20px; box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.8); }
+    .system-title { font-size: 2.6rem; font-weight: 900; letter-spacing: 10px; text-align: center; text-transform: uppercase; background: linear-gradient(135deg, #ffffff 0%, #ffaa00 50%, #ff3333 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 3px; text-shadow: 0 0 35px rgba(255, 170, 0, 0.15); }
+    .system-subtitle { font-size: 0.75rem; color: #666666; text-transform: uppercase; letter-spacing: 4px; text-align: center; margin-bottom: 25px; }
+    .gemini-greeting { font-size: 2.2rem; font-weight: 700; background: linear-gradient(135deg, #ffffff 30%, #ffaa00 70%, #ff4444 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-top: 100px; margin-bottom: 10px; animation: fadeIn 1.2s ease-out forwards; text-align: left; }
+    .gemini-subgreeting { font-size: 1.2rem; color: #888888; margin-bottom: 40px; animation: fadeIn 1.6s ease-out forwards; text-align: left; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+    .metric-card { background: rgba(15, 20, 32, 0.5) !important; backdrop-filter: blur(12px); border: 1px solid rgba(0, 150, 255, 0.15) !important; border-radius: 12px; padding: 14px; text-align: center; transition: all 0.3s ease; }
+    .metric-card:hover { border-color: rgba(0, 150, 255, 0.4); box-shadow: 0 0 15px rgba(0, 150, 255, 0.15); }
+    .metric-value { font-size: 24px; font-weight: 800; color: #00bfff; text-shadow: 0 0 10px rgba(0, 191, 255, 0.3); }
+    .metric-title { font-size: 10px; color: #888888; text-transform: uppercase; letter-spacing: 1px; }
+    .source-box { background: rgba(15, 5, 5, 0.5) !important; backdrop-filter: blur(12px); border-left: 3px solid #ff3333; border-top: 1px solid rgba(255, 51, 51, 0.08); border-right: 1px solid rgba(255, 51, 51, 0.08); border-bottom: 1px solid rgba(255, 51, 51, 0.08); padding: 14px; border-radius: 4px 12px 12px 4px; font-size: 13px; color: #cccccc; max-height: 480px; overflow-y: auto; }
+    div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from user"]) { background: linear-gradient(135deg, #cc2222 0%, #881111 100%) !important; border-radius: 24px 24px 4px 24px !important; color: white !important; border: none !important; margin-left: 10% !important; box-shadow: 0 4px 15px rgba(204, 34, 34, 0.15); }
+    div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from assistant"]) { background: rgba(0, 35, 70, 0.35) !important; backdrop-filter: blur(10px); border: 1px solid rgba(0, 150, 255, 0.25) !important; border-radius: 24px 24px 24px 4px !important; color: #e2e8f0 !important; margin-right: 10% !important; box-shadow: 0 0 20px rgba(0, 150, 255, 0.1); }
+    div[data-testid="stChatInput"] textarea { background-color: #070709 !important; border: 1px solid rgba(255, 255, 255, 0.08) !important; color: white !important; border-radius: 14px !important; }
+    div[data-testid="stChatInput"] textarea:focus { border-color: #ffaa00 !important; box-shadow: 0 0 10px rgba(255, 170, 0, 0.25) !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # 7. Layout Distribution Matrix
-st.markdown("<div class='system-title'>APOLLO</div>", unsafe_allow_html=True)
-st.markdown("<div class='system-subtitle'>HIGH-AVAILABILITY CORE CONTROL ENVIRONMENT // V2.0</div>", unsafe_allow_html=True)
+st.markdown("<div class='system-title'>APOLLO OMNI</div>", unsafe_allow_html=True)
+st.markdown("<div class='system-subtitle'>GITHUB SYNC // WEB RESEARCH // LOCAL FILES</div>", unsafe_allow_html=True)
 
-col_left, col_mid, col_right = st.columns([2.7, 4.8, 2.5], gap="large")
+col_left, col_mid, col_right = st.columns([2.8, 4.7, 2.5], gap="large")
 
-# ================= LEFT COLUMN: DATA ASSITS STORAGE =================
+# ================= LEFT COLUMN: THE TRIFECTA INGESTION ENGINE =================
 with col_left:
+    # 1. GitHub Module
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("### 💾 DATA INGESTION ENGINE")
-    uploaded_files = st.file_uploader("Upload assets...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed")
-    
-    if st.button("SYNCHRONIZE VECTOR SPACE", use_container_width=True, type="primary"):
+    st.markdown("### 🐙 GITHUB REPOSITORY")
+    github_url = st.text_input("URL", placeholder="https://github.com/user/repo", label_visibility="collapsed", key="gh_in")
+    if st.button("INDEX REPO", use_container_width=True):
+        if github_url:
+            with st.spinner("Cloning code to Vector DB..."):
+                files, err = fetch_github_repo_files(github_url)
+                if files:
+                    docs = [Document(page_content=f"File: {f['path']}\n\n{f['content']}", metadata={"source": f"GitHub: {f['path']}"}) for f in files]
+                    chunks = text_splitter.split_documents(docs)
+                    if st.session_state.vector_db is None: st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                    else: st.session_state.vector_db.add_documents(chunks)
+                    st.session_state.node_count += len(chunks)
+                    st.success(f"Indexed {len(chunks)} code blocks.")
+                else: st.error(err)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 2. File Upload Module
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("### 💾 LOCAL DOCUMENTS")
+    uploaded_files = st.file_uploader("Upload", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in")
+    if st.button("INDEX FILES", use_container_width=True):
         if uploaded_files:
-            with st.spinner("Compiling multi-dimensional spaces..."):
+            with st.spinner("Parsing documents..."):
                 parsed_docs = process_uploaded_files(uploaded_files)
                 if parsed_docs:
                     chunks = text_splitter.split_documents(parsed_docs)
-                    st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
-                    st.session_state.node_count = len(chunks)
-                    st.success(f"Mapped {st.session_state.node_count} contextual blocks.")
-        else:
-            st.warning("Data arrays missing. Ingest structural files.")
+                    if st.session_state.vector_db is None: st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                    else: st.session_state.vector_db.add_documents(chunks)
+                    st.session_state.node_count += len(chunks)
+                    st.success(f"Indexed {len(chunks)} document blocks.")
     st.markdown("</div>", unsafe_allow_html=True)
-        
-    # Operations Controls Panel
+    
+    # 3. Web Research Module
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("### 🌐 WEB RESEARCH")
+    research_topic = st.text_input("Topic", placeholder="e.g. Next-Gen AI Models", label_visibility="collapsed", key="web_in")
+    if st.button("INDEX LIVE WEB", use_container_width=True):
+        if research_topic:
+            with st.spinner("Scraping live internet..."):
+                try:
+                    results = DDGS().text(research_topic, max_results=12)
+                    if results:
+                        compiled_text = f"--- WEB RESEARCH: {research_topic} ---\n\n"
+                        for res in results: compiled_text += f"Title: {res.get('title')}\nURL: {res.get('href')}\nSummary: {res.get('body')}\n\n"
+                        doc = [Document(page_content=compiled_text, metadata={"source": f"Web Search: {research_topic}"})]
+                        chunks = text_splitter.split_documents(doc)
+                        if st.session_state.vector_db is None: st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                        else: st.session_state.vector_db.add_documents(chunks)
+                        st.session_state.node_count += len(chunks)
+                        st.success(f"Indexed {len(chunks)} live web blocks.")
+                except Exception as e: st.error(f"Search Error: {e}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 4. System Workspace (Purge / Export)
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 🛠️ SYSTEM WORKSPACE")
-    btn_c1, btn_c2 = st.columns(2)
-    with btn_c1:
-        if st.button("🧹 PURGE LOGS", use_container_width=True):
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🧹 PURGE DB", use_container_width=True):
             st.session_state.chat_history = []
+            st.session_state.vector_db = None
+            st.session_state.node_count = 0
             st.session_state.response_time = "0.00s"
             st.session_state.source_reference = "<div class='source-box'>Awaiting data vector alignment...</div>"
             st.rerun()
-    with btn_c2:
+    with c2:
         chat_log = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chat_history])
-        st.download_button("💾 EXPORT TEXT", data=chat_log, file_name="apollo_session_export.txt", mime="text/plain", use_container_width=True)
+        st.download_button("💾 EXPORT", data=chat_log, file_name="apollo_log.txt", mime="text/plain", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= MIDDLE COLUMN: MAIN CHAT INTERACTION VIEW =================
 with col_mid:
-    # 1. Gemini Dynamic Greeting State (Shown only when history is empty)
     if not st.session_state.chat_history:
         st.markdown("<div class='gemini-greeting'>Hello, User.</div>", unsafe_allow_html=True)
-        st.markdown("<div class='gemini-subgreeting'>How can I assist you today with your aligned data arrays?</div>", unsafe_allow_html=True)
-        # Empty space to naturally position the initial chat input lower down
+        st.markdown("<div class='gemini-subgreeting'>Index a GitHub Repo, upload PDFs, or command the Web Agent. Then ask me anything.</div>", unsafe_allow_html=True)
         st.markdown("<div style='height: 120px;'></div>", unsafe_allow_html=True)
     
-    # 2. Dedicated Isolated Scroll Window for Responses
-    # Encapsulating messages inside a container provides an independent right-side scroll area
     chat_scroll_pane = st.container(height=520, border=False)
     
     with chat_scroll_pane:
@@ -279,29 +209,24 @@ with col_mid:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
             
-    # Input Stream Anchor
-    user_query = st.chat_input("Pass prompt to Apollo network...")
+    user_query = st.chat_input("Query your Vector Database...")
     
     if user_query:
-        # Pre-render the user's message immediately into history
         st.session_state.chat_history.append({"role": "user", "content": user_query})
         
         if st.session_state.vector_db is None:
-            err_msg = "⚠️ CORE PIPELINE ERROR: Vector core uninitialized. Mount context arrays via the Left Panel."
+            err_msg = "⚠️ DATABASE EMPTY: Please index a repo, a file, or a web topic first via the Left Panel."
             st.session_state.chat_history.append({"role": "assistant", "content": err_msg})
             st.rerun()
         else:
             start_time = time.time()
-            
-            # Context Retrieval Segment
-            retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 4})
+            retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
             matched_nodes = retriever.invoke(user_query)
-            context_payload = "\n\n".join([f"[Retrieved Document Chunk {i+1}]\n{node.page_content}" for i, node in enumerate(matched_nodes)])
+            context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
             
             sys_instruction = (
-                "You are APOLLO, a hyper-intelligent cloud AI cluster interface. "
-                "Formulate a flawless, analytical response using ONLY the verified context payload provided below. "
-                "Structure your execution clean using concise phrasing or bold details. If context elements don't answer the prompt, declare it directly."
+                "You are APOLLO. Formulate a flawless response using ONLY the provided context matrix below. "
+                "CITE YOUR SOURCES in your answer (e.g., 'According to github_script.py...' or 'Based on the web search...')."
             )
             
             message_stream = [{"role": "system", "content": sys_instruction}]
@@ -309,43 +234,35 @@ with col_mid:
                 message_stream.append({"role": msg["role"], "content": msg["content"]})
             message_stream.append({"role": "user", "content": f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}"})
             
-            # Streaming engine targeting the chat context block
             with chat_scroll_pane:
                 with st.chat_message("assistant"):
                     response_container = st.empty()
                     collected_tokens = ""
                     try:
-                        stream = client.chat_completion(
-                            messages=message_stream, max_tokens=1024, stream=True, temperature=0.2
-                        )
+                        stream = client.chat_completion(messages=message_stream, max_tokens=1024, stream=True, temperature=0.2)
                         for chunk in stream:
                             token = chunk.choices[0].delta.content
                             if token:
                                 collected_tokens += token
                                 response_container.markdown(collected_tokens + " █")
-                        
-                        if not collected_tokens.strip():
-                            collected_tokens = "⚠️ ENDPOINT TIMEOUT FALLBACK: The serverless grid returned an empty sequence. Re-submitting the query stream usually fixes this."
-                            
+                        if not collected_tokens.strip(): collected_tokens = "⚠️ EMPTY RESPONSE RETURNED."
                         response_container.markdown(collected_tokens)
                     except Exception as ex:
-                        collected_tokens = f"❌ FRAMEWORK API CRITICAL FAILURE: {ex}"
+                        collected_tokens = f"❌ API FAILURE: {ex}"
                         response_container.markdown(collected_tokens)
             
             st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
             st.session_state.response_time = f"{time.time() - start_time:.2f}s"
             
             clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-            st.session_state.source_reference = f"<div class='source-box'><strong>Attributed Node Matrix:</strong><br><br>{clean_ctx}</div>"
+            st.session_state.source_reference = f"<div class='source-box'><strong>Attributed Sources:</strong><br><br>{clean_ctx}</div>"
             st.rerun()
 
 # ================= RIGHT COLUMN: PERFORMANCE & DATA TELEMETRY =================
 with col_right:
     st.markdown("### 📊 DASHBOARD METRICS")
-    
     st.markdown(f"<div class='metric-card'><div class='metric-title'>Inference Latency</div><div class='metric-value'>{st.session_state.response_time}</div></div>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown(f"<div class='metric-card'><div class='metric-title'>Context Nodes Injected</div><div class='metric-value'>{st.session_state.node_count}</div></div>", unsafe_allow_html=True)
-    
+    st.markdown(f"<div class='metric-card'><div class='metric-title'>Total Nodes Indexed</div><div class='metric-value'>{st.session_state.node_count}</div></div>", unsafe_allow_html=True)
     st.markdown("<br>### 📑 VERIFIED RETRIEVAL MATRIX", unsafe_allow_html=True)
     st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
