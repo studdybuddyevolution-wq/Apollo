@@ -39,32 +39,33 @@ if "response_time" not in st.session_state: st.session_state.response_time = "0.
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box'>Awaiting data vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
-# Available Model Matrix (Meta Llama 3.3 70B is now the default Selection)
+# Updated Model Matrix (Gemma 4 31B is now the Primary Default)
 MODEL_OPTIONS = {
-    "Meta Llama 3.3 70B (100% Free)": {
-        "or_id": "meta-llama/llama-3.3-70b-instruct:free",
-        "hf_id": "meta-llama/Llama-3.3-70B-Instruct",
-        "desc": "Flagship 70B parameter reasoning. Completely free ($0.00/M tokens) on OpenRouter."
+    "Google Gemma 4 31B (100% Free)": {
+        "or_id": "google/gemma-4-31b-it:free",
+        "hf_id": "google/gemma-4-31b-it",
+        "desc": "Google DeepMind's flagship 31B open model. Outstanding on complex reasoning, coding, and long context tasks."
     },
     "Auto-Free Router (100% Free)": {
         "or_id": "openrouter/free",
-        "hf_id": "Qwen/Qwen2.5-14B-Instruct",
-        "desc": "Dynamically routes requests to the fastest, smartest $0.00 model online."
-    },
-    "GPT OSS 120B (100% Free)": {
-        "or_id": "openai/gpt-oss-120b:free",
         "hf_id": "Qwen/Qwen2.5-72B-Instruct",
-        "desc": "Massive 120B open-weights reasoning model. Completely free on OpenRouter."
+        "desc": "Highly reliable. Dynamically routes requests to whichever $0.00 model is currently active and healthy."
+    },
+    "Meta Llama 3.3 70B (100% Free)": {
+        "or_id": "meta-llama/llama-3.3-70b-instruct:free",
+        "hf_id": "meta-llama/Llama-3.3-70B-Instruct",
+        "desc": "Flagship 70B parameters. May experience temporary upstream rate limits."
     }
 }
 
-# 5. Intelligent Hybrid LLM Streamer (Routes to :free endpoints on OpenRouter)
+# 5. Intelligent Hybrid LLM Streamer with 429 Auto-Fallback
 def generate_llm_stream(messages, token, selected_model_name):
     if not token:
         yield "❌ MISSING CONFIGURATION: Please set your 'HF_TOKEN' secret or environment variable."
         return
 
     model_config = MODEL_OPTIONS[selected_model_name]
+    model_id = model_config["or_id"]
 
     # Check if using an OpenRouter token
     if token.strip().startswith("sk-or-"):
@@ -76,7 +77,7 @@ def generate_llm_stream(messages, token, selected_model_name):
             "X-Title": "APOLLO OMNI"
         }
         payload = {
-            "model": model_config["or_id"],
+            "model": model_id,
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": 1024,
@@ -84,6 +85,14 @@ def generate_llm_stream(messages, token, selected_model_name):
         }
         
         response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
+        
+        # Handle Throttling / Rate Limit (429) - Fall back to Auto-Router dynamically
+        if response.status_code == 429 and selected_model_name != "Auto-Free Router (100% Free)":
+            yield "⚠️ *Gemma 31B is temporarily busy. Engaging auto-fallback to alternate free model...*\n\n"
+            time.sleep(1)  # Brief pause before retrying alternate model
+            payload["model"] = "openrouter/free"
+            response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
+            
         if response.status_code != 200:
             yield f"❌ OpenRouter API Error ({response.status_code}): {response.text}"
             return
@@ -103,7 +112,7 @@ def generate_llm_stream(messages, token, selected_model_name):
                     except Exception:
                         pass
     else:
-        # Fallback to Hugging Face SDK if using an hf_token
+        # Fallback to Hugging Face SDK
         from huggingface_hub import InferenceClient
         hf_model = model_config["hf_id"]
         try:
@@ -114,7 +123,7 @@ def generate_llm_stream(messages, token, selected_model_name):
                 if token_text:
                     yield token_text
         except Exception as e:
-            yield f"❌ Hugging Face API Error (Make sure model isn't gated or too large for Free Tier): {str(e)}"
+            yield f"❌ Hugging Face API Error: {str(e)}"
 
 # 6. Advanced CSS Injection: Dark Cyber Theme
 st.markdown("""
@@ -149,7 +158,7 @@ with col_left:
     selected_model = st.selectbox(
         "Choose Zero-Cost AI Engine:",
         options=list(MODEL_OPTIONS.keys()),
-        index=0  # Defaults straight to Meta Llama 3.3 70B
+        index=0  # Defaults straight to Google Gemma 4 31B
     )
     st.caption(f"**Status:** $0.00 / million tokens. {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -297,7 +306,7 @@ with col_mid:
                     response_container = st.empty()
                     collected_tokens = ""
                     try:
-                        # Stream the requested 100% free model
+                        # Stream the requested model, automatically handles 429
                         stream = generate_llm_stream(message_stream, HF_TOKEN, selected_model)
                         for chunk in stream:
                             collected_tokens += chunk
