@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
 # 1. Page Configuration & Title
-st.set_page_config(layout="wide", page_title="APOLLO ULTIMATE", page_icon="☀️")
+st.set_page_config(layout="wide", page_title="APOLLO OMNI", page_icon="☀️")
 
 # 2. Setup High-Availability Cloud Inference Engine
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -56,7 +56,7 @@ def fetch_github_repo_files(repo_url):
             count = 0
             for item in tree:
                 if item.get("type") == "blob" and item.get("path", "").endswith(allowed_extensions):
-                    if count >= 30: break # Cap at 30 files
+                    if count >= 30: break
                     raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/{item['path']}"
                     file_resp = requests.get(raw_url)
                     if file_resp.status_code != 200:
@@ -112,6 +112,7 @@ st.markdown("""
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from assistant"]) { background: rgba(0, 35, 70, 0.35) !important; backdrop-filter: blur(10px); border: 1px solid rgba(0, 150, 255, 0.25) !important; border-radius: 24px 24px 24px 4px !important; color: #e2e8f0 !important; margin-right: 10% !important; box-shadow: 0 0 20px rgba(0, 150, 255, 0.1); }
     div[data-testid="stChatInput"] textarea { background-color: #070709 !important; border: 1px solid rgba(255, 255, 255, 0.08) !important; color: white !important; border-radius: 14px !important; }
     div[data-testid="stChatInput"] textarea:focus { border-color: #ffaa00 !important; box-shadow: 0 0 10px rgba(255, 170, 0, 0.25) !important; }
+    section[data-testid="stFileUploadDropzone"] { background-color: rgba(15, 15, 20, 0.4) !important; border: 1px dashed rgba(255, 51, 51, 0.25) !important; border-radius: 14px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -144,7 +145,7 @@ with col_left:
     # 2. File Upload Module
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 💾 LOCAL DOCUMENTS")
-    uploaded_files = st.file_uploader("Upload", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in")
+    uploaded_files = st.file_uploader("Upload assets...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in")
     if st.button("INDEX FILES", use_container_width=True):
         if uploaded_files:
             with st.spinner("Parsing documents..."):
@@ -178,7 +179,7 @@ with col_left:
                 except Exception as e: st.error(f"Search Error: {e}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 4. System Workspace (Purge / Export)
+    # 4. System Workspace
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 🛠️ SYSTEM WORKSPACE")
     c1, c2 = st.columns(2)
