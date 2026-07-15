@@ -39,26 +39,26 @@ if "response_time" not in st.session_state: st.session_state.response_time = "0.
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box'>Awaiting data vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
-# Updated Model Matrix (Gemma 4 31B is now the Primary Default)
+# Updated Model Matrix (Auto-Free Router set as absolute default)
 MODEL_OPTIONS = {
-    "Google Gemma 4 31B (100% Free)": {
-        "or_id": "google/gemma-4-31b-it:free",
-        "hf_id": "google/gemma-4-31b-it",
-        "desc": "Google DeepMind's flagship 31B open model. Outstanding on complex reasoning, coding, and long context tasks."
-    },
-    "Auto-Free Router (100% Free)": {
+    "Auto-Free Router (Recommended)": {
         "or_id": "openrouter/free",
         "hf_id": "Qwen/Qwen2.5-72B-Instruct",
-        "desc": "Highly reliable. Dynamically routes requests to whichever $0.00 model is currently active and healthy."
+        "desc": "Highly stable. Dynamically load-balances your query across whichever zero-cost models are online and responsive."
     },
-    "Meta Llama 3.3 70B (100% Free)": {
+    "Google Gemma 4 31B (Free)": {
+        "or_id": "google/gemma-4-31b-it:free",
+        "hf_id": "google/gemma-4-31b-it",
+        "desc": "Exceptional reasoning. High performance, but highly prone to individual upstream rate-limiting."
+    },
+    "Meta Llama 3.3 70B (Free)": {
         "or_id": "meta-llama/llama-3.3-70b-instruct:free",
         "hf_id": "meta-llama/Llama-3.3-70B-Instruct",
-        "desc": "Flagship 70B parameters. May experience temporary upstream rate limits."
+        "desc": "Meta's flagship 70B. Reliable, though subject to occasional provider-specific rate limits."
     }
 }
 
-# 5. Intelligent Hybrid LLM Streamer with 429 Auto-Fallback
+# 5. Intelligent Hybrid LLM Streamer with Fallback Guardrails
 def generate_llm_stream(messages, token, selected_model_name):
     if not token:
         yield "❌ MISSING CONFIGURATION: Please set your 'HF_TOKEN' secret or environment variable."
@@ -86,10 +86,10 @@ def generate_llm_stream(messages, token, selected_model_name):
         
         response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
         
-        # Handle Throttling / Rate Limit (429) - Fall back to Auto-Router dynamically
-        if response.status_code == 429 and selected_model_name != "Auto-Free Router (100% Free)":
-            yield "⚠️ *Gemma 31B is temporarily busy. Engaging auto-fallback to alternate free model...*\n\n"
-            time.sleep(1)  # Brief pause before retrying alternate model
+        # Self-Healing Fallback Logic: If an individual model gets rate-limited (429), pivot to Auto-Router
+        if response.status_code == 429 and selected_model_name != "Auto-Free Router (Recommended)":
+            yield "⚠️ *Selected engine is rate-limited. Activating emergency pivot to Auto-Free Router...*\n\n"
+            time.sleep(1)  # Brief pause before fallback attempt
             payload["model"] = "openrouter/free"
             response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
             
@@ -158,7 +158,7 @@ with col_left:
     selected_model = st.selectbox(
         "Choose Zero-Cost AI Engine:",
         options=list(MODEL_OPTIONS.keys()),
-        index=0  # Defaults straight to Google Gemma 4 31B
+        index=0  # Resolves automatically to the robust Auto-Free Router
     )
     st.caption(f"**Status:** $0.00 / million tokens. {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -306,7 +306,7 @@ with col_mid:
                     response_container = st.empty()
                     collected_tokens = ""
                     try:
-                        # Stream the requested model, automatically handles 429
+                        # Stream the requested model, automatically handles fallbacks securely
                         stream = generate_llm_stream(message_stream, HF_TOKEN, selected_model)
                         for chunk in stream:
                             collected_tokens += chunk
