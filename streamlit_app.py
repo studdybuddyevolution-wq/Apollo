@@ -13,7 +13,8 @@ st.set_page_config(layout="wide", page_title="EduQuery AI Dashboard")
 
 # 2. Setup Inference Engine
 HF_TOKEN = os.getenv("HF_TOKEN")
-LLM_MODEL = "qwen/qwen3.6-27b"
+#  CORRECT (Capitalized vendor name and model ID)
+LLM_MODEL = "Qwen/Qwen3.6-27B"
 client = InferenceClient(LLM_MODEL, token=HF_TOKEN)
 
 # 3. Cached Resource Loaders to optimize Streamlit memory consumption
