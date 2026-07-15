@@ -44,7 +44,7 @@ if "source_reference" not in st.session_state:
 if "node_count" not in st.session_state:
     st.session_state.node_count = 0
 
-# 5. Advanced CSS Injection: Premium Crimson, Gold & Clean Minimalist UI
+# 5. Advanced CSS Injection: Premium Crimson, Gold & Gemini-style Scroll Architecture
 st.markdown("""
 <style>
     /* Global System Core Layout */
@@ -88,7 +88,33 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 4px;
         text-align: center;
-        margin-bottom: 35px;
+        margin-bottom: 25px;
+    }
+
+    /* Gemini-Style Animated Greeting Entry */
+    .gemini-greeting {
+        font-size: 2.2rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffffff 30%, #ffaa00 70%, #ff4444 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-top: 100px;
+        margin-bottom: 10px;
+        animation: fadeIn 1.2s ease-out forwards;
+        text-align: left;
+    }
+    
+    .gemini-subgreeting {
+        font-size: 1.2rem;
+        color: #888888;
+        margin-bottom: 40px;
+        animation: fadeIn 1.6s ease-out forwards;
+        text-align: left;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(15px); }
+        to { opacity: 1; transform: translateY(0); }
     }
     
     /* Dynamic Performance Telemetry Displays */
@@ -140,7 +166,7 @@ st.markdown("""
         border-radius: 24px 24px 4px 24px !important;
         color: white !important;
         border: none !important;
-        margin-left: 15% !important;
+        margin-left: 10% !important;
         box-shadow: 0 4px 15px rgba(204, 34, 34, 0.15);
     }
     
@@ -150,16 +176,16 @@ st.markdown("""
         border: 1px solid rgba(0, 150, 255, 0.25) !important;
         border-radius: 24px 24px 24px 4px !important;
         color: #e2e8f0 !important;
-        margin-right: 15% !important;
+        margin-right: 10% !important;
         box-shadow: 0 0 20px rgba(0, 150, 255, 0.1);
     }
 
-    /* Interactive Inputs */
+    /* Interactive Inputs Style Alignment */
     div[data-testid="stChatInput"] textarea {
         background-color: #070709 !important;
         border: 1px solid rgba(255, 255, 255, 0.08) !important;
         color: white !important;
-        border-radius: 12px !important;
+        border-radius: 14px !important;
     }
     div[data-testid="stChatInput"] textarea:focus {
         border-color: #ffaa00 !important;
@@ -237,24 +263,33 @@ with col_left:
 
 # ================= MIDDLE COLUMN: MAIN CHAT INTERACTION VIEW =================
 with col_mid:
-    # Display Chat Array
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # 1. Gemini Dynamic Greeting State (Shown only when history is empty)
+    if not st.session_state.chat_history:
+        st.markdown("<div class='gemini-greeting'>Hello, User.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='gemini-subgreeting'>How can I assist you today with your aligned data arrays?</div>", unsafe_allow_html=True)
+        # Empty space to naturally position the initial chat input lower down
+        st.markdown("<div style='height: 120px;'></div>", unsafe_allow_html=True)
+    
+    # 2. Dedicated Isolated Scroll Window for Responses
+    # Encapsulating messages inside a container provides an independent right-side scroll area
+    chat_scroll_pane = st.container(height=520, border=False)
+    
+    with chat_scroll_pane:
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
             
-    # Input Stream Listener
+    # Input Stream Anchor
     user_query = st.chat_input("Pass prompt to Apollo network...")
     
     if user_query:
-        with st.chat_message("user"):
-            st.markdown(user_query)
+        # Pre-render the user's message immediately into history
         st.session_state.chat_history.append({"role": "user", "content": user_query})
         
         if st.session_state.vector_db is None:
             err_msg = "⚠️ CORE PIPELINE ERROR: Vector core uninitialized. Mount context arrays via the Left Panel."
-            with st.chat_message("assistant"):
-                st.markdown(err_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": err_msg})
+            st.rerun()
         else:
             start_time = time.time()
             
@@ -274,28 +309,28 @@ with col_mid:
                 message_stream.append({"role": msg["role"], "content": msg["content"]})
             message_stream.append({"role": "user", "content": f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}"})
             
-            # Response Streaming Process
-            with st.chat_message("assistant"):
-                response_container = st.empty()
-                collected_tokens = ""
-                try:
-                    # Optimized, fixed configuration values hidden for a distraction-free professional UI
-                    stream = client.chat_completion(
-                        messages=message_stream, max_tokens=1024, stream=True, temperature=0.2
-                    )
-                    for chunk in stream:
-                        token = chunk.choices[0].delta.content
-                        if token:
-                            collected_tokens += token
-                            response_container.markdown(collected_tokens + " █")
-                    
-                    if not collected_tokens.strip():
-                        collected_tokens = "⚠️ ENDPOINT TIMEOUT FALLBACK: The serverless grid returned an empty sequence. Re-submitting the query stream usually fixes this."
+            # Streaming engine targeting the chat context block
+            with chat_scroll_pane:
+                with st.chat_message("assistant"):
+                    response_container = st.empty()
+                    collected_tokens = ""
+                    try:
+                        stream = client.chat_completion(
+                            messages=message_stream, max_tokens=1024, stream=True, temperature=0.2
+                        )
+                        for chunk in stream:
+                            token = chunk.choices[0].delta.content
+                            if token:
+                                collected_tokens += token
+                                response_container.markdown(collected_tokens + " █")
                         
-                    response_container.markdown(collected_tokens)
-                except Exception as ex:
-                    collected_tokens = f"❌ FRAMEWORK API CRITICAL FAILURE: {ex}"
-                    response_container.markdown(collected_tokens)
+                        if not collected_tokens.strip():
+                            collected_tokens = "⚠️ ENDPOINT TIMEOUT FALLBACK: The serverless grid returned an empty sequence. Re-submitting the query stream usually fixes this."
+                            
+                        response_container.markdown(collected_tokens)
+                    except Exception as ex:
+                        collected_tokens = f"❌ FRAMEWORK API CRITICAL FAILURE: {ex}"
+                        response_container.markdown(collected_tokens)
             
             st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
             st.session_state.response_time = f"{time.time() - start_time:.2f}s"
