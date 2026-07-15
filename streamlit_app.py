@@ -12,7 +12,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 st.set_page_config(layout="wide", page_title="EduQuery AI Dashboard")
 
 # 2. Setup Inference Engine
-# Note: Add your HF_TOKEN inside your Streamlit App settings under "Secrets"
 HF_TOKEN = os.getenv("HF_TOKEN")
 LLM_MODEL = "qwen/qwen3.6-27b"
 client = InferenceClient(LLM_MODEL, token=HF_TOKEN)
@@ -20,9 +19,11 @@ client = InferenceClient(LLM_MODEL, token=HF_TOKEN)
 # 3. Cached Resource Loaders to optimize Streamlit memory consumption
 @st.cache_resource
 def get_embedding_model():
+    # FIXED: Replaced Alibaba with BAAI to stop the IndexError crash
     return HuggingFaceEmbeddings(
-        model_name="Alibaba-NLP/gte-large-en-v1.5",
-        model_kwargs={"trust_remote_code": True}
+        model_name="BAAI/bge-large-en-v1.5",
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True}
     )
 
 @st.cache_resource
@@ -48,7 +49,6 @@ if "source_reference" not in st.session_state:
 # 5. Cyberpunk Neon Glassmorphism CSS Injections
 custom_css = """
 <style>
-/* Base Theme overrides */
 .stApp {
     background-color: #050505 !important;
     background-image: radial-gradient(circle at 50% 0%, #3a0d0d 0%, #050505 40%), 
@@ -56,14 +56,10 @@ custom_css = """
     color: #e0e0e0 !important;
     font-family: 'Inter', sans-serif !important;
 }
-
-/* Styled Heading */
 h2, h3 {
     color: #ffffff !important;
     text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
-
-/* Custom Metric Cards */
 .metric-card {
     background: rgba(20, 25, 40, 0.6) !important;
     backdrop-filter: blur(12px);
@@ -86,8 +82,6 @@ h2, h3 {
     text-transform: uppercase; 
     letter-spacing: 1px; 
 }
-
-/* Source Box Styling */
 .source-box {
     background: rgba(30, 15, 15, 0.6) !important;
     backdrop-filter: blur(12px);
@@ -108,7 +102,6 @@ h2, h3 {
 st.markdown(custom_css, unsafe_allow_html=True)
 
 def process_documents(uploaded_files):
-    """Processes Streamlit files via secure temporary staging paths."""
     documents = []
     for uploaded_file in uploaded_files:
         suffix = os.path.splitext(uploaded_file.name)[1].lower()
@@ -167,25 +160,21 @@ with col1:
 with col2:
     st.markdown("<h2 style='text-align: center; margin-bottom: 20px;'>🎓 EduQuery AI</h2>", unsafe_allow_html=True)
     
-    # Render static history stack
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             
-    # Input capturing execution loop
     if user_msg := st.chat_input("Ask a question about your documents..."):
         with st.chat_message("user"):
             st.markdown(user_msg)
             
         st.session_state.chat_history.append({"role": "user", "content": user_msg})
         
-        # Smooth Alert Mitigation Flow if context database is missing
         if st.session_state.vector_db is None:
             err_msg = "⚠️ **Error:** Please upload and index your documents in the Document Center first."
             with st.chat_message("assistant"):
                 st.markdown(err_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": err_msg})
-            
             st.session_state.response_time = "--"
             st.session_state.source_reference = "<div class='source-box'>No context available. Load documents first.</div>"
             st.rerun()
@@ -205,7 +194,6 @@ with col2:
             )
             
             messages = [{"role": "system", "content": system_prompt}]
-            # Contextual summary history mapping
             for msg in st.session_state.chat_history[-4:]:
                 messages.append({"role": msg["role"], "content": msg["content"]})
                 
@@ -214,7 +202,6 @@ with col2:
                 "content": f"Context:\n{context_text}\n\nQuestion: {user_msg}"
             })
             
-            # Assistant Streaming Container Loop
             with st.chat_message("assistant"):
                 response_placeholder = st.empty()
                 full_response = ""
@@ -237,7 +224,6 @@ with col2:
                     
             st.session_state.chat_history.append({"role": "assistant", "content": full_response})
             
-            # Compute Metric Calculations & Render Sources
             end_time = time.time()
             st.session_state.response_time = f"{end_time - start_time:.2f}s"
             
