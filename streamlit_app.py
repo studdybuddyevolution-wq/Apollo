@@ -1,9 +1,9 @@
 import os
 import time
 import tempfile
+import json
 import requests
 import streamlit as st
-from huggingface_hub import InferenceClient
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -13,10 +13,8 @@ from langchain_core.documents import Document
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI", page_icon="☀️")
 
-# 2. Setup High-Availability Cloud Inference Engine
+# 2. Key/Token Initialization
 HF_TOKEN = os.getenv("HF_TOKEN")
-LLM_MODEL = "Qwen/Qwen2.5-72B-Instruct"
-client = InferenceClient(LLM_MODEL, token=HF_TOKEN)
 
 # 3. Resource Caching Pipelines
 @st.cache_resource
@@ -41,7 +39,84 @@ if "response_time" not in st.session_state: st.session_state.response_time = "0.
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box'>Awaiting data vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
-# 5. Advanced CSS Injection: Dark Cyber Theme
+# Available Model Matrix (Meta Llama 3.3 70B is now the default Selection)
+MODEL_OPTIONS = {
+    "Meta Llama 3.3 70B (100% Free)": {
+        "or_id": "meta-llama/llama-3.3-70b-instruct:free",
+        "hf_id": "meta-llama/Llama-3.3-70B-Instruct",
+        "desc": "Flagship 70B parameter reasoning. Completely free ($0.00/M tokens) on OpenRouter."
+    },
+    "Auto-Free Router (100% Free)": {
+        "or_id": "openrouter/free",
+        "hf_id": "Qwen/Qwen2.5-14B-Instruct",
+        "desc": "Dynamically routes requests to the fastest, smartest $0.00 model online."
+    },
+    "GPT OSS 120B (100% Free)": {
+        "or_id": "openai/gpt-oss-120b:free",
+        "hf_id": "Qwen/Qwen2.5-72B-Instruct",
+        "desc": "Massive 120B open-weights reasoning model. Completely free on OpenRouter."
+    }
+}
+
+# 5. Intelligent Hybrid LLM Streamer (Routes to :free endpoints on OpenRouter)
+def generate_llm_stream(messages, token, selected_model_name):
+    if not token:
+        yield "❌ MISSING CONFIGURATION: Please set your 'HF_TOKEN' secret or environment variable."
+        return
+
+    model_config = MODEL_OPTIONS[selected_model_name]
+
+    # Check if using an OpenRouter token
+    if token.strip().startswith("sk-or-"):
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {token.strip()}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/streamlit/streamlit",
+            "X-Title": "APOLLO OMNI"
+        }
+        payload = {
+            "model": model_config["or_id"],
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 1024,
+            "stream": True
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
+        if response.status_code != 200:
+            yield f"❌ OpenRouter API Error ({response.status_code}): {response.text}"
+            return
+            
+        for line in response.iter_lines():
+            if line:
+                decoded = line.decode('utf-8').strip()
+                if decoded.startswith("data: "):
+                    data_str = decoded[6:]
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        data_json = json.loads(data_str)
+                        token_text = data_json["choices"][0]["delta"].get("content", "")
+                        if token_text:
+                            yield token_text
+                    except Exception:
+                        pass
+    else:
+        # Fallback to Hugging Face SDK if using an hf_token
+        from huggingface_hub import InferenceClient
+        hf_model = model_config["hf_id"]
+        try:
+            client = InferenceClient(hf_model, token=token.strip())
+            stream = client.chat_completion(messages=messages, max_tokens=1024, stream=True, temperature=0.2)
+            for chunk in stream:
+                token_text = chunk.choices[0].delta.content
+                if token_text:
+                    yield token_text
+        except Exception as e:
+            yield f"❌ Hugging Face API Error (Make sure model isn't gated or too large for Free Tier): {str(e)}"
+
+# 6. Advanced CSS Injection: Dark Cyber Theme
 st.markdown("""
 <style>
     .stApp { background-color: #000000 !important; background-image: radial-gradient(circle at 50% 15%, rgba(255, 60, 60, 0.12) 0%, transparent 60%), radial-gradient(circle at 85% 80%, rgba(0, 120, 255, 0.06) 0%, transparent 50%) !important; color: #ffffff !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
@@ -68,7 +143,18 @@ col_left, col_mid, col_right = st.columns([2.8, 4.7, 2.5], gap="large")
 
 # ================= LEFT COLUMN: INGESTION ENGINE =================
 with col_left:
-    # 1. File Ingestion Module
+    # 1. Brain Config Module
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("### 🧠 BRAIN CONFIGURATION")
+    selected_model = st.selectbox(
+        "Choose Zero-Cost AI Engine:",
+        options=list(MODEL_OPTIONS.keys()),
+        index=0  # Defaults straight to Meta Llama 3.3 70B
+    )
+    st.caption(f"**Status:** $0.00 / million tokens. {MODEL_OPTIONS[selected_model]['desc']}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 2. File Ingestion Module
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 💾 LOCAL DOCUMENTS")
     uploaded_files = st.file_uploader("Upload assets...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in")
@@ -95,14 +181,13 @@ with col_left:
                     st.success(f"Indexed {len(chunks)} document blocks.")
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # 2. Web Research Engine (Tavily Integration)
+    # 3. Web Research Engine (Tavily Integration)
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 🌐 WEB RESEARCH")
     
-    # Check for Tavily Token automatically or offer text input fallback
     tavily_key = os.getenv("TAVILY_API_KEY")
     if not tavily_key:
-        tavily_key = st.text_input("Tavily API Key", type="password", help="Sign up at tavily.com for a free API token to unlock robust live web exploration.")
+        tavily_key = st.text_input("Tavily API Key", type="password", help="Sign up at tavily.com for a free API token.")
         
     with st.form("web_research_form", clear_on_submit=False):
         research_topic = st.text_input("Topic", placeholder="e.g. Next-Gen AI Models", label_visibility="collapsed", key="web_in")
@@ -117,7 +202,7 @@ with col_left:
                     url = "https://api.tavily.com/search"
                     headers = {
                         "Content-Type": "application/json",
-                        "Authorization": f"Bearer {tavily_key}"
+                        "Authorization": f"Bearer {tavily_key.strip()}"
                     }
                     payload = {
                         "query": research_topic,
@@ -151,7 +236,7 @@ with col_left:
                     st.error(f"Search matrix error: {e}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 3. System Workspace Utilities
+    # 4. System Workspace Utilities
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("### 🛠️ SYSTEM WORKSPACE")
     c1, c2 = st.columns(2)
@@ -212,13 +297,13 @@ with col_mid:
                     response_container = st.empty()
                     collected_tokens = ""
                     try:
-                        stream = client.chat_completion(messages=message_stream, max_tokens=1024, stream=True, temperature=0.2)
+                        # Stream the requested 100% free model
+                        stream = generate_llm_stream(message_stream, HF_TOKEN, selected_model)
                         for chunk in stream:
-                            token = chunk.choices[0].delta.content
-                            if token:
-                                collected_tokens += token
-                                response_container.markdown(collected_tokens + " █")
-                        if not collected_tokens.strip(): collected_tokens = "⚠️ EMPTY MATRIX RESPONSE."
+                            collected_tokens += chunk
+                            response_container.markdown(collected_tokens + " █")
+                        if not collected_tokens.strip(): 
+                            collected_tokens = "⚠️ EMPTY MATRIX RESPONSE."
                         response_container.markdown(collected_tokens)
                     except Exception as ex:
                         collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
