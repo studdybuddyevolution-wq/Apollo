@@ -8,14 +8,13 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI", page_icon="⚡")
 
-# 2. Key/Token Initialization
-HF_TOKEN = os.getenv("HF_TOKEN")
+# 2. Key/Token Initialization (Exclusively OpenRouter)
+OR_TOKEN = os.getenv("OPENROUTER_API_KEY")
 
 # 3. Resource Caching Pipelines
 @st.cache_resource
@@ -40,59 +39,51 @@ if "response_time" not in st.session_state: st.session_state.response_time = "0.
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
+# 5. OpenRouter Model Matrix (Now featuring Gemma 4 26B)
 MODEL_OPTIONS = {
-    "Auto-Free Router (Recommended)": {
-        "or_id": "openrouter/free",
-        "hf_id": "Qwen/Qwen2.5-72B-Instruct",
-        "desc": "Highly stable. Dynamically load-balances across zero-cost models."
-    },
-    "Google Gemma 4 31B (Free)": {
-        "or_id": "google/gemma-4-31b-it:free",
-        "hf_id": "google/gemma-4-31b-it",
-        "desc": "Exceptional reasoning. Prone to individual upstream rate-limiting."
+    "Google Gemma 4 26B (Free)": {
+        "or_id": "google/gemma-4-26b-a4b-it:free",
+        "desc": "Google's highly efficient 26B model. Excellent for fast retrieval and text tasks."
     },
     "Meta Llama 3.3 70B (Free)": {
         "or_id": "meta-llama/llama-3.3-70b-instruct:free",
-        "hf_id": "meta-llama/Llama-3.3-70B-Instruct",
-        "desc": "Meta's flagship 70B. Reliable, subject to occasional provider limits."
+        "desc": "Flawless instruction following. Best at overriding knowledge cutoffs."
+    },
+    "OpenAI GPT-OSS 120B (Free)": {
+        "or_id": "openai/gpt-oss-120b:free",
+        "desc": "Massive 120B model. Incredible at agentic tool use and complex reasoning."
     }
 }
 
-# 5. Intelligent Hybrid LLM Streamer
+# 6. OpenRouter Exclusive LLM Streamer
 def generate_llm_stream(messages, token, selected_model_name):
-    if not token:
-        yield "❌ MISSING CONFIGURATION: Please set your 'HF_TOKEN' secret or environment variable."
+    if not token or not token.startswith("sk-or-"):
+        yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-v1-'."
         return
 
-    model_config = MODEL_OPTIONS[selected_model_name]
-    model_id = model_config["or_id"]
-
-    if token.strip().startswith("sk-or-"):
-        url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {token.strip()}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/streamlit/streamlit",
-            "X-Title": "APOLLO OMNI"
-        }
-        payload = {
-            "model": model_id,
-            "messages": messages,
-            "temperature": 0.2,
-            "max_tokens": 1024,
-            "stream": True
-        }
-        
+    model_id = MODEL_OPTIONS[selected_model_name]["or_id"]
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {token.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8501", 
+        "X-Title": "APOLLO OMNI" 
+    }
+    
+    payload = {
+        "model": model_id,
+        "messages": messages,
+        "temperature": 0.1,  
+        "max_tokens": 1024,
+        "stream": True
+    }
+    
+    try:
         response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
         
-        if response.status_code == 429 and selected_model_name != "Auto-Free Router (Recommended)":
-            yield "⚠️ *Engine rate-limited. Activating emergency pivot to Auto-Free Router...*\n\n"
-            time.sleep(1)
-            payload["model"] = "openrouter/free"
-            response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
-            
         if response.status_code != 200:
-            yield f"❌ OpenRouter API Error ({response.status_code}): {response.text}"
+            yield f"❌ API Error ({response.status_code}): {response.text}"
             return
             
         for line in response.iter_lines():
@@ -109,20 +100,10 @@ def generate_llm_stream(messages, token, selected_model_name):
                             yield token_text
                     except Exception:
                         pass
-    else:
-        from huggingface_hub import InferenceClient
-        hf_model = model_config["hf_id"]
-        try:
-            client = InferenceClient(hf_model, token=token.strip())
-            stream = client.chat_completion(messages=messages, max_tokens=1024, stream=True, temperature=0.2)
-            for chunk in stream:
-                token_text = chunk.choices[0].delta.content
-                if token_text:
-                    yield token_text
-        except Exception as e:
-            yield f"❌ Hugging Face API Error: {str(e)}"
+    except Exception as e:
+        yield f"❌ Network Failure: {str(e)}"
 
-# 6. Advanced CSS Injection
+# 7. Advanced CSS Injection
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
@@ -221,26 +202,6 @@ st.markdown("""
         font-weight: 700;
         letter-spacing: 0.05em;
     }
-    .stButton button:hover {
-        box-shadow: 0 0 25px rgba(249, 115, 22, 0.4) !important;
-        transform: translateY(-1px) !important;
-    }
-    section[data-testid="stFileUploadDropzone"] { 
-        background-color: rgba(24, 24, 27, 0.5) !important; 
-        border: 1px dashed rgba(255, 255, 255, 0.2) !important; 
-    }
-    
-    .source-box { 
-        background: #0a0a0c !important; 
-        border: 1px solid rgba(255, 255, 255, 0.1); 
-        padding: 12px; 
-        border-radius: 6px; 
-        font-size: 0.75rem; 
-        color: #94a3b8; 
-        max-height: 300px; 
-        overflow-y: auto; 
-    }
-    .source-box strong { color: #f97316; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -248,7 +209,7 @@ st.markdown("""
 st.markdown("""
 <div class='header-bar'>
     <div class='header-title'>APOLLO <span>OMNI</span></div>
-    <div class='status-badge'>● SYSTEM NOMINAL</div>
+    <div class='status-badge'>● OPENROUTER LINKED</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -257,8 +218,8 @@ col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 # ================= LEFT COLUMN: INGESTION ENGINE =================
 with col_left:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>⚙️ RAG Engine Settings</div>", unsafe_allow_html=True)
-    selected_model = st.selectbox("AI Engine Core:", options=list(MODEL_OPTIONS.keys()), index=0)
+    st.markdown("<div class='panel-header'>⚙️ Zero-Cost Engine</div>", unsafe_allow_html=True)
+    selected_model = st.selectbox("API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0)
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -289,11 +250,6 @@ with col_left:
                     st.session_state.node_count += len(chunks)
                     st.success(f"Indexed {len(chunks)} blocks.")
     st.markdown("</div>", unsafe_allow_html=True)
-    
-    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>🌐 Tip: Autonomous RAG</div>", unsafe_allow_html=True)
-    st.info("To perform a zero-cost live web search, type `/search [query]` into the chat box. Apollo Omni will scrape the live internet to answer your question.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
 with col_mid:
@@ -301,7 +257,7 @@ with col_mid:
         st.markdown("""
         <div style='margin-top: 50px; margin-bottom: 30px; text-align: center;'>
             <h2 style='color: #f97316; font-family: "Inter", sans-serif; font-weight: 700;'>Study Console Initialized</h2>
-            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Awaiting document ingestion or queries...</p>
+            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Awaiting queries. Type /search [topic] for live web data.</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -321,19 +277,25 @@ with col_mid:
         context_payload = ""
         sys_instruction = "You are APOLLO OMNI, an advanced AI study buddy."
         
-        # ZERO-COST AUTONOMOUS RAG LOGIC
+        # ZERO-COST AUTONOMOUS RAG LOGIC WITH HARD OVERRIDE
         if user_query.lower().startswith("/search "):
             search_query = user_query[8:].strip()
             with chat_scroll_pane:
                 with st.chat_message("assistant"):
                     st.markdown(f"🌐 *Scraping live internet for:* `{search_query}`...")
             try:
-                # DuckDuckGo Zero-Cost Search
                 results = DDGS().text(search_query, max_results=4)
                 if results:
                     scraped_data = "\n\n".join([f"Source: {r['title']} ({r['href']})\nExcerpt: {r['body']}" for r in results])
                     context_payload = f"LIVE WEB SEARCH RESULTS FOR '{search_query}':\n\n{scraped_data}"
-                    sys_instruction = "You are APOLLO OMNI. You have just performed a live web search. Use ONLY the following real-time web context to answer the user's query comprehensively and cite the URL sources provided."
+                    
+                    sys_instruction = (
+                        "SYSTEM OVERRIDE: You are APOLLO OMNI. You are directly connected to the live internet. "
+                        "CRITICAL INSTRUCTION: NEVER mention a 'knowledge cutoff', 'training data', or state that an event has not happened yet. "
+                        "You must rely EXCLUSIVELY on the real-time web search results provided in the Context Matrix below. "
+                        "If the Context Matrix does not contain the answer, simply state: 'Live network scan could not verify this information.' "
+                        "Do NOT fall back to your base training data to refuse the prompt."
+                    )
                     st.session_state.source_reference = f"<div class='source-box'><strong>Live Web Data Extracted:</strong><br><br>{context_payload.replace(chr(10), '<br>')}</div>"
                 else:
                     context_payload = "No web results found."
@@ -364,7 +326,7 @@ with col_mid:
                 response_container = st.empty()
                 collected_tokens = ""
                 try:
-                    stream = generate_llm_stream(message_stream, HF_TOKEN, selected_model)
+                    stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
                     for chunk in stream:
                         collected_tokens += chunk
                         response_container.markdown(collected_tokens + " █")
