@@ -8,6 +8,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
 # 1. Page Configuration & Title
@@ -39,7 +40,7 @@ if "response_time" not in st.session_state: st.session_state.response_time = "0.
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
-# 5. OpenRouter Model Matrix (Now featuring Gemma 4 26B)
+# 5. Stable 100% Free OpenRouter Model Matrix
 MODEL_OPTIONS = {
     "Google Gemma 4 26B (Free)": {
         "or_id": "google/gemma-4-26b-a4b-it:free",
@@ -47,11 +48,7 @@ MODEL_OPTIONS = {
     },
     "Meta Llama 3.3 70B (Free)": {
         "or_id": "meta-llama/llama-3.3-70b-instruct:free",
-        "desc": "Flawless instruction following. Best at overriding knowledge cutoffs."
-    },
-    "OpenAI GPT-OSS 120B (Free)": {
-        "or_id": "openai/gpt-oss-120b:free",
-        "desc": "Massive 120B model. Incredible at agentic tool use and complex reasoning."
+        "desc": "Massive 70B model. Incredible at general reasoning and completely free."
     }
 }
 
@@ -74,7 +71,7 @@ def generate_llm_stream(messages, token, selected_model_name):
     payload = {
         "model": model_id,
         "messages": messages,
-        "temperature": 0.1,  
+        "temperature": 0.3,  
         "max_tokens": 1024,
         "stream": True
     }
@@ -188,19 +185,10 @@ st.markdown("""
         color: white !important; 
         font-family: 'JetBrains Mono', monospace !important;
     }
-    div[data-testid="stChatInput"] textarea:focus {
-        border-color: #f97316 !important;
-        box-shadow: 0 0 0 1px #f97316 !important;
-    }
     .stButton button {
         background: linear-gradient(180deg, #f97316 0%, #ea580c 100%) !important;
         color: #fff !important;
         border: none !important;
-        box-shadow: 0 0 15px rgba(249, 115, 22, 0.2) !important;
-        transition: all 0.2s ease !important;
-        text-transform: uppercase;
-        font-weight: 700;
-        letter-spacing: 0.05em;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -223,6 +211,40 @@ with col_left:
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # --- NEW: WEB SEARCH INDEXER ---
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>🌐 Web Search Indexer</div>", unsafe_allow_html=True)
+    web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
+    if st.button("SEARCH & INDEX", use_container_width=True):
+        if web_query:
+            with st.spinner("Scraping and chunking web data..."):
+                try:
+                    results = DDGS().text(web_query, max_results=4)
+                    if results:
+                        web_docs = []
+                        for r in results:
+                            # Convert web results into LangChain Document objects
+                            doc = Document(
+                                page_content=r['body'], 
+                                metadata={"source": r['href'], "title": r['title']}
+                            )
+                            web_docs.append(doc)
+                            
+                        chunks = text_splitter.split_documents(web_docs)
+                        if st.session_state.vector_db is None: 
+                            st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                        else: 
+                            st.session_state.vector_db.add_documents(chunks)
+                            
+                        st.session_state.node_count += len(chunks)
+                        st.success(f"Indexed {len(chunks)} blocks from web!")
+                    else:
+                        st.warning("No web results found.")
+                except Exception as e:
+                    st.error(f"Search failed: {str(e)}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- LOCAL DOCUMENTS INDEXER ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>📚 Local Documents</div>", unsafe_allow_html=True)
     uploaded_files = st.file_uploader("Upload course materials...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in")
@@ -257,7 +279,7 @@ with col_mid:
         st.markdown("""
         <div style='margin-top: 50px; margin-bottom: 30px; text-align: center;'>
             <h2 style='color: #f97316; font-family: "Inter", sans-serif; font-weight: 700;'>Study Console Initialized</h2>
-            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Awaiting queries. Type /search [topic] for live web data.</p>
+            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Use the left panel to index Web Data or Local Files, then chat here.</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -268,42 +290,16 @@ with col_mid:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
             
-    user_query = st.chat_input("Enter query or /search [topic]...")
+    user_query = st.chat_input("Enter your query...")
     
     if user_query:
         st.session_state.chat_history.append({"role": "user", "content": user_query})
         
         start_time = time.time()
         context_payload = ""
-        sys_instruction = "You are APOLLO OMNI, an advanced AI study buddy."
         
-        # ZERO-COST AUTONOMOUS RAG LOGIC WITH HARD OVERRIDE
-        if user_query.lower().startswith("/search "):
-            search_query = user_query[8:].strip()
-            with chat_scroll_pane:
-                with st.chat_message("assistant"):
-                    st.markdown(f"🌐 *Scraping live internet for:* `{search_query}`...")
-            try:
-                results = DDGS().text(search_query, max_results=4)
-                if results:
-                    scraped_data = "\n\n".join([f"Source: {r['title']} ({r['href']})\nExcerpt: {r['body']}" for r in results])
-                    context_payload = f"LIVE WEB SEARCH RESULTS FOR '{search_query}':\n\n{scraped_data}"
-                    
-                    sys_instruction = (
-                        "SYSTEM OVERRIDE: You are APOLLO OMNI. You are directly connected to the live internet. "
-                        "CRITICAL INSTRUCTION: NEVER mention a 'knowledge cutoff', 'training data', or state that an event has not happened yet. "
-                        "You must rely EXCLUSIVELY on the real-time web search results provided in the Context Matrix below. "
-                        "If the Context Matrix does not contain the answer, simply state: 'Live network scan could not verify this information.' "
-                        "Do NOT fall back to your base training data to refuse the prompt."
-                    )
-                    st.session_state.source_reference = f"<div class='source-box'><strong>Live Web Data Extracted:</strong><br><br>{context_payload.replace(chr(10), '<br>')}</div>"
-                else:
-                    context_payload = "No web results found."
-            except Exception as e:
-                context_payload = f"Web search failed: {str(e)}"
-        
-        # STANDARD LOCAL RAG LOGIC
-        elif st.session_state.vector_db is not None:
+        # STANDARD LOCAL RAG LOGIC ONLY (Web data is now handled via the indexer)
+        if st.session_state.vector_db is not None:
             retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
             matched_nodes = retriever.invoke(user_query)
             context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
@@ -312,7 +308,7 @@ with col_mid:
             st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
             
         else:
-            sys_instruction = "You are APOLLO OMNI, an advanced AI study buddy. (No documents uploaded yet, answer based on general knowledge)."
+            sys_instruction = "You are APOLLO OMNI, an advanced AI study buddy. (No documents or web data indexed yet, answering based on general knowledge)."
             st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
 
         # GENERATE RESPONSE
