@@ -10,6 +10,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
+from PIL import Image
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
@@ -20,7 +21,6 @@ OR_TOKEN = os.getenv("OPENROUTER_API_KEY")
 # 3. Resource Caching Pipelines
 @st.cache_resource
 def get_embedding_model():
-    # SWAPPED: Using all-MiniLM-L6-v2 for lightning-fast CPU performance
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': 'cpu'},
@@ -197,15 +197,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Custom Brand Header Matrix (Renders logo if present, else drops back to pristine font layout)
+# Custom Brand Header Matrix (Renders logo safely if valid, drops back to text layout if corrupt)
+logo_loaded = False
 if os.path.exists("logo.png"):
-    col_logo, col_badge = st.columns([8, 2])
-    with col_logo:
-        st.image("logo.png", width=220)
-    with col_badge:
-        st.markdown("<div style='text-align: right; margin-top: 15px;'><span class='status-badge'>● OPENROUTER LINKED</span></div>", unsafe_allow_html=True)
-    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin-top: -10px; margin-bottom: 30px;'>", unsafe_allow_html=True)
-else:
+    try:
+        with Image.open("logo.png") as img:
+            img.verify()  # Confirm it is an actual valid image file
+        
+        col_logo, col_badge = st.columns([8, 2])
+        with col_logo:
+            st.image("logo.png", width=220)
+        with col_badge:
+            st.markdown("<div style='text-align: right; margin-top: 15px;'><span class='status-badge'>● OPENROUTER LINKED</span></div>", unsafe_allow_html=True)
+        st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin-top: -10px; margin-bottom: 30px;'>", unsafe_allow_html=True)
+        logo_loaded = True
+    except Exception:
+        pass  # Skip corrupted/LFS pointer image configurations gracefully
+
+if not logo_loaded:
     st.markdown("""
     <div class='header-bar'>
         <div class='header-left'>
