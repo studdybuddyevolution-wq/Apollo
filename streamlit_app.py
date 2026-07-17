@@ -20,8 +20,9 @@ OR_TOKEN = os.getenv("OPENROUTER_API_KEY")
 # 3. Resource Caching Pipelines
 @st.cache_resource
 def get_embedding_model():
+    # SWAPPED: Using all-MiniLM-L6-v2 for lightning-fast CPU performance
     return HuggingFaceEmbeddings(
-        model_name="BAAI/bge-large-en-v1.5",
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': 'cpu'},
         encode_kwargs={'normalize_embeddings': True}
     )
