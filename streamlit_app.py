@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
 # 1. Page Configuration & Title
-st.set_page_config(layout="wide", page_title="APOLLO OMNI", page_icon="⚡")
+st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 
 # 2. Key/Token Initialization (Exclusively OpenRouter)
 OR_TOKEN = os.getenv("OPENROUTER_API_KEY")
@@ -119,7 +119,7 @@ st.markdown("""
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(24, 24, 27, 0.8);
         backdrop-filter: blur(12px);
-        padding: 15px 24px;
+        padding: 10px 24px;
         margin-top: -60px;
         margin-bottom: 30px;
         border-radius: 0 0 12px 12px;
@@ -127,15 +127,18 @@ st.markdown("""
         justify-content: space-between;
         align-items: center;
     }
-    .header-title { font-size: 1.25rem; font-weight: 700; letter-spacing: 0.05em; color: white; }
-    .header-title span { color: #f97316; }
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    }
     .status-badge {
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.75rem;
         background: rgba(34, 197, 94, 0.1);
         color: #4ade80;
         border: 1px solid rgba(34, 197, 94, 0.2);
-        padding: 2px 8px;
+        padding: 4px 10px;
         border-radius: 4px;
         display: inline-flex;
         align-items: center;
@@ -193,13 +196,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Custom Header
-st.markdown("""
-<div class='header-bar'>
-    <div class='header-title'>APOLLO <span>OMNI</span></div>
-    <div class='status-badge'>● OPENROUTER LINKED</div>
-</div>
-""", unsafe_allow_html=True)
+# Custom Brand Header Matrix (Renders logo if present, else drops back to pristine font layout)
+if os.path.exists("logo.png"):
+    col_logo, col_badge = st.columns([8, 2])
+    with col_logo:
+        st.image("logo.png", width=220)
+    with col_badge:
+        st.markdown("<div style='text-align: right; margin-top: 15px;'><span class='status-badge'>● OPENROUTER LINKED</span></div>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin-top: -10px; margin-bottom: 30px;'>", unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div class='header-bar'>
+        <div class='header-left'>
+            <div style='font-size: 1.25rem; font-weight: 700; letter-spacing: 0.05em; color: white;'>APOLLO <span style='color: #f97316;'>OMNI AI</span></div>
+        </div>
+        <div class='status-badge'>● OPENROUTER LINKED</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
@@ -229,7 +242,6 @@ with col_left:
                     if results:
                         web_docs = []
                         for r in results:
-                            # Convert web results into LangChain Document objects
                             doc = Document(
                                 page_content=r['body'], 
                                 metadata={"source": r['href'], "title": r['title']}
@@ -304,17 +316,17 @@ with col_mid:
         start_time = time.time()
         context_payload = ""
         
-        # STANDARD LOCAL RAG LOGIC ONLY (Web data is now handled via the indexer)
+        # STANDARD LOCAL RAG LOGIC ONLY
         if st.session_state.vector_db is not None:
             retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
             matched_nodes = retriever.invoke(user_query)
             context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
-            sys_instruction = "You are APOLLO OMNI, an advanced AI study buddy. Formulate a flawless response using ONLY the provided context below. CITE YOUR SOURCES in your answer."
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a response using ONLY the provided context below. CITE YOUR SOURCES in your answer."
             clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
             st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
             
         else:
-            sys_instruction = "You are APOLLO OMNI, an advanced AI study buddy. (No documents or web data indexed yet, answering based on general knowledge)."
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. (Answering based on general knowledge)."
             st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
 
         # GENERATE RESPONSE
