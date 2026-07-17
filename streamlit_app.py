@@ -211,7 +211,7 @@ with col_left:
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- NEW: WEB SEARCH INDEXER ---
+    # --- WEB SEARCH INDEXER WITH BOT BYPASS FIX ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>🌐 Web Search Indexer</div>", unsafe_allow_html=True)
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
@@ -219,7 +219,13 @@ with col_left:
         if web_query:
             with st.spinner("Scraping and chunking web data..."):
                 try:
-                    results = DDGS().text(web_query, max_results=4)
+                    # Bypass DuckDuckGo bot-protection by forcing the HTML backend
+                    results = DDGS().text(web_query, max_results=4, backend="html")
+                    
+                    # If HTML fails, fallback to the Lite backend
+                    if not results:
+                        results = DDGS().text(web_query, max_results=4, backend="lite")
+                        
                     if results:
                         web_docs = []
                         for r in results:
