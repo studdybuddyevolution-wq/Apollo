@@ -270,17 +270,60 @@ with col_left:
         if uploaded_files:
             with st.spinner("Indexing materials..."):
                 docs = []
+                MAX_FILE_SIZE_MB = 5  # Files larger than this will be auto-split
+                
                 for f in uploaded_files:
                     suffix = os.path.splitext(f.name)[1].lower()
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                        tmp.write(f.read())
-                        path = tmp.name
-                    try:
-                        if suffix == ".pdf": docs.extend(PyPDFLoader(path).load())
-                        elif suffix == ".txt": docs.extend(TextLoader(path, encoding="utf-8").load())
-                    except Exception: pass
-                    finally:
-                        if os.path.exists(path): os.unlink(path)
+                    file_bytes = f.read()
+                    file_size_mb = len(file_bytes) / (1024 * 1024)
+                    
+                    # Split handling logic for large text files
+                    if suffix == ".txt" and file_size_mb > MAX_FILE_SIZE_MB:
+                        try:
+                            lines = file_bytes.decode("utf-8", errors="ignore").splitlines(keepends=True)
+                            current_chunk_lines = []
+                            current_chunk_bytes = 0
+                            max_bytes_per_chunk = MAX_FILE_SIZE_MB * 1024 * 1024
+                            
+                            for line in lines:
+                                line_bytes = len(line.encode('utf-8'))
+                                if current_chunk_bytes + line_bytes > max_bytes_per_chunk and current_chunk_lines:
+                                    # Process current segment text
+                                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                                        tmp.write("".join(current_chunk_lines).encode("utf-8"))
+                                        path = tmp.name
+                                    try:
+                                        docs.extend(TextLoader(path, encoding="utf-8").load())
+                                    finally:
+                                        if os.path.exists(path): os.unlink(path)
+                                    
+                                    current_chunk_lines = []
+                                    current_chunk_bytes = 0
+                                    
+                                current_chunk_lines.append(line)
+                                current_chunk_bytes += line_bytes
+                                
+                            if current_chunk_lines:
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                                    tmp.write("".join(current_chunk_lines).encode("utf-8"))
+                                    path = tmp.name
+                                try:
+                                    docs.extend(TextLoader(path, encoding="utf-8").load())
+                                finally:
+                                    if os.path.exists(path): os.unlink(path)
+                        except Exception: pass
+                    else:
+                        # Fallback regular handling for small files or PDFs
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                            tmp.write(file_bytes)
+                            path = tmp.name
+                        try:
+                            if suffix == ".pdf": docs.extend(PyPDFLoader(path).load())
+                            elif suffix == ".txt": docs.extend(TextLoader(path, encoding="utf-8").load())
+                        except Exception: pass
+                        finally:
+                            if os.path.exists(path): os.unlink(path)
+                            
                 if docs:
                     chunks = text_splitter.split_documents(docs)
                     if st.session_state.vector_db is None: 
