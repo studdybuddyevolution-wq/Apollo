@@ -18,9 +18,9 @@ st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 # 2. Key/Token Initialization (Exclusively OpenRouter)
 OR_TOKEN = os.getenv("OPENROUTER_API_KEY")
 
-# 3. Resource Caching Pipelines
 @st.cache_resource
 def get_embedding_model():
+    # Utilizing ultra-light sentence-transformers/all-MiniLM-L6-v2 for CPU responsiveness
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': 'cpu'},
@@ -34,14 +34,12 @@ def get_text_splitter():
 embedder = get_embedding_model()
 text_splitter = get_text_splitter()
 
-# 4. State Management Matrix
 if "vector_db" not in st.session_state: st.session_state.vector_db = None
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "response_time" not in st.session_state: st.session_state.response_time = "0.00s"
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
-# 5. Stable 100% Free OpenRouter Model Matrix
 MODEL_OPTIONS = {
     "Google Gemma 4 26B (Free)": {
         "or_id": "google/gemma-4-26b-a4b-it:free",
@@ -53,7 +51,6 @@ MODEL_OPTIONS = {
     }
 }
 
-# 6. OpenRouter Exclusive LLM Streamer
 def generate_llm_stream(messages, token, selected_model_name):
     if not token or not token.startswith("sk-or-"):
         yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-v1-'."
@@ -101,17 +98,30 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 7. Advanced CSS Injection
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
     
-    .stApp { 
+    /* 1. Global root variable lock (Stops Streamlit from switching colors on foreign devices) */
+    :root {
+        --background-color: #0f0f11 !important;
+        --secondary-background-color: rgba(24, 24, 27, 0.8) !important;
+        --text-color: #e5e7eb !important;
+        --primary-color: #f97316 !important;
+    }
+
+    /* 2. Primary layout background forces */
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] { 
         background-color: #0f0f11 !important; 
         background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px) !important;
         background-size: 20px 20px !important;
         color: #e5e7eb !important; 
         font-family: 'Inter', sans-serif !important; 
+    }
+    
+    /* 3. Global typography overrides to prevent light-theme whiteout */
+    h1, h2, h3, h4, h5, h6, p, span, label, li, small, div {
+        color: #e5e7eb !important;
     }
     
     .font-mono { font-family: 'JetBrains Mono', monospace !important; }
@@ -137,7 +147,7 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.75rem;
         background: rgba(34, 197, 94, 0.1);
-        color: #4ade80;
+        color: #4ade80 !important;
         border: 1px solid rgba(34, 197, 94, 0.2);
         padding: 4px 10px;
         border-radius: 4px;
@@ -149,7 +159,7 @@ st.markdown("""
     .cyber-card { 
         background: rgba(24, 24, 27, 0.8) !important; 
         backdrop-filter: blur(8px); 
-        border: 1px solid rgba(255, 255, 255, 0.1); 
+        border: 1px solid rgba(255, 255, 255, 0.1) !important; 
         border-radius: 8px; 
         padding: 16px; 
         margin-bottom: 20px; 
@@ -159,27 +169,26 @@ st.markdown("""
         font-size: 0.875rem;
         font-weight: 600;
         letter-spacing: 0.05em;
-        color: #d4d4d8;
+        color: #d4d4d8 !important;
         text-transform: uppercase;
         margin-bottom: 16px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         padding-bottom: 8px;
     }
 
-    .metric-value { font-size: 1.875rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #fff; text-shadow: 0 0 10px rgba(249, 115, 22, 0.5); }
-    .metric-title { font-size: 0.75rem; color: #71717a; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px; }
+    .metric-value { font-size: 1.875rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #fff !important; text-shadow: 0 0 10px rgba(249, 115, 22, 0.5); }
+    .metric-title { font-size: 0.75rem; color: #71717a !important; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px; }
 
+    /* 4. Chat layout color controls */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from user"]) { 
         background: rgba(56, 189, 248, 0.05) !important; 
         border-left: 2px solid #38bdf8 !important; 
         border-radius: 4px 12px 12px 4px !important; 
-        color: #e5e7eb !important; 
     }
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from assistant"]) { 
         background: rgba(249, 115, 22, 0.05) !important; 
         border-left: 2px solid #f97316 !important; 
         border-radius: 4px 12px 12px 4px !important; 
-        color: #e5e7eb !important; 
         box-shadow: inset 4px 0 0 rgba(249, 115, 22, 0.2);
     }
     
@@ -194,15 +203,45 @@ st.markdown("""
         color: #fff !important;
         border: none !important;
     }
+
+    /* 5. Dropdowns and interactive widgets forced dark style mapping */
+    div[data-baseweb="select"] > div {
+        background-color: #18181b !important;
+        border-color: rgba(255, 255, 255, 0.1) !important;
+        color: white !important;
+    }
+    ul[role="listbox"] {
+        background-color: #18181b !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    }
+    li[role="option"] {
+        background-color: #18181b !important;
+        color: #e5e7eb !important;
+    }
+    li[role="option"]:hover {
+        background-color: #f97316 !important;
+        color: white !important;
+    }
+
+    .source-box {
+        background: #060608 !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        padding: 12px !important;
+        border-radius: 6px !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.8rem !important;
+        color: #a1a1aa !important;
+        overflow-x: auto;
+        max-height: 350px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Custom Brand Header Matrix (Renders logo safely if valid, drops back to text layout if corrupt)
 logo_loaded = False
 if os.path.exists("logo.png"):
     try:
         with Image.open("logo.png") as img:
-            img.verify()  # Confirm it is an actual valid image file
+            img.verify()  # Guarantee file validity (defend against Git LFS plain text metadata pointers)
         
         col_logo, col_badge = st.columns([8, 2])
         with col_logo:
@@ -212,7 +251,7 @@ if os.path.exists("logo.png"):
         st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin-top: -10px; margin-bottom: 30px;'>", unsafe_allow_html=True)
         logo_loaded = True
     except Exception:
-        pass  # Skip corrupted/LFS pointer image configurations gracefully
+        pass  # Gracefully fall back to CSS text banner layout on load failure
 
 if not logo_loaded:
     st.markdown("""
@@ -259,13 +298,19 @@ with col_left:
                             web_docs.append(doc)
                             
                         chunks = text_splitter.split_documents(web_docs)
-                        if st.session_state.vector_db is None: 
-                            st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
-                        else: 
-                            st.session_state.vector_db.add_documents(chunks)
-                            
-                        st.session_state.node_count += len(chunks)
-                        st.success(f"Indexed {len(chunks)} blocks from web!")
+                        
+                        # Crash prevention: filter out empty document fragments
+                        valid_chunks = [c for c in chunks if c.page_content.strip()]
+                        if valid_chunks:
+                            if st.session_state.vector_db is None: 
+                                st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
+                            else: 
+                                st.session_state.vector_db.add_documents(valid_chunks)
+                                
+                            st.session_state.node_count += len(valid_chunks)
+                            st.success(f"Indexed {len(valid_chunks)} blocks from web!")
+                        else:
+                            st.warning("Empty or un-parsable search blocks.")
                     else:
                         st.warning("No web results found.")
                 except Exception as e:
@@ -336,12 +381,19 @@ with col_left:
                             
                 if docs:
                     chunks = text_splitter.split_documents(docs)
-                    if st.session_state.vector_db is None: 
-                        st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
-                    else: 
-                        st.session_state.vector_db.add_documents(chunks)
-                    st.session_state.node_count += len(chunks)
-                    st.success(f"Indexed {len(chunks)} blocks.")
+                    
+                    # Crash protection: Filter out any completely empty document chunks before index builds
+                    valid_chunks = [c for c in chunks if c.page_content.strip()]
+                    
+                    if valid_chunks:
+                        if st.session_state.vector_db is None: 
+                            st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
+                        else: 
+                            st.session_state.vector_db.add_documents(valid_chunks)
+                        st.session_state.node_count += len(valid_chunks)
+                        st.success(f"Indexed {len(valid_chunks)} blocks.")
+                    else:
+                        st.error("No extractable or valid text structure found in the uploaded documents.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
