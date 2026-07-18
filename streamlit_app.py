@@ -495,19 +495,20 @@ with col_mid:
         
         with chat_scroll_pane:
             with st.chat_message("assistant"):
-                response_container = st.empty()
-                collected_tokens = ""
                 try:
                     stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
-                    for chunk in stream:
-                        collected_tokens += chunk
-                        response_container.markdown(collected_tokens + " █")
-                    if not collected_tokens.strip(): 
+                    
+                    # 🚀 FIX: Use Streamlit's native high-speed engine instead of a manual Python loop
+                    # This stops the app from re-rendering the entire text block 100 times a second.
+                    collected_tokens = st.write_stream(stream)
+                    
+                    if not collected_tokens or not str(collected_tokens).strip(): 
                         collected_tokens = "⚠️ EMPTY RESPONSE."
-                    response_container.markdown(collected_tokens)
+                        st.markdown(collected_tokens)
+                        
                 except Exception as ex:
                     collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
-                    response_container.markdown(collected_tokens)
+                    st.markdown(collected_tokens)
         
         st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
         st.session_state.response_time = f"{time.time() - start_time:.2f}s"
