@@ -259,21 +259,7 @@ if not logo_loaded:
         <div class='header-left'>
             <div style='font-size: 1.25rem; font-weight: 700; letter-spacing: 0.05em; color: white;'>APOLLO <span style='color: #f97316;'>OMNI AI</span></div>
         </div>
-        <div class='status-badge'>● OPENROUTER LINKED</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
-
-# ================= LEFT COLUMN: INGESTION ENGINE =================
-with col_left:
-    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>⚙️ Zero-Cost Engine</div>", unsafe_allow_html=True)
-    selected_model = st.selectbox("API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0)
-    st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # --- WEB SEARCH INDEXER WITH BOT BYPASS FIX ---
+    # --- WEB SEARCH INDEXER WITH BOT BYPASS FIX & SPAM FILTER ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>🌐 Web Search Indexer</div>", unsafe_allow_html=True)
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
@@ -281,36 +267,61 @@ with col_left:
         if web_query:
             with st.spinner("Scraping and chunking web data..."):
                 try:
-                    # Bypass DuckDuckGo bot-protection by forcing the HTML backend
-                    results = DDGS().text(web_query, max_results=4, backend="html")
+                    search_variations = [
+                        web_query, 
+                        f"{web_query} detailed analysis",
+                        f"{web_query} latest updates"
+                    ]
                     
-                    # If HTML fails, fallback to the Lite backend
-                    if not results:
-                        results = DDGS().text(web_query, max_results=4, backend="lite")
+                    all_results = []
+                    for q in search_variations:
+                        # Fetch 10 results per variation
+                        res = DDGS().text(q, max_results=10, backend="html")
+                        if not res: # Fallback to lite if html is blocked
+                            res = DDGS().text(q, max_results=10, backend="lite")
+                        if res:
+                            all_results.extend(res)
+                            
+                    # Remove exact duplicates based on the source URL
+                    unique_results = {r['href']: r for r in all_results if 'href' in r}.values()
                         
-                    if results:
+                    if unique_results:
                         web_docs = []
-                        for r in results:
+                        spam_triggers = ["tango box", "recipient phone number", "lorem ipsum", "tango artist"]
+                        
+                        for r in unique_results:
+                            content = r.get('body', '')
+                            title = r.get('title', 'Unknown Title')
+                            source_url = r.get('href', 'Unknown URL')
+                            
+                            # Crash prevention & Spam Guard
+                            is_spam = any(trigger in content.lower() or trigger in title.lower() for trigger in spam_triggers)
+                            if is_spam or not content.strip():
+                                continue 
+                                
                             doc = Document(
-                                page_content=r['body'], 
-                                metadata={"source": r['href'], "title": r['title']}
+                                page_content=content, 
+                                metadata={"source": source_url, "title": title}
                             )
                             web_docs.append(doc)
                             
-                        chunks = text_splitter.split_documents(web_docs)
-                        
-                        # Crash prevention: filter out empty document fragments
-                        valid_chunks = [c for c in chunks if c.page_content.strip()]
-                        if valid_chunks:
-                            if st.session_state.vector_db is None: 
-                                st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
-                            else: 
-                                st.session_state.vector_db.add_documents(valid_chunks)
-                                
-                            st.session_state.node_count += len(valid_chunks)
-                            st.success(f"Indexed {len(valid_chunks)} blocks from web!")
+                        if web_docs:
+                            chunks = text_splitter.split_documents(web_docs)
+                            
+                            # Validate chunks
+                            valid_chunks = [c for c in chunks if c.page_content.strip()]
+                            if valid_chunks:
+                                if st.session_state.vector_db is None: 
+                                    st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
+                                else: 
+                                    st.session_state.vector_db.add_documents(valid_chunks)
+                                    
+                                st.session_state.node_count += len(valid_chunks)
+                                st.success(f"Indexed {len(valid_chunks)} blocks from web!")
+                            else:
+                                st.warning("Empty or un-parsable search blocks.")
                         else:
-                            st.warning("Empty or un-parsable search blocks.")
+                            st.warning("All results filtered out as potential search engine spam.")
                     else:
                         st.warning("No web results found.")
                 except Exception as e:
