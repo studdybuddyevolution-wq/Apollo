@@ -283,38 +283,41 @@ with col_left:
                 try:
                     search_variations = [
                         web_query, 
-                        f"{web_query} detailed analysis",
+                        f"{web_query} reviews",
                         f"{web_query} latest updates"
                     ]
                     
                     all_results = []
                     for q in search_variations:
-                        # Fetch 10 results per variation
-                        res = DDGS().text(q, max_results=10, backend="html")
-                        if not res: # Fallback to lite if html is blocked
-                            res = DDGS().text(q, max_results=10, backend="lite")
-                        if res:
-                            all_results.extend(res)
+                        # Use default API backend (most stable, avoids empty Cloudflare bodies)
+                        try:
+                            res = list(DDGS().text(q, max_results=8))
+                            if not res:
+                                res = list(DDGS().text(q, max_results=8, backend="lite"))
+                            if res:
+                                all_results.extend(res)
+                        except Exception:
+                            pass
                             
                     # Remove exact duplicates based on the source URL
-                    unique_results = {r['href']: r for r in all_results if 'href' in r}.values()
+                    unique_results = {r.get('href', str(i)): r for i, r in enumerate(all_results)}.values()
                         
                     if unique_results:
                         web_docs = []
                         spam_triggers = ["tango box", "recipient phone number", "lorem ipsum", "tango artist"]
                         
                         for r in unique_results:
-                            content = r.get('body', '')
-                            title = r.get('title', 'Unknown Title')
-                            source_url = r.get('href', 'Unknown URL')
+                            content = str(r.get('body', '') or '').strip()
+                            title = str(r.get('title', 'Unknown Title') or '').strip()
+                            source_url = str(r.get('href', 'Unknown URL') or '').strip()
                             
                             # Crash prevention & Spam Guard
                             is_spam = any(trigger in content.lower() or trigger in title.lower() for trigger in spam_triggers)
-                            if is_spam or not content.strip():
+                            if is_spam or len(content) < 15: # Skip empty or ridiculously short bodies
                                 continue 
                                 
                             doc = Document(
-                                page_content=content, 
+                                page_content=f"Title: {title}\nSource: {source_url}\nContext: {content}", 
                                 metadata={"source": source_url, "title": title}
                             )
                             web_docs.append(doc)
@@ -335,9 +338,9 @@ with col_left:
                             else:
                                 st.warning("Empty or un-parsable search blocks.")
                         else:
-                            st.warning("All results filtered out as potential search engine spam.")
+                            st.warning(f"Found {len(unique_results)} links, but the search engine blocked the text bodies. Try waiting a minute or change the query.")
                     else:
-                        st.warning("No web results found.")
+                        st.warning("No web results found. Rate limit reached, try again shortly.")
                 except Exception as e:
                     st.error(f"Search failed: {str(e)}")
     st.markdown("</div>", unsafe_allow_html=True)
