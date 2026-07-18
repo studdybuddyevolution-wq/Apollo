@@ -199,12 +199,37 @@ st.markdown("""
         box-shadow: inset 4px 0 0 rgba(249, 115, 22, 0.2);
     }
     
-    div[data-testid="stChatInput"] textarea { 
+    div[data-testid="stChatInput"] textarea,
+    div[data-testid="stChatInput"] { 
         background-color: #0a0a0c !important; 
-        border: 1px solid rgba(255, 255, 255, 0.1) !important; 
+        border-color: rgba(255, 255, 255, 0.1) !important; 
         color: white !important; 
         font-family: 'JetBrains Mono', monospace !important;
     }
+    
+    /* Fix for standard text inputs (like the search box) */
+    div[data-baseweb="input"] > div {
+        background-color: #0a0a0c !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    }
+    div[data-baseweb="input"] input {
+        color: white !important;
+        background-color: transparent !important;
+    }
+
+    /* Fix for File Uploader dropzone */
+    [data-testid="stFileUploadDropzone"] {
+        background-color: #18181b !important;
+        border: 1px dashed rgba(255, 255, 255, 0.2) !important;
+    }
+    [data-testid="stFileUploadDropzone"] * {
+        color: #a1a1aa !important;
+    }
+    [data-testid="stFileUploadDropzone"]:hover {
+        border-color: #f97316 !important;
+        background-color: #27272a !important;
+    }
+
     .stButton button {
         background: linear-gradient(180deg, #f97316 0%, #ea580c 100%) !important;
         color: #fff !important;
@@ -214,6 +239,9 @@ st.markdown("""
     div[data-baseweb="select"] > div {
         background-color: #18181b !important;
         border-color: rgba(255, 255, 255, 0.1) !important;
+        color: white !important;
+    }
+    div[data-baseweb="select"] span {
         color: white !important;
     }
     ul[role="listbox"] {
