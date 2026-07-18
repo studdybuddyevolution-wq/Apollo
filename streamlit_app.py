@@ -481,11 +481,11 @@ with col_mid:
             retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
             matched_nodes = retriever.invoke(user_query)
             context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
-            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a response using ONLY the provided context below. CITE YOUR SOURCES in your answer."
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a crisp, concise response using ONLY the provided context below. DO NOT include raw URLs, markdown links, or brackets with links in your final text. Keep your answer clean, readable, and strictly to the point."
             clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
             st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
         else:
-            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. (Answering based on general knowledge)."
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Answer based on general knowledge. Be crisp and concise. DO NOT print raw URLs."
             st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
 
         message_stream = [{"role": "system", "content": sys_instruction}]
@@ -527,4 +527,20 @@ with col_right:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>📑 Verified Retrieval Matrix</div>", unsafe_allow_html=True)
     st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>🛠️ Session Actions</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("PURGE", use_container_width=True):
+            st.session_state.chat_history = []
+            st.session_state.vector_db = None
+            st.session_state.node_count = 0
+            st.session_state.response_time = "0.00s"
+            st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
+            st.rerun()
+    with c2:
+        chat_log = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chat_history])
+        st.download_button("EXPORT", data=chat_log, file_name="apollo_log.txt", mime="text/plain", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
