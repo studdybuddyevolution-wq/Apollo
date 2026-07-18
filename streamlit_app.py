@@ -292,27 +292,41 @@ with col_left:
         
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
     
+    # 1. Focused Safety Guardrails (Nudity, Violence, Arms, etc.)
+    RESTRICTED_TERMS = [
+        # Nudity & Sexual Content
+        "porn", "nsfw", "xxx", "sex", "nude", "onlyfans", "erotic",
+        # Violence, Gore & Self-Harm
+        "kill", "suicide", "murder", "gore", "violence", "torture", "dead body",
+        # Arms & Ammunition
+        "weapon", "bomb", "gun", "ammunition", "firearm", "explosive", "rifle",
+        # Illegal/Dangerous Materials
+        "drugs", "meth", "cocaine", "heroin"
+    ]
+    
     if st.button("SEARCH & INDEX", use_container_width=True):
         if not TAVILY_KEY or not TAVILY_KEY.startswith("tvly-"):
             st.error("No active Tavily API Key found in Streamlit Secrets dashboard. Please check your configuration.")
         elif web_query:
-            with st.spinner("Executing secure query expansion and document retrieval..."):
-                try:
-                    # Leverage 3-phrase query expansion for exhaustive coverage
-                    query_variations = [
-                        web_query,
-                        f"{web_query} detailed analysis specifications",
-                        f"{web_query} latest pricing reviews"
-                    ]
-                    
-                    unique_docs = {}
-                    
-                    for q in query_variations:
+            # 2. Run the Security Check
+            query_lower = web_query.lower()
+            violation_found = any(term in query_lower for term in RESTRICTED_TERMS)
+            
+            if violation_found:
+                # Block the request completely and show a warning
+                st.error("🚨 **SECURITY ALERT:** Your search query violates our safety policy. Searches related to explicit content, violence, or weaponry are strictly prohibited.")
+            else:
+                # 3. Proceed with search if safe
+                with st.spinner("Executing secure web retrieval..."):
+                    try:
+                        # TAVILY API INTEGRATION
                         api_url = "https://api.tavily.com/search"
                         payload = {
-                            "api_key": TAVILY_KEY.strip(),
-                            "query": q,
-                            "search_depth": "advanced", 
+                            "api_key": TAVILY_KEY,
+                            "query": web_query,
+                            "search_depth": "advanced",
+                            "include_answer": False,
+                            "include_images": False,
                             "include_raw_content": False,
                             "max_results": 10
                         }
@@ -322,45 +336,46 @@ with col_left:
                         if response.status_code == 200:
                             data = response.json()
                             results = data.get("results", [])
+                            unique_docs = {}
                             
                             for r in results:
                                 source_url = r.get('url', '')
                                 content = r.get('content', '')
                                 title = r.get('title', 'Verified Source')
                                 
-                                # Eliminate duplicates across query runs
                                 if source_url and content and (source_url not in unique_docs):
                                     unique_docs[source_url] = {
                                         "content": content,
                                         "title": title
                                     }
                                     
-                    web_docs = []
-                    for url, info in unique_docs.items():
-                        web_docs.append(Document(
-                            page_content=f"Title: {info['title']}\nSource: {url}\nContext: {info['content']}",
-                            metadata={"source": url, "title": info['title']}
-                        ))
-                        
-                    if web_docs:
-                        chunks = text_splitter.split_documents(web_docs)
-                        # Ensure we clear out empty/parsing anomalies before indexing
-                        valid_chunks = [c for c in chunks if c.page_content.strip()]
-                        
-                        if valid_chunks:
-                            if st.session_state.vector_db is None: 
-                                st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
-                            else: 
-                                st.session_state.vector_db.add_documents(valid_chunks)
+                            web_docs = []
+                            for url, info in unique_docs.items():
+                                web_docs.append(Document(
+                                    page_content=f"Title: {info['title']}\nSource: {url}\nContext: {info['content']}",
+                                    metadata={"source": url, "title": info['title']}
+                                ))
                                 
-                            st.session_state.node_count += len(valid_chunks)
-                            st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
+                            if web_docs:
+                                chunks = text_splitter.split_documents(web_docs)
+                                valid_chunks = [c for c in chunks if c.page_content.strip()]
+                                
+                                if valid_chunks:
+                                    if st.session_state.vector_db is None: 
+                                        st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
+                                    else: 
+                                        st.session_state.vector_db.add_documents(valid_chunks)
+                                        
+                                    st.session_state.node_count += len(valid_chunks)
+                                    st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
+                                else:
+                                    st.warning("Empty content blocks returned. Purging indices.")
+                            else:
+                                st.warning("Tavily yielded no valid search data.")
                         else:
-                            st.warning("Empty content blocks returned. Purging indices.")
-                    else:
-                        st.warning("Tavily yielded no non-duplicate search data.")
-                except Exception as e:
-                    st.error(f"Tavily connection failed: {str(e)}")
+                            st.error(f"Tavily API Error: {response.text}")
+                    except Exception as e:
+                        st.error(f"Tavily connection failed: {str(e)}")
     st.markdown("</div>", unsafe_allow_html=True)
 
     # --- LOCAL DOCUMENTS INDEXER ---
@@ -512,20 +527,4 @@ with col_right:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>📑 Verified Retrieval Matrix</div>", unsafe_allow_html=True)
     st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>🛠️ Session Actions</div>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("PURGE", use_container_width=True):
-            st.session_state.chat_history = []
-            st.session_state.vector_db = None
-            st.session_state.node_count = 0
-            st.session_state.response_time = "0.00s"
-            st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
-            st.rerun()
-    with c2:
-        chat_log = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chat_history])
-        st.download_button("EXPORT", data=chat_log, file_name="apollo_log.txt", mime="text/plain", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
