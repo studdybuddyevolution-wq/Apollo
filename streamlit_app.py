@@ -9,18 +9,25 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-from duckduckgo_search import DDGS
 from PIL import Image
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 
-# 2. Key/Token Initialization (Exclusively OpenRouter)
-OR_TOKEN = os.getenv("OPENROUTER_API_KEY")
+# 2. Key/Token Initialization (Exclusively pulling from Streamlit secure Secrets Manager)
+try:
+    OR_TOKEN = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
+except Exception:
+    OR_TOKEN = os.getenv("OPENROUTER_API_KEY", "")
 
+try:
+    TAVILY_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", ""))
+except Exception:
+    TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
+
+# 3. Resource Caching Pipelines
 @st.cache_resource
 def get_embedding_model():
-    # Utilizing ultra-light sentence-transformers/all-MiniLM-L6-v2 for CPU responsiveness
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': 'cpu'},
@@ -34,12 +41,14 @@ def get_text_splitter():
 embedder = get_embedding_model()
 text_splitter = get_text_splitter()
 
+# 4. State Management Matrix
 if "vector_db" not in st.session_state: st.session_state.vector_db = None
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "response_time" not in st.session_state: st.session_state.response_time = "0.00s"
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
+# 5. Stable 100% Free OpenRouter Model Matrix
 MODEL_OPTIONS = {
     "Google Gemma 4 26B (Free)": {
         "or_id": "google/gemma-4-26b-a4b-it:free",
@@ -51,9 +60,10 @@ MODEL_OPTIONS = {
     }
 }
 
+# 6. OpenRouter Exclusive LLM Streamer
 def generate_llm_stream(messages, token, selected_model_name):
     if not token or not token.startswith("sk-or-"):
-        yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-v1-'."
+        yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-v1-' in your Streamlit Secrets Dashboard."
         return
 
     model_id = MODEL_OPTIONS[selected_model_name]["or_id"]
@@ -98,11 +108,11 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
+# 7. Advanced CSS Injection (Forcing Dark Mode)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
     
-    /* 1. Global root variable lock (Stops Streamlit from switching colors on foreign devices) */
     :root {
         --background-color: #0f0f11 !important;
         --secondary-background-color: rgba(24, 24, 27, 0.8) !important;
@@ -110,7 +120,6 @@ st.markdown("""
         --primary-color: #f97316 !important;
     }
 
-    /* 2. Primary layout background forces */
     .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] { 
         background-color: #0f0f11 !important; 
         background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px) !important;
@@ -119,7 +128,6 @@ st.markdown("""
         font-family: 'Inter', sans-serif !important; 
     }
     
-    /* 3. Global typography overrides to prevent light-theme whiteout */
     h1, h2, h3, h4, h5, h6, p, span, label, li, small, div {
         color: #e5e7eb !important;
     }
@@ -179,7 +187,6 @@ st.markdown("""
     .metric-value { font-size: 1.875rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #fff !important; text-shadow: 0 0 10px rgba(249, 115, 22, 0.5); }
     .metric-title { font-size: 0.75rem; color: #71717a !important; text-transform: uppercase; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px; }
 
-    /* 4. Chat layout color controls */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message from user"]) { 
         background: rgba(56, 189, 248, 0.05) !important; 
         border-left: 2px solid #38bdf8 !important; 
@@ -204,7 +211,6 @@ st.markdown("""
         border: none !important;
     }
 
-    /* 5. Dropdowns and interactive widgets forced dark style mapping */
     div[data-baseweb="select"] > div {
         background-color: #18181b !important;
         border-color: rgba(255, 255, 255, 0.1) !important;
@@ -237,11 +243,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Custom Brand Header Matrix
 logo_loaded = False
 if os.path.exists("logo.png"):
     try:
         with Image.open("logo.png") as img:
-            img.verify()  # Guarantee file validity (defend against Git LFS plain text metadata pointers)
+            img.verify()
         
         col_logo, col_badge = st.columns([8, 2])
         with col_logo:
@@ -251,7 +258,7 @@ if os.path.exists("logo.png"):
         st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin-top: -10px; margin-bottom: 30px;'>", unsafe_allow_html=True)
         logo_loaded = True
     except Exception:
-        pass  # Gracefully fall back to CSS text banner layout on load failure
+        pass
 
 if not logo_loaded:
     st.markdown("""
@@ -273,70 +280,85 @@ with col_left:
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- WEB SEARCH INDEXER (TAVILY UPGRADE) ---
+    # --- SECURED WEB SEARCH INDEXER (TAVILY REST API) ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>🌐 AI Web Search (Tavily)</div>", unsafe_allow_html=True)
     
-    tavily_key = st.text_input("Tavily API Key (tvly-...):", type="password", value=os.getenv("TAVILY_API_KEY", ""))
+    # Informs the user of key status dynamically without rendering the password/token text on screen
+    if TAVILY_KEY:
+        st.markdown("<span style='font-size:0.8rem; color:#4ade80;'>✅ Tavily API Key Linked Safely</span>", unsafe_allow_html=True)
+    else:
+        st.markdown("<span style='font-size:0.8rem; color:#f87171;'>❌ Missing TAVILY_API_KEY in Secrets</span>", unsafe_allow_html=True)
+        
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
     
     if st.button("SEARCH & INDEX", use_container_width=True):
-        if not tavily_key or not tavily_key.startswith("tvly-"):
-            st.error("Please enter a valid Tavily API key starting with 'tvly-'.")
+        if not TAVILY_KEY or not TAVILY_KEY.startswith("tvly-"):
+            st.error("No active Tavily API Key found in Streamlit Secrets dashboard. Please check your configuration.")
         elif web_query:
-            with st.spinner("Scraping clean AI data via Tavily..."):
+            with st.spinner("Executing secure query expansion and document retrieval..."):
                 try:
-                    # 1. Call Tavily REST API directly
-                    api_url = "https://api.tavily.com/search"
-                    payload = {
-                        "api_key": tavily_key,
-                        "query": web_query,
-                        "search_depth": "advanced", 
-                        "include_raw_content": False,
-                        "max_results": 6
-                    }
+                    # Leverage 3-phrase query expansion for exhaustive coverage
+                    query_variations = [
+                        web_query,
+                        f"{web_query} detailed analysis specifications",
+                        f"{web_query} latest pricing reviews"
+                    ]
                     
-                    response = requests.post(api_url, json=payload, timeout=25)
+                    unique_docs = {}
                     
-                    if response.status_code == 200:
-                        data = response.json()
-                        results = data.get("results", [])
+                    for q in query_variations:
+                        api_url = "https://api.tavily.com/search"
+                        payload = {
+                            "api_key": TAVILY_KEY.strip(),
+                            "query": q,
+                            "search_depth": "advanced", 
+                            "include_raw_content": False,
+                            "max_results": 10
+                        }
                         
-                        if results:
-                            web_docs = []
+                        response = requests.post(api_url, json=payload, timeout=25)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            results = data.get("results", [])
+                            
                             for r in results:
-                                content = str(r.get('content', '')).strip()
-                                title = str(r.get('title', 'Unknown Title')).strip()
-                                source_url = str(r.get('url', 'Unknown URL')).strip()
+                                source_url = r.get('url', '')
+                                content = r.get('content', '')
+                                title = r.get('title', 'Verified Source')
                                 
-                                # Tavily already filters spam, just ensure it's not empty
-                                if len(content) > 20: 
-                                    doc = Document(
-                                        page_content=f"Title: {title}\nSource: {source_url}\nContext: {content}", 
-                                        metadata={"source": source_url, "title": title}
-                                    )
-                                    web_docs.append(doc)
+                                # Eliminate duplicates across query runs
+                                if source_url and content and (source_url not in unique_docs):
+                                    unique_docs[source_url] = {
+                                        "content": content,
+                                        "title": title
+                                    }
+                                    
+                    web_docs = []
+                    for url, info in unique_docs.items():
+                        web_docs.append(Document(
+                            page_content=f"Title: {info['title']}\nSource: {url}\nContext: {info['content']}",
+                            metadata={"source": url, "title": info['title']}
+                        ))
+                        
+                    if web_docs:
+                        chunks = text_splitter.split_documents(web_docs)
+                        # Ensure we clear out empty/parsing anomalies before indexing
+                        valid_chunks = [c for c in chunks if c.page_content.strip()]
+                        
+                        if valid_chunks:
+                            if st.session_state.vector_db is None: 
+                                st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
+                            else: 
+                                st.session_state.vector_db.add_documents(valid_chunks)
                                 
-                            if web_docs:
-                                chunks = text_splitter.split_documents(web_docs)
-                                valid_chunks = [c for c in chunks if c.page_content.strip()]
-                                
-                                if valid_chunks:
-                                    if st.session_state.vector_db is None: 
-                                        st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
-                                    else: 
-                                        st.session_state.vector_db.add_documents(valid_chunks)
-                                        
-                                    st.session_state.node_count += len(valid_chunks)
-                                    st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
-                                else:
-                                    st.warning("Could not extract chunks.")
-                            else:
-                                st.warning("Results were too short to index.")
+                            st.session_state.node_count += len(valid_chunks)
+                            st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
                         else:
-                            st.warning("Tavily found no results for this query.")
+                            st.warning("Empty content blocks returned. Purging indices.")
                     else:
-                        st.error(f"Tavily API Error {response.status_code}: {response.text}")
+                        st.warning("Tavily yielded no non-duplicate search data.")
                 except Exception as e:
                     st.error(f"Tavily connection failed: {str(e)}")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -347,16 +369,15 @@ with col_left:
     uploaded_files = st.file_uploader("Upload course materials...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in")
     if st.button("SYNC KNOWLEDGE BASE", use_container_width=True):
         if uploaded_files:
-            with st.spinner("Indexing materials..."):
+            with st.spinner("Structuring uploaded data nodes..."):
                 docs = []
-                MAX_FILE_SIZE_MB = 5  # Files larger than this will be auto-split
+                MAX_FILE_SIZE_MB = 5
                 
                 for f in uploaded_files:
                     suffix = os.path.splitext(f.name)[1].lower()
                     file_bytes = f.read()
                     file_size_mb = len(file_bytes) / (1024 * 1024)
                     
-                    # Split handling logic for large text files
                     if suffix == ".txt" and file_size_mb > MAX_FILE_SIZE_MB:
                         try:
                             lines = file_bytes.decode("utf-8", errors="ignore").splitlines(keepends=True)
@@ -367,7 +388,6 @@ with col_left:
                             for line in lines:
                                 line_bytes = len(line.encode('utf-8'))
                                 if current_chunk_bytes + line_bytes > max_bytes_per_chunk and current_chunk_lines:
-                                    # Process current segment text
                                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                                         tmp.write("".join(current_chunk_lines).encode("utf-8"))
                                         path = tmp.name
@@ -392,7 +412,6 @@ with col_left:
                                     if os.path.exists(path): os.unlink(path)
                         except Exception: pass
                     else:
-                        # Fallback regular handling for small files or PDFs
                         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                             tmp.write(file_bytes)
                             path = tmp.name
@@ -405,8 +424,6 @@ with col_left:
                             
                 if docs:
                     chunks = text_splitter.split_documents(docs)
-                    
-                    # Crash protection: Filter out any completely empty document chunks before index builds
                     valid_chunks = [c for c in chunks if c.page_content.strip()]
                     
                     if valid_chunks:
@@ -415,9 +432,9 @@ with col_left:
                         else: 
                             st.session_state.vector_db.add_documents(valid_chunks)
                         st.session_state.node_count += len(valid_chunks)
-                        st.success(f"Indexed {len(valid_chunks)} blocks.")
+                        st.success(f"Successfully Indexed {len(valid_chunks)} document blocks.")
                     else:
-                        st.error("No extractable or valid text structure found in the uploaded documents.")
+                        st.error("No valid text structure found in files.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
@@ -445,7 +462,6 @@ with col_mid:
         start_time = time.time()
         context_payload = ""
         
-        # STANDARD LOCAL RAG LOGIC ONLY
         if st.session_state.vector_db is not None:
             retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
             matched_nodes = retriever.invoke(user_query)
@@ -453,12 +469,10 @@ with col_mid:
             sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a response using ONLY the provided context below. CITE YOUR SOURCES in your answer."
             clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
             st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
-            
         else:
             sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. (Answering based on general knowledge)."
             st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
 
-        # GENERATE RESPONSE
         message_stream = [{"role": "system", "content": sys_instruction}]
         for msg in st.session_state.chat_history[-4:]:
             message_stream.append({"role": msg["role"], "content": msg["content"]})
