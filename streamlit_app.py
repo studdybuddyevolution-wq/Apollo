@@ -259,6 +259,20 @@ if not logo_loaded:
         <div class='header-left'>
             <div style='font-size: 1.25rem; font-weight: 700; letter-spacing: 0.05em; color: white;'>APOLLO <span style='color: #f97316;'>OMNI AI</span></div>
         </div>
+        <div class='status-badge'>● OPENROUTER LINKED</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
+
+# ================= LEFT COLUMN: INGESTION ENGINE =================
+with col_left:
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>⚙️ Zero-Cost Engine</div>", unsafe_allow_html=True)
+    selected_model = st.selectbox("API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0)
+    st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
     # --- WEB SEARCH INDEXER WITH BOT BYPASS FIX & SPAM FILTER ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>🌐 Web Search Indexer</div>", unsafe_allow_html=True)
