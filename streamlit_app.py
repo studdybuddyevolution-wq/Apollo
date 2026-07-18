@@ -273,76 +273,72 @@ with col_left:
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- WEB SEARCH INDEXER WITH BOT BYPASS FIX & SPAM FILTER ---
+    # --- WEB SEARCH INDEXER (TAVILY UPGRADE) ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>🌐 Web Search Indexer</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>🌐 AI Web Search (Tavily)</div>", unsafe_allow_html=True)
+    
+    tavily_key = st.text_input("Tavily API Key (tvly-...):", type="password", value=os.getenv("TAVILY_API_KEY", ""))
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
+    
     if st.button("SEARCH & INDEX", use_container_width=True):
-        if web_query:
-            with st.spinner("Scraping and chunking web data..."):
+        if not tavily_key or not tavily_key.startswith("tvly-"):
+            st.error("Please enter a valid Tavily API key starting with 'tvly-'.")
+        elif web_query:
+            with st.spinner("Scraping clean AI data via Tavily..."):
                 try:
-                    search_variations = [
-                        web_query, 
-                        f"{web_query} reviews",
-                        f"{web_query} latest updates"
-                    ]
+                    # 1. Call Tavily REST API directly
+                    api_url = "https://api.tavily.com/search"
+                    payload = {
+                        "api_key": tavily_key,
+                        "query": web_query,
+                        "search_depth": "advanced", 
+                        "include_raw_content": False,
+                        "max_results": 6
+                    }
                     
-                    all_results = []
-                    for q in search_variations:
-                        # Use default API backend (most stable, avoids empty Cloudflare bodies)
-                        try:
-                            res = list(DDGS().text(q, max_results=8))
-                            if not res:
-                                res = list(DDGS().text(q, max_results=8, backend="lite"))
-                            if res:
-                                all_results.extend(res)
-                        except Exception:
-                            pass
-                            
-                    # Remove exact duplicates based on the source URL
-                    unique_results = {r.get('href', str(i)): r for i, r in enumerate(all_results)}.values()
+                    response = requests.post(api_url, json=payload, timeout=25)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        results = data.get("results", [])
                         
-                    if unique_results:
-                        web_docs = []
-                        spam_triggers = ["tango box", "recipient phone number", "lorem ipsum", "tango artist"]
-                        
-                        for r in unique_results:
-                            content = str(r.get('body', '') or '').strip()
-                            title = str(r.get('title', 'Unknown Title') or '').strip()
-                            source_url = str(r.get('href', 'Unknown URL') or '').strip()
-                            
-                            # Crash prevention & Spam Guard
-                            is_spam = any(trigger in content.lower() or trigger in title.lower() for trigger in spam_triggers)
-                            if is_spam or len(content) < 15: # Skip empty or ridiculously short bodies
-                                continue 
+                        if results:
+                            web_docs = []
+                            for r in results:
+                                content = str(r.get('content', '')).strip()
+                                title = str(r.get('title', 'Unknown Title')).strip()
+                                source_url = str(r.get('url', 'Unknown URL')).strip()
                                 
-                            doc = Document(
-                                page_content=f"Title: {title}\nSource: {source_url}\nContext: {content}", 
-                                metadata={"source": source_url, "title": title}
-                            )
-                            web_docs.append(doc)
-                            
-                        if web_docs:
-                            chunks = text_splitter.split_documents(web_docs)
-                            
-                            # Validate chunks
-                            valid_chunks = [c for c in chunks if c.page_content.strip()]
-                            if valid_chunks:
-                                if st.session_state.vector_db is None: 
-                                    st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
-                                else: 
-                                    st.session_state.vector_db.add_documents(valid_chunks)
-                                    
-                                st.session_state.node_count += len(valid_chunks)
-                                st.success(f"Indexed {len(valid_chunks)} blocks from web!")
+                                # Tavily already filters spam, just ensure it's not empty
+                                if len(content) > 20: 
+                                    doc = Document(
+                                        page_content=f"Title: {title}\nSource: {source_url}\nContext: {content}", 
+                                        metadata={"source": source_url, "title": title}
+                                    )
+                                    web_docs.append(doc)
+                                
+                            if web_docs:
+                                chunks = text_splitter.split_documents(web_docs)
+                                valid_chunks = [c for c in chunks if c.page_content.strip()]
+                                
+                                if valid_chunks:
+                                    if st.session_state.vector_db is None: 
+                                        st.session_state.vector_db = FAISS.from_documents(valid_chunks, embedder)
+                                    else: 
+                                        st.session_state.vector_db.add_documents(valid_chunks)
+                                        
+                                    st.session_state.node_count += len(valid_chunks)
+                                    st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
+                                else:
+                                    st.warning("Could not extract chunks.")
                             else:
-                                st.warning("Empty or un-parsable search blocks.")
+                                st.warning("Results were too short to index.")
                         else:
-                            st.warning(f"Found {len(unique_results)} links, but the search engine blocked the text bodies. Try waiting a minute or change the query.")
+                            st.warning("Tavily found no results for this query.")
                     else:
-                        st.warning("No web results found. Rate limit reached, try again shortly.")
+                        st.error(f"Tavily API Error {response.status_code}: {response.text}")
                 except Exception as e:
-                    st.error(f"Search failed: {str(e)}")
+                    st.error(f"Tavily connection failed: {str(e)}")
     st.markdown("</div>", unsafe_allow_html=True)
 
     # --- LOCAL DOCUMENTS INDEXER ---
