@@ -10,3 +10,5 @@ sentence-transformers
 duckduckgo-search
 requests
 torchvision
+python-pptx
+extra-streamlit-components
