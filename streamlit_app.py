@@ -420,10 +420,10 @@ with col_left:
                                     st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
                                 else:
                                     st.warning("Empty content blocks returned. Purging indices.")
+                            else:
+                                st.warning("Tavily yielded no valid search data.")
                         else:
-                            st.warning("Tavily yielded no valid search data.")
-                    else:
-                        st.error(f"Tavily API Error: {response.text}")
+                            st.error(f"Tavily API Error: {response.text}")
                     except Exception as e:
                         st.error(f"Tavily connection failed: {str(e)}")
     st.markdown("</div>", unsafe_allow_html=True)
