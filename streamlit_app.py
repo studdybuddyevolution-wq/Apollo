@@ -3,6 +3,9 @@ import time
 import tempfile
 import json
 import requests
+import random
+import smtplib
+from email.mime.text import MIMEText
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -14,7 +17,7 @@ from PIL import Image
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 
-# 2. Key/Token Initialization (Exclusively pulling from Streamlit secure Secrets Manager)
+# 2. Key/Token Initialization
 try:
     OR_TOKEN = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
 except Exception:
@@ -47,8 +50,12 @@ if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "response_time" not in st.session_state: st.session_state.response_time = "0.00s"
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
-# NEW: Authentication State
+
+# NEW: Advanced Authentication State
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
+if "otp_sent" not in st.session_state: st.session_state.otp_sent = False
+if "generated_otp" not in st.session_state: st.session_state.generated_otp = None
+if "user_email" not in st.session_state: st.session_state.user_email = ""
 
 # 5. Stable 100% Free OpenRouter Model Matrix
 MODEL_OPTIONS = {
@@ -110,7 +117,31 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 7. Advanced CSS Injection (Forcing Dark Mode)
+# 7. Email Dispatcher Function
+def send_otp_email(target_email, otp_code):
+    try:
+        sender_email = st.secrets.get("EMAIL_SENDER", "")
+        sender_pass = st.secrets.get("EMAIL_PASSWORD", "")
+        
+        if not sender_email or not sender_pass:
+            return False, "Email credentials missing in Streamlit secrets."
+            
+        msg = MIMEText(f"Your Apollo Omni AI secure access code is: {otp_code}\n\nIf you did not request this, please ignore this email.")
+        msg['Subject'] = 'APOLLO OMNI - Access Code'
+        msg['From'] = sender_email
+        msg['To'] = target_email
+        
+        # Connect to Gmail SMTP server
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_pass)
+        server.send_message(msg)
+        server.quit()
+        return True, "Success"
+    except Exception as e:
+        return False, str(e)
+
+# 8. Advanced CSS Injection (Forcing Dark Mode)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
@@ -209,7 +240,6 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace !important;
     }
     
-    /* Fix for standard text inputs (like the search box) */
     div[data-baseweb="input"] > div {
         background-color: #0a0a0c !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
@@ -219,7 +249,6 @@ st.markdown("""
         background-color: transparent !important;
     }
 
-    /* Fix for File Uploader dropzone */
     [data-testid="stFileUploadDropzone"] {
         background-color: #18181b !important;
         border: 1px dashed rgba(255, 255, 255, 0.2) !important;
@@ -300,25 +329,58 @@ if not logo_loaded:
     </div>
     """, unsafe_allow_html=True)
 
-# ================= NEW: DOMAIN GATEKEEPER =================
+# ================= NEW: DOMAIN OTP GATEKEEPER =================
 if not st.session_state.authenticated:
-    st.markdown("<div style='text-align: center; margin-top: 80px;'><h2 style='color: #f97316;'>🔒 Restricted Access</h2><p style='color: #a1a1aa;'>Please verify your Somaiya university email to continue.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; margin-top: 80px;'><h2 style='color: #f97316;'>🔒 Restricted Access</h2><p style='color: #a1a1aa;'>Verify your Somaiya university email to receive an access code.</p></div>", unsafe_allow_html=True)
     
     col_space1, col_login, col_space3 = st.columns([3, 4, 3])
     with col_login:
         st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-        email_input = st.text_input("University Email", placeholder="your.name@somaiya.edu")
-        if st.button("VERIFY ACCESS", use_container_width=True):
-            if email_input.strip().lower().endswith("@somaiya.edu"):
-                st.session_state.authenticated = True
+        
+        # Step 1: Ask for Email
+        if not st.session_state.otp_sent:
+            email_input = st.text_input("University Email", placeholder="your.name@somaiya.edu")
+            if st.button("SEND ACCESS CODE", use_container_width=True):
+                if email_input.strip().lower().endswith("@somaiya.edu"):
+                    with st.spinner("Dispatching secure code..."):
+                        # Generate random 6-digit code
+                        otp = str(random.randint(100000, 999999))
+                        st.session_state.generated_otp = otp
+                        st.session_state.user_email = email_input.strip().lower()
+                        
+                        # Send the email
+                        success, error_msg = send_otp_email(st.session_state.user_email, otp)
+                        
+                        if success:
+                            st.session_state.otp_sent = True
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Failed to send email. Ensure EMAIL_SENDER and EMAIL_PASSWORD are set in secrets. Error: {error_msg}")
+                else:
+                    st.error("❌ Access Denied. Only @somaiya.edu accounts are permitted.")
+        
+        # Step 2: Verify the Code
+        else:
+            st.success(f"Secure code sent to {st.session_state.user_email}")
+            otp_input = st.text_input("Enter 6-Digit Code", type="password")
+            
+            if st.button("VERIFY & ENTER", use_container_width=True):
+                if otp_input.strip() == st.session_state.generated_otp:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect code. Please check your email and try again.")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Use a different email", type="secondary"):
+                st.session_state.otp_sent = False
                 st.rerun()
-            else:
-                st.error("❌ Access Denied. Only @somaiya.edu accounts are permitted.")
+                
         st.markdown("</div>", unsafe_allow_html=True)
         
-    # st.stop() halts the rest of the application from rendering until they pass the gate
+    # Stop app from loading the rest of the UI until authenticated
     st.stop()
-# ==========================================================
+# ==============================================================
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
@@ -334,7 +396,6 @@ with col_left:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>🌐 AI Web Search (Tavily)</div>", unsafe_allow_html=True)
     
-    # Informs the user of key status dynamically without rendering the password/token text on screen
     if TAVILY_KEY:
         st.markdown("<span style='font-size:0.8rem; color:#4ade80;'>✅ Tavily API Key Linked Safely</span>", unsafe_allow_html=True)
     else:
@@ -342,15 +403,10 @@ with col_left:
         
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
     
-    # 1. Focused Safety Guardrails (Nudity, Violence, Arms, etc.)
     RESTRICTED_TERMS = [
-        # Nudity & Sexual Content
         "porn", "nsfw", "xxx", "sex", "nude", "onlyfans", "erotic",
-        # Violence, Gore & Self-Harm
         "kill", "suicide", "murder", "gore", "violence", "torture", "dead body",
-        # Arms & Ammunition
         "weapon", "bomb", "gun", "ammunition", "firearm", "explosive", "rifle",
-        # Illegal/Dangerous Materials
         "drugs", "meth", "cocaine", "heroin"
     ]
     
@@ -358,18 +414,14 @@ with col_left:
         if not TAVILY_KEY or not TAVILY_KEY.startswith("tvly-"):
             st.error("No active Tavily API Key found in Streamlit Secrets dashboard. Please check your configuration.")
         elif web_query:
-            # 2. Run the Security Check
             query_lower = web_query.lower()
             violation_found = any(term in query_lower for term in RESTRICTED_TERMS)
             
             if violation_found:
-                # Block the request completely and show a warning
                 st.error("🚨 **SECURITY ALERT:** Your search query violates our safety policy. Searches related to explicit content, violence, or weaponry are strictly prohibited.")
             else:
-                # 3. Proceed with search if safe
                 with st.spinner("Executing secure web retrieval..."):
                     try:
-                        # TAVILY API INTEGRATION
                         api_url = "https://api.tavily.com/search"
                         payload = {
                             "api_key": TAVILY_KEY,
@@ -547,9 +599,6 @@ with col_mid:
             with st.chat_message("assistant"):
                 try:
                     stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
-                    
-                    # 🚀 FIX: Use Streamlit's native high-speed engine instead of a manual Python loop
-                    # This stops the app from re-rendering the entire text block 100 times a second.
                     collected_tokens = st.write_stream(stream)
                     
                     if not collected_tokens or not str(collected_tokens).strip(): 
