@@ -5,8 +5,11 @@ import json
 import requests
 import random
 import smtplib
+import datetime
 from email.mime.text import MIMEText
 import streamlit as st
+import extra_streamlit_components as stx
+from pptx import Presentation
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -17,7 +20,13 @@ from PIL import Image
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 
-# 2. Key/Token Initialization
+# 2. Initialize Cookie Manager for Persistent Auth
+cookie_manager = stx.CookieManager()
+cookies = cookie_manager.get_all()
+if cookies is None:
+    st.stop()
+
+# 3. Key/Token Initialization
 try:
     OR_TOKEN = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
 except Exception:
@@ -28,7 +37,7 @@ try:
 except Exception:
     TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
 
-# 3. Resource Caching Pipelines
+# 4. Resource Caching Pipelines
 @st.cache_resource
 def get_embedding_model():
     return HuggingFaceEmbeddings(
@@ -44,20 +53,33 @@ def get_text_splitter():
 embedder = get_embedding_model()
 text_splitter = get_text_splitter()
 
-# 4. State Management Matrix
+# 5. State Management Matrix
 if "vector_db" not in st.session_state: st.session_state.vector_db = None
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "response_time" not in st.session_state: st.session_state.response_time = "0.00s"
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
 
-# NEW: Advanced Authentication State
-if "authenticated" not in st.session_state: st.session_state.authenticated = False
+# Persistent Auth State Handling via Cookies
+auth_cookie = cookies.get("apollo_somaiya_session")
+if "authenticated" not in st.session_state:
+    if auth_cookie == "verified_student":
+        st.session_state.authenticated = True
+    else:
+        st.session_state.authenticated = False
+
 if "otp_sent" not in st.session_state: st.session_state.otp_sent = False
 if "generated_otp" not in st.session_state: st.session_state.generated_otp = None
 if "user_email" not in st.session_state: st.session_state.user_email = ""
 
-# 5. Stable 100% Free OpenRouter Model Matrix
+# NotebookLM-Style PPT Studio State
+if "slides_data" not in st.session_state:
+    st.session_state.slides_data = [
+        {"title": "Introduction to Institutional AI", "bullets": ["Overview of Apollo Omni platform", "Secure @somaiya.edu integration"]},
+        {"title": "Core Architecture & Workflow", "bullets": ["Retrieval-Augmented Generation (RAG)", "Multi-model micro-agent routing"]}
+    ]
+
+# 6. Stable OpenRouter Model Matrix
 MODEL_OPTIONS = {
     "Google Gemma 4 26B (Free)": {
         "or_id": "google/gemma-4-26b-a4b-it:free",
@@ -69,7 +91,7 @@ MODEL_OPTIONS = {
     }
 }
 
-# 6. OpenRouter Exclusive LLM Streamer
+# 7. OpenRouter Exclusive LLM Streamer
 def generate_llm_stream(messages, token, selected_model_name):
     if not token or not token.startswith("sk-or-"):
         yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-v1-' in your Streamlit Secrets Dashboard."
@@ -117,7 +139,7 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 7. Email Dispatcher Function
+# 8. Email Dispatcher Function
 def send_otp_email(target_email, otp_code):
     try:
         sender_email = st.secrets.get("EMAIL_SENDER", "")
@@ -131,7 +153,6 @@ def send_otp_email(target_email, otp_code):
         msg['From'] = sender_email
         msg['To'] = target_email
         
-        # Connect to Gmail SMTP server
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(sender_email, sender_pass)
@@ -141,7 +162,7 @@ def send_otp_email(target_email, otp_code):
     except Exception as e:
         return False, str(e)
 
-# 8. Advanced CSS Injection (Forcing Dark Mode)
+# 9. Advanced CSS Injection (Forcing Dark Mode)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
@@ -313,7 +334,7 @@ if os.path.exists("logo.png"):
         with col_logo:
             st.image("logo.png", width=220)
         with col_badge:
-            st.markdown("<div style='text-align: right; margin-top: 15px;'><span class='status-badge'>● OPENROUTER LINKED</span></div>", unsafe_allow_html=True)
+            st.markdown("<div style='text-align: right; margin-top: 15px;'><span class='status-badge'>● PERSISTENT SESSION ACTIVE</span></div>", unsafe_allow_html=True)
         st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin-top: -10px; margin-bottom: 30px;'>", unsafe_allow_html=True)
         logo_loaded = True
     except Exception:
@@ -325,30 +346,27 @@ if not logo_loaded:
         <div class='header-left'>
             <div style='font-size: 1.25rem; font-weight: 700; letter-spacing: 0.05em; color: white;'>APOLLO <span style='color: #f97316;'>OMNI AI</span></div>
         </div>
-        <div class='status-badge'>● OPENROUTER LINKED</div>
+        <div class='status-badge'>● PERSISTENT SESSION ACTIVE</div>
     </div>
     """, unsafe_allow_html=True)
 
-# ================= NEW: DOMAIN OTP GATEKEEPER =================
+# ================= PERSISTENT DOMAIN OTP GATEKEEPER =================
 if not st.session_state.authenticated:
-    st.markdown("<div style='text-align: center; margin-top: 80px;'><h2 style='color: #f97316;'>🔒 Restricted Access</h2><p style='color: #a1a1aa;'>Verify your Somaiya university email to receive an access code.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; margin-top: 80px;'><h2 style='color: #f97316;'>🔒 Restricted Access</h2><p style='color: #a1a1aa;'>Verify your Somaiya university email to receive a secure access code.</p></div>", unsafe_allow_html=True)
     
     col_space1, col_login, col_space3 = st.columns([3, 4, 3])
     with col_login:
         st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
         
-        # Step 1: Ask for Email
         if not st.session_state.otp_sent:
             email_input = st.text_input("University Email", placeholder="your.name@somaiya.edu")
             if st.button("SEND ACCESS CODE", use_container_width=True):
                 if email_input.strip().lower().endswith("@somaiya.edu"):
                     with st.spinner("Dispatching secure code..."):
-                        # Generate random 6-digit code
                         otp = str(random.randint(100000, 999999))
                         st.session_state.generated_otp = otp
                         st.session_state.user_email = email_input.strip().lower()
                         
-                        # Send the email
                         success, error_msg = send_otp_email(st.session_state.user_email, otp)
                         
                         if success:
@@ -358,8 +376,6 @@ if not st.session_state.authenticated:
                             st.error(f"❌ Failed to send email. Ensure EMAIL_SENDER and EMAIL_PASSWORD are set in secrets. Error: {error_msg}")
                 else:
                     st.error("❌ Access Denied. Only @somaiya.edu accounts are permitted.")
-        
-        # Step 2: Verify the Code
         else:
             st.success(f"Secure code sent to {st.session_state.user_email}")
             otp_input = st.text_input("Enter 6-Digit Code", type="password")
@@ -367,6 +383,12 @@ if not st.session_state.authenticated:
             if st.button("VERIFY & ENTER", use_container_width=True):
                 if otp_input.strip() == st.session_state.generated_otp:
                     st.session_state.authenticated = True
+                    # SET 30-DAY PERSISTENT COOKIE
+                    cookie_manager.set(
+                        "apollo_somaiya_session", 
+                        "verified_student", 
+                        expires_at=datetime.datetime.now() + datetime.timedelta(days=30)
+                    )
                     st.rerun()
                 else:
                     st.error("❌ Incorrect code. Please check your email and try again.")
@@ -377,19 +399,63 @@ if not st.session_state.authenticated:
                 st.rerun()
                 
         st.markdown("</div>", unsafe_allow_html=True)
-        
-    # Stop app from loading the rest of the UI until authenticated
     st.stop()
 # ==============================================================
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
-# ================= LEFT COLUMN: INGESTION ENGINE =================
+# ================= LEFT COLUMN: INGESTION & NOTEBOOK-LM PPT STUDIO =================
 with col_left:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>⚙️ Zero-Cost Engine</div>", unsafe_allow_html=True)
     selected_model = st.selectbox("API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0)
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- NOTEBOOK-LM STYLE INTERACTIVE PPT STUDIO ---
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>📊 Interactive PPT Studio</div>", unsafe_allow_html=True)
+    
+    with st.expander("✨ Open NotebookLM Slide Editor", expanded=False):
+        st.markdown("Live-edit your generated slides before downloading.")
+        tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
+        
+        for i, tab in enumerate(tabs):
+            with tab:
+                slide_info = st.session_state.slides_data[i]
+                new_title = st.text_input(f"Title {i+1}", slide_info["title"], key=f"title_{i}")
+                st.session_state.slides_data[i]["title"] = new_title
+                
+                updated_bullets = []
+                for j, bullet in enumerate(slide_info["bullets"]):
+                    b_val = st.text_input(f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}")
+                    updated_bullets.append(b_val)
+                st.session_state.slides_data[i]["bullets"] = updated_bullets
+        
+        def create_pptx(data):
+            prs = Presentation()
+            for item in data:
+                slide_layout = prs.slide_layouts[1]
+                slide = prs.slides.add_slide(slide_layout)
+                slide.shapes.title.text = item["title"]
+                tf = slide.placeholders[1].text_frame
+                for bullet in item["bullets"]:
+                    p = tf.add_paragraph()
+                    p.text = bullet
+            path = "apollo_presentation.pptx"
+            prs.save(path)
+            return path
+
+        if st.button("📥 Download .pptx File", use_container_width=True):
+            file_path = create_pptx(st.session_state.slides_data)
+            with open(file_path, "rb") as f:
+                st.download_button(
+                    label="Click here to download",
+                    data=f,
+                    file_name="Apollo_Presentation.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True
+                )
     st.markdown("</div>", unsafe_allow_html=True)
 
     # --- SECURED WEB SEARCH INDEXER (TAVILY REST API) ---
@@ -412,13 +478,13 @@ with col_left:
     
     if st.button("SEARCH & INDEX", use_container_width=True):
         if not TAVILY_KEY or not TAVILY_KEY.startswith("tvly-"):
-            st.error("No active Tavily API Key found in Streamlit Secrets dashboard. Please check your configuration.")
+            st.error("No active Tavily API Key found in Streamlit Secrets.")
         elif web_query:
             query_lower = web_query.lower()
             violation_found = any(term in query_lower for term in RESTRICTED_TERMS)
             
             if violation_found:
-                st.error("🚨 **SECURITY ALERT:** Your search query violates our safety policy. Searches related to explicit content, violence, or weaponry are strictly prohibited.")
+                st.error("🚨 **SECURITY ALERT:** Your search query violates safety policy.")
             else:
                 with st.spinner("Executing secure web retrieval..."):
                     try:
@@ -446,10 +512,7 @@ with col_left:
                                 title = r.get('title', 'Verified Source')
                                 
                                 if source_url and content and (source_url not in unique_docs):
-                                    unique_docs[source_url] = {
-                                        "content": content,
-                                        "title": title
-                                    }
+                                    unique_docs[source_url] = {"content": content, "title": title}
                                     
                             web_docs = []
                             for url, info in unique_docs.items():
@@ -470,10 +533,6 @@ with col_left:
                                         
                                     st.session_state.node_count += len(valid_chunks)
                                     st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
-                                else:
-                                    st.warning("Empty content blocks returned. Purging indices.")
-                            else:
-                                st.warning("Tavily yielded no valid search data.")
                         else:
                             st.error(f"Tavily API Error: {response.text}")
                     except Exception as e:
@@ -488,56 +547,18 @@ with col_left:
         if uploaded_files:
             with st.spinner("Structuring uploaded data nodes..."):
                 docs = []
-                MAX_FILE_SIZE_MB = 5
-                
                 for f in uploaded_files:
                     suffix = os.path.splitext(f.name)[1].lower()
                     file_bytes = f.read()
-                    file_size_mb = len(file_bytes) / (1024 * 1024)
-                    
-                    if suffix == ".txt" and file_size_mb > MAX_FILE_SIZE_MB:
-                        try:
-                            lines = file_bytes.decode("utf-8", errors="ignore").splitlines(keepends=True)
-                            current_chunk_lines = []
-                            current_chunk_bytes = 0
-                            max_bytes_per_chunk = MAX_FILE_SIZE_MB * 1024 * 1024
-                            
-                            for line in lines:
-                                line_bytes = len(line.encode('utf-8'))
-                                if current_chunk_bytes + line_bytes > max_bytes_per_chunk and current_chunk_lines:
-                                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                                        tmp.write("".join(current_chunk_lines).encode("utf-8"))
-                                        path = tmp.name
-                                    try:
-                                        docs.extend(TextLoader(path, encoding="utf-8").load())
-                                    finally:
-                                        if os.path.exists(path): os.unlink(path)
-                                    
-                                    current_chunk_lines = []
-                                    current_chunk_bytes = 0
-                                    
-                                current_chunk_lines.append(line)
-                                current_chunk_bytes += line_bytes
-                                
-                            if current_chunk_lines:
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                                    tmp.write("".join(current_chunk_lines).encode("utf-8"))
-                                    path = tmp.name
-                                try:
-                                    docs.extend(TextLoader(path, encoding="utf-8").load())
-                                finally:
-                                    if os.path.exists(path): os.unlink(path)
-                        except Exception: pass
-                    else:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                            tmp.write(file_bytes)
-                            path = tmp.name
-                        try:
-                            if suffix == ".pdf": docs.extend(PyPDFLoader(path).load())
-                            elif suffix == ".txt": docs.extend(TextLoader(path, encoding="utf-8").load())
-                        except Exception: pass
-                        finally:
-                            if os.path.exists(path): os.unlink(path)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp.write(file_bytes)
+                        path = tmp.name
+                    try:
+                        if suffix == ".pdf": docs.extend(PyPDFLoader(path).load())
+                        elif suffix == ".txt": docs.extend(TextLoader(path, encoding="utf-8").load())
+                    except Exception: pass
+                    finally:
+                        if os.path.exists(path): os.unlink(path)
                             
                 if docs:
                     chunks = text_splitter.split_documents(docs)
@@ -550,8 +571,6 @@ with col_left:
                             st.session_state.vector_db.add_documents(valid_chunks)
                         st.session_state.node_count += len(valid_chunks)
                         st.success(f"Successfully Indexed {len(valid_chunks)} document blocks.")
-                    else:
-                        st.error("No valid text structure found in files.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
@@ -583,11 +602,11 @@ with col_mid:
             retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
             matched_nodes = retriever.invoke(user_query)
             context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
-            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a crisp, concise response using ONLY the provided context below. DO NOT include raw URLs, markdown links, or brackets with links in your final text. Keep your answer clean, readable, and strictly to the point."
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a crisp response using ONLY the provided context below. DO NOT include raw URLs or brackets."
             clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
             st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
         else:
-            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Answer based on general knowledge. Be crisp and concise. DO NOT print raw URLs."
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Answer based on general knowledge. Be crisp and concise."
             st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
 
         message_stream = [{"role": "system", "content": sys_instruction}]
@@ -643,4 +662,11 @@ with col_right:
     with c2:
         chat_log = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chat_history])
         st.download_button("EXPORT", data=chat_log, file_name="apollo_log.txt", mime="text/plain", use_container_width=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("LOG OUT", use_container_width=True, type="secondary"):
+        st.session_state.authenticated = False
+        cookie_manager.delete("apollo_somaiya_session")
+        st.rerun()
+        
     st.markdown("</div>", unsafe_allow_html=True)
