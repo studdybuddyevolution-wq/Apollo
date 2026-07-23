@@ -47,6 +47,8 @@ if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "response_time" not in st.session_state: st.session_state.response_time = "0.00s"
 if "source_reference" not in st.session_state: st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
 if "node_count" not in st.session_state: st.session_state.node_count = 0
+# NEW: Authentication State
+if "authenticated" not in st.session_state: st.session_state.authenticated = False
 
 # 5. Stable 100% Free OpenRouter Model Matrix
 MODEL_OPTIONS = {
@@ -298,6 +300,26 @@ if not logo_loaded:
     </div>
     """, unsafe_allow_html=True)
 
+# ================= NEW: DOMAIN GATEKEEPER =================
+if not st.session_state.authenticated:
+    st.markdown("<div style='text-align: center; margin-top: 80px;'><h2 style='color: #f97316;'>🔒 Restricted Access</h2><p style='color: #a1a1aa;'>Please verify your Somaiya university email to continue.</p></div>", unsafe_allow_html=True)
+    
+    col_space1, col_login, col_space3 = st.columns([3, 4, 3])
+    with col_login:
+        st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+        email_input = st.text_input("University Email", placeholder="your.name@somaiya.edu")
+        if st.button("VERIFY ACCESS", use_container_width=True):
+            if email_input.strip().lower().endswith("@somaiya.edu"):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("❌ Access Denied. Only @somaiya.edu accounts are permitted.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+    # st.stop() halts the rest of the application from rendering until they pass the gate
+    st.stop()
+# ==========================================================
+
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
 # ================= LEFT COLUMN: INGESTION ENGINE =================
@@ -398,10 +420,10 @@ with col_left:
                                     st.success(f"Indexed {len(valid_chunks)} verified blocks via Tavily!")
                                 else:
                                     st.warning("Empty content blocks returned. Purging indices.")
-                            else:
-                                st.warning("Tavily yielded no valid search data.")
                         else:
-                            st.error(f"Tavily API Error: {response.text}")
+                            st.warning("Tavily yielded no valid search data.")
+                    else:
+                        st.error(f"Tavily API Error: {response.text}")
                     except Exception as e:
                         st.error(f"Tavily connection failed: {str(e)}")
     st.markdown("</div>", unsafe_allow_html=True)
