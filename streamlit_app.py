@@ -144,12 +144,12 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Gemini PPT Generator Function
+# 8. Gemini PPT Generator Function (Using gemini-1.5-flash)
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
