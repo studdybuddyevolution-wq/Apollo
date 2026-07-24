@@ -425,7 +425,6 @@ if not st.session_state.authenticated:
             if st.button("VERIFY & ENTER", use_container_width=True):
                 if otp_input.strip() == st.session_state.generated_otp:
                     st.session_state.authenticated = True
-                    # SET 30-DAY PERSISTENT COOKIE
                     cookie_manager.set(
                         "apollo_somaiya_session", 
                         "verified_student", 
@@ -636,49 +635,4 @@ with col_left:
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
 with col_mid:
-    if not st.session_state.chat_history:
-        st.markdown("""
-        <div style='margin-top: 50px; margin-bottom: 30px; text-align: center;'>
-            <h2 style='color: #f97316; font-family: "Inter", sans-serif; font-weight: 700;'>Study Console Initialized</h2>
-            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Use the left panel to index Web Data or Local Files, then chat here.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    chat_scroll_pane = st.container(height=650, border=False)
-    
-    with chat_scroll_pane:
-        for msg in st.session_state.chat_history:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-            
-    user_query = st.chat_input("Enter your query...")
-    
-    if user_query:
-        st.session_state.chat_history.append({"role": "user", "content": user_query})
-        
-        start_time = time.time()
-        context_payload = ""
-        
-        if st.session_state.vector_db is not None:
-            retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
-            matched_nodes = retriever.invoke(user_query)
-            context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
-            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a crisp response using ONLY the provided context below. DO NOT include raw URLs or brackets."
-            clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-            st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
-        else:
-            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Answer based on general knowledge. Be crisp and concise."
-            st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
-
-        message_stream = [{"role": "system", "content": sys_instruction}]
-        for msg in st.session_state.chat_history[-4:]:
-            message_stream.append({"role": msg["role"], "content": msg["content"]})
-        message_stream.append({"role": "user", "content": f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}"})
-        
-        with chat_scroll_pane:
-            with st.chat_message("assistant"):
-                try:
-                    stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
-                    collected_tokens = st.write_stream(stream)
-                    
-                    
+    if
