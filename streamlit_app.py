@@ -143,12 +143,11 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Gemini PPT Generator Function (Using free-tier optimized gemini-2.5-flash)
+# 8. Gemini PPT Generator Function (With automatic model fallback)
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key.strip()}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
@@ -168,17 +167,24 @@ def generate_slides_with_gemini(topic, gemini_key):
         }
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            text_output = data['candidates'][0]['content']['parts'][0]['text']
-            parsed_json = json.loads(text_output)
-            return parsed_json, "Success"
-        else:
-            return None, f"Gemini API Error ({response.status_code}): {response.text}"
-    except Exception as e:
-        return None, str(e)
+    candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-lite"]
+    last_error = ""
+    
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key.strip()}"
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                text_output = data['candidates'][0]['content']['parts'][0]['text']
+                parsed_json = json.loads(text_output)
+                return parsed_json, "Success"
+            else:
+                last_error = f"Gemini API Error ({response.status_code}) [{model_name}]: {response.text}"
+        except Exception as e:
+            last_error = str(e)
+            
+    return None, last_error
 
 # 9. Email Dispatcher Function
 def send_otp_email(target_email, otp_code):
