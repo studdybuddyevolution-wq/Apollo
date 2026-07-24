@@ -143,11 +143,12 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Gemini PPT Generator Function (With automatic model fallback)
+# 8. Gemini PPT Generator Function (With dynamic model discovery & fallback)
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
+    clean_key = gemini_key.strip()
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
@@ -167,11 +168,29 @@ def generate_slides_with_gemini(topic, gemini_key):
         }
     }
     
-    candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-lite"]
-    last_error = ""
+    discovered_models = []
+    try:
+        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+        res = requests.get(models_url, timeout=10)
+        if res.status_code == 200:
+            m_data = res.json().get("models", [])
+            for m in m_data:
+                m_name = m.get("name", "").replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods:
+                    discovered_models.append(m_name)
+    except Exception:
+        pass
+        
+    flash_models = [m for m in discovered_models if "flash" in m.lower()]
+    candidate_models = flash_models + [m for m in discovered_models if m not in flash_models]
     
+    if not candidate_models:
+        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-2.0-flash-exp"]
+        
+    last_error = ""
     for model_name in candidate_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key.strip()}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             if response.status_code == 200:
