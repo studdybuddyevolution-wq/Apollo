@@ -37,6 +37,11 @@ try:
 except Exception:
     TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
 
+try:
+    GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+except Exception:
+    GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+
 # 4. Resource Caching Pipelines
 @st.cache_resource
 def get_embedding_model():
@@ -139,7 +144,44 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Email Dispatcher Function
+# 8. Gemini PPT Generator Function
+def generate_slides_with_gemini(topic, gemini_key):
+    if not gemini_key:
+        return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+    headers = {"Content-Type": "application/json"}
+    
+    prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
+    Return ONLY a valid JSON array of objects, where each object has a 'title' (string) and 'bullets' (list of 3-4 structured strings). Do not include markdown formatting code blocks like ```json, just return raw JSON text.
+    Example format:
+    [
+      {{"title": "Slide Title", "bullets": ["Bullet point 1", "Bullet point 2"]}}
+    ]"""
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.4,
+            "responseMimeType": "application/json"
+        }
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            text_output = data['candidates'][0]['content']['parts'][0]['text']
+            parsed_json = json.loads(text_output)
+            return parsed_json, "Success"
+        else:
+            return None, f"Gemini API Error ({response.status_code}): {response.text}"
+    except Exception as e:
+        return None, str(e)
+
+# 9. Email Dispatcher Function
 def send_otp_email(target_email, otp_code):
     try:
         sender_email = st.secrets.get("EMAIL_SENDER", "")
@@ -162,10 +204,10 @@ def send_otp_email(target_email, otp_code):
     except Exception as e:
         return False, str(e)
 
-# 9. Advanced CSS Injection (Forcing Dark Mode)
+# 10. Advanced CSS Injection (Forcing Dark Mode)
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -404,7 +446,7 @@ if not st.session_state.authenticated:
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
-# ================= LEFT COLUMN: INGESTION & NOTEBOOK-LM PPT STUDIO =================
+# ================= LEFT COLUMN: INGESTION & GEMINI PPT STUDIO =================
 with col_left:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>⚙️ Zero-Cost Engine</div>", unsafe_allow_html=True)
@@ -412,10 +454,29 @@ with col_left:
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- NOTEBOOK-LM STYLE INTERACTIVE PPT STUDIO ---
+    # --- GEMINI-POWERED INTERACTIVE PPT STUDIO ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>📊 Interactive PPT Studio</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>📊 Gemini PPT Studio</div>", unsafe_allow_html=True)
     
+    if GEMINI_KEY:
+        st.markdown("<span style='font-size:0.8rem; color:#4ade80;'>✅ Gemini API Key Linked Safely</span>", unsafe_allow_html=True)
+    else:
+        st.markdown("<span style='font-size:0.8rem; color:#f87171;'>❌ Missing GEMINI_API_KEY in Secrets</span>", unsafe_allow_html=True)
+
+    ppt_topic_input = st.text_input("Presentation Topic:", placeholder="e.g. Quantum Cryptography")
+    if st.button("✨ Generate Slides via Gemini", use_container_width=True):
+        if not GEMINI_KEY:
+            st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
+        elif ppt_topic_input:
+            with st.spinner("Generating slide structure with Gemini..."):
+                new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_KEY)
+                if new_slides and isinstance(new_slides, list):
+                    st.session_state.slides_data = new_slides
+                    st.success("Successfully generated new presentation structure!")
+                    st.rerun()
+                else:
+                    st.error(f"Failed to generate slides: {err}")
+
     with st.expander("✨ Open NotebookLM Slide Editor", expanded=False):
         st.markdown("Live-edit your generated slides before downloading.")
         tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
@@ -488,7 +549,7 @@ with col_left:
             else:
                 with st.spinner("Executing secure web retrieval..."):
                     try:
-                        api_url = "https://api.tavily.com/search"
+                        api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
                         payload = {
                             "api_key": TAVILY_KEY,
                             "query": web_query,
@@ -620,53 +681,4 @@ with col_mid:
                     stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
                     collected_tokens = st.write_stream(stream)
                     
-                    if not collected_tokens or not str(collected_tokens).strip(): 
-                        collected_tokens = "⚠️ EMPTY RESPONSE."
-                        st.markdown(collected_tokens)
-                        
-                except Exception as ex:
-                    collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
-                    st.markdown(collected_tokens)
-        
-        st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
-        st.session_state.response_time = f"{time.time() - start_time:.2f}s"
-        st.rerun()
-
-# ================= RIGHT COLUMN: PERFORMANCE & TELEMETRY MATRIX =================
-with col_right:
-    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>📊 Analytics Dashboard</div>", unsafe_allow_html=True)
-    
-    st.markdown(f"<div><div class='metric-title'>Inference Latency</div><div class='metric-value'>{st.session_state.response_time}</div></div>", unsafe_allow_html=True)
-    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 15px 0;'>", unsafe_allow_html=True)
-    
-    st.markdown(f"<div><div class='metric-title'>Indexed Documents</div><div class='metric-value'>{st.session_state.node_count}</div></div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>📑 Verified Retrieval Matrix</div>", unsafe_allow_html=True)
-    st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>🛠️ Session Actions</div>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("PURGE", use_container_width=True):
-            st.session_state.chat_history = []
-            st.session_state.vector_db = None
-            st.session_state.node_count = 0
-            st.session_state.response_time = "0.00s"
-            st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
-            st.rerun()
-    with c2:
-        chat_log = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chat_history])
-        st.download_button("EXPORT", data=chat_log, file_name="apollo_log.txt", mime="text/plain", use_container_width=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("LOG OUT", use_container_width=True, type="secondary"):
-        st.session_state.authenticated = False
-        cookie_manager.delete("apollo_somaiya_session")
-        st.rerun()
-        
-    st.markdown("</div>", unsafe_allow_html=True)
+                    if
