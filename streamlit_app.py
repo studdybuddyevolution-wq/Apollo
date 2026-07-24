@@ -635,4 +635,98 @@ with col_left:
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
 with col_mid:
-    if
+    if not st.session_state.chat_history:
+        st.markdown("""
+        <div style='margin-top: 50px; margin-bottom: 30px; text-align: center;'>
+            <h2 style='color: #f97316; font-family: "Inter", sans-serif; font-weight: 700;'>Study Console Initialized</h2>
+            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Use the left panel to index Web Data or Local Files, then chat here.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    chat_scroll_pane = st.container(height=650, border=False)
+    
+    with chat_scroll_pane:
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+            
+    user_query = st.chat_input("Enter your query...")
+    
+    if user_query:
+        st.session_state.chat_history.append({"role": "user", "content": user_query})
+        
+        start_time = time.time()
+        context_payload = ""
+        
+        if st.session_state.vector_db is not None:
+            retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
+            matched_nodes = retriever.invoke(user_query)
+            context_payload = "\n\n".join([f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}" for node in matched_nodes])
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a crisp response using ONLY the provided context below. DO NOT include raw URLs or brackets."
+            clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+            st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
+        else:
+            sys_instruction = "You are APOLLO OMNI AI, an advanced AI study buddy. Answer based on general knowledge. Be crisp and concise."
+            st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
+
+        message_stream = [{"role": "system", "content": sys_instruction}]
+        for msg in st.session_state.chat_history[-4:]:
+            message_stream.append({"role": msg["role"], "content": msg["content"]})
+        message_stream.append({"role": "user", "content": f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}"})
+        
+        with chat_scroll_pane:
+            with st.chat_message("assistant"):
+                try:
+                    stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
+                    collected_tokens = st.write_stream(stream)
+                    
+                    if not collected_tokens or not str(collected_tokens).strip(): 
+                        collected_tokens = "⚠️ EMPTY RESPONSE."
+                        st.markdown(collected_tokens)
+                        
+                except Exception as ex:
+                    collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
+                    st.markdown(collected_tokens)
+        
+        st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
+        st.session_state.response_time = f"{time.time() - start_time:.2f}s"
+        st.rerun()
+
+# ================= RIGHT COLUMN: PERFORMANCE & TELEMETRY MATRIX =================
+with col_right:
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>📊 Analytics Dashboard</div>", unsafe_allow_html=True)
+    
+    st.markdown(f"<div><div class='metric-title'>Inference Latency</div><div class='metric-value'>{st.session_state.response_time}</div></div>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 15px 0;'>", unsafe_allow_html=True)
+    
+    st.markdown(f"<div><div class='metric-title'>Indexed Documents</div><div class='metric-value'>{st.session_state.node_count}</div></div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>📑 Verified Retrieval Matrix</div>", unsafe_allow_html=True)
+    st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>🛠️ Session Actions</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("PURGE", use_container_width=True):
+            st.session_state.chat_history = []
+            st.session_state.vector_db = None
+            st.session_state.node_count = 0
+            st.session_state.response_time = "0.00s"
+            st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
+            st.rerun()
+    with c2:
+        chat_log = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chat_history])
+        st.download_button("EXPORT", data=chat_log, file_name="apollo_log.txt", mime="text/plain", use_container_width=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("LOG OUT", use_container_width=True, type="secondary"):
+        st.session_state.authenticated = False
+        cookie_manager.delete("apollo_somaiya_session")
+        st.rerun()
+        
+    st.markdown("</div>", unsafe_allow_html=True)
