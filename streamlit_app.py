@@ -10,6 +10,11 @@ from email.mime.text import MIMEText
 import streamlit as st
 import extra_streamlit_components as stx
 from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
+import urllib.parse
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -76,11 +81,21 @@ if "otp_sent" not in st.session_state: st.session_state.otp_sent = False
 if "generated_otp" not in st.session_state: st.session_state.generated_otp = None
 if "user_email" not in st.session_state: st.session_state.user_email = ""
 
-# NotebookLM-Style PPT Studio State
+# NotebookLM-Style Gamma PPT Studio State
 if "slides_data" not in st.session_state:
     st.session_state.slides_data = [
-        {"title": "Introduction to Institutional AI", "bullets": ["Overview of Apollo Omni platform", "Secure @somaiya.edu integration"]},
-        {"title": "Core Architecture & Workflow", "bullets": ["Retrieval-Augmented Generation (RAG)", "Multi-model micro-agent routing"]}
+        {
+            "title": "Introduction to Institutional AI",
+            "subtitle": "Modernizing Academic & Enterprise Intelligence",
+            "bullets": ["Overview of Apollo Omni platform", "Secure @somaiya.edu integration", "Privacy-first zero data persistence"],
+            "image_prompt": "Futuristic 3d AI neural network avatar glowing orange in dark room"
+        },
+        {
+            "title": "Core Architecture & RAG Workflow",
+            "subtitle": "Vector Storage & Multi-Model Orchestration",
+            "bullets": ["Retrieval-Augmented Generation (RAG)", "Sub-second FAISS vector indexing", "Multi-model micro-agent routing"],
+            "image_prompt": "3d render of database data nodes connected with glowing cyber light beams"
+        }
     ]
 
 # 6. Stable OpenRouter Model Matrix
@@ -151,11 +166,17 @@ def generate_slides_with_gemini(topic, gemini_key):
     clean_key = gemini_key.strip()
     headers = {"Content-Type": "application/json"}
     
-    prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
-    Return ONLY a valid JSON array of objects, where each object has a 'title' (string) and 'bullets' (list of 3-4 structured strings). Do not include markdown formatting code blocks like ```json, just return raw JSON text.
+    prompt = f"""Create a modern Gamma AI-style presentation outline about '{topic}'. 
+    Return ONLY a valid JSON array of 4-6 slide objects. Each object MUST have:
+    - 'title': Slide title (concise, impactful)
+    - 'subtitle': Brief 1-line summary/tagline
+    - 'bullets': Array of 3-4 detailed bullet strings
+    - 'image_prompt': A specific 3D render/visual image description for this slide (e.g. 'Futuristic cybernetic neural network glowing orange')
+
+    Do NOT include markdown formatting code blocks like ```json, just return raw JSON text.
     Example format:
     [
-      {{"title": "Slide Title", "bullets": ["Bullet point 1", "Bullet point 2"]}}
+      {{"title": "AI Architecture", "subtitle": "Scalable Neural Processing", "bullets": ["High-performance compute clusters", "Sub-millisecond latency routing"], "image_prompt": "3d render of neural network glowing orange"}}
     ]"""
     
     payload = {
@@ -516,30 +537,233 @@ with col_left:
                     updated_bullets.append(b_val)
                 st.session_state.slides_data[i]["bullets"] = updated_bullets
         
-        def create_pptx(data):
-            prs = Presentation()
-            for item in data:
-                slide_layout = prs.slide_layouts[1]
-                slide = prs.slides.add_slide(slide_layout)
-                slide.shapes.title.text = item["title"]
-                tf = slide.placeholders[1].text_frame
-                for bullet in item["bullets"]:
-                    p = tf.add_paragraph()
-                    p.text = bullet
-            path = "apollo_presentation.pptx"
-            prs.save(path)
-            return path
+# Helper to fetch dynamic AI visuals / images for slide cards
+def fetch_slide_image(prompt_text, slide_index):
+    try:
+        clean_prompt = urllib.parse.quote(f"modern presentation visual {prompt_text} cinematic dark mode 8k")
+        img_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=800&height=600&nologo=true&seed={slide_index+42}"
+        res = requests.get(img_url, timeout=12)
+        if res.status_code == 200:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            tmp.write(res.content)
+            tmp.close()
+            return tmp.name
+    except Exception:
+        pass
+    
+    try:
+        from PIL import ImageDraw
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        img = Image.new('RGB', (800, 600), color=(24, 24, 27))
+        draw = ImageDraw.Draw(img)
+        for x in range(0, 800, 40):
+            draw.line([(x, 0), (x, 600)], fill=(39, 39, 42), width=1)
+        for y in range(0, 600, 40):
+            draw.line([(0, y), (800, y)], fill=(39, 39, 42), width=1)
+        draw.rounded_rectangle([80, 120, 720, 480], radius=16, fill=(30, 41, 59), outline=(249, 115, 22), width=3)
+        img.save(tmp.name)
+        return tmp.name
+    except Exception:
+        return None
 
-        if st.button("📥 Download .pptx File", use_container_width=True):
-            file_path = create_pptx(st.session_state.slides_data)
-            with open(file_path, "rb") as f:
-                st.download_button(
-                    label="Click here to download",
-                    data=f,
-                    file_name="Apollo_Presentation.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    use_container_width=True
-                )
+def create_gamma_pptx(data):
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]
+
+    DARK_BG = RGBColor(15, 15, 17)        # #0F0F11
+    CARD_BG = RGBColor(24, 24, 27)        # #18181B
+    BORDER_COLOR = RGBColor(63, 63, 70)   # #3F3F46
+    ORANGE_ACCENT = RGBColor(249, 115, 22)# #F97316
+    CYAN_ACCENT = RGBColor(56, 189, 248)  # #38BDF8
+    WHITE_TEXT = RGBColor(255, 255, 255)
+    MUTED_TEXT = RGBColor(161, 161, 170)
+
+    # 1. Cover Slide
+    cover_slide = prs.slides.add_slide(blank_layout)
+    cover_bg = cover_slide.background.fill
+    cover_bg.solid()
+    cover_bg.fore_color.rgb = DARK_BG
+
+    card = cover_slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.0), Inches(1.0), Inches(11.333), Inches(5.5))
+    card.fill.solid()
+    card.fill.fore_color.rgb = CARD_BG
+    card.line.color.rgb = BORDER_COLOR
+    card.line.width = Pt(1.5)
+
+    badge = cover_slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.5), Inches(1.5), Inches(3.5), Inches(0.4))
+    badge.fill.solid()
+    badge.fill.fore_color.rgb = RGBColor(30, 41, 59)
+    badge.line.color.rgb = CYAN_ACCENT
+    tf = badge.text_frame
+    p = tf.paragraphs[0]
+    p.text = "⚡ GAMMA AI DESIGN ENGINE"
+    p.font.size = Pt(11)
+    p.font.bold = True
+    p.font.color.rgb = CYAN_ACCENT
+
+    first_title = data[0]["title"] if data else "Apollo Omni AI Presentation"
+    txBox = cover_slide.shapes.add_textbox(Inches(1.5), Inches(2.2), Inches(10.333), Inches(1.5))
+    tf = txBox.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = first_title
+    p.font.size = Pt(40)
+    p.font.bold = True
+    p.font.color.rgb = ORANGE_ACCENT
+
+    first_sub = data[0].get("subtitle", "AI-Generated Interactive Knowledge Studio") if data else ""
+    txBox2 = cover_slide.shapes.add_textbox(Inches(1.5), Inches(3.8), Inches(10.333), Inches(1.0))
+    tf2 = txBox2.text_frame
+    tf2.word_wrap = True
+    p2 = tf2.paragraphs[0]
+    p2.text = first_sub
+    p2.font.size = Pt(20)
+    p2.font.color.rgb = WHITE_TEXT
+
+    txBox3 = cover_slide.shapes.add_textbox(Inches(1.5), Inches(5.3), Inches(10.333), Inches(0.6))
+    tf3 = txBox3.text_frame
+    p3 = tf3.paragraphs[0]
+    p3.text = "Generated by APOLLO OMNI AI • Powered by Gemini & Gamma Engine"
+    p3.font.size = Pt(12)
+    p3.font.color.rgb = MUTED_TEXT
+
+    # 2. Content Slides (2-Column Gamma Layout)
+    for i, item in enumerate(data):
+        slide = prs.slides.add_slide(blank_layout)
+        s_bg = slide.background.fill
+        s_bg.solid()
+        s_bg.fore_color.rgb = DARK_BG
+
+        top_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.1))
+        top_bar.fill.solid()
+        top_bar.fill.fore_color.rgb = ORANGE_ACCENT if i % 2 == 0 else CYAN_ACCENT
+        top_bar.line.fill.background()
+
+        badge = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(0.5), Inches(1.8), Inches(0.35))
+        badge.fill.solid()
+        badge.fill.fore_color.rgb = CARD_BG
+        badge.line.color.rgb = ORANGE_ACCENT if i % 2 == 0 else CYAN_ACCENT
+        tf = badge.text_frame
+        p = tf.paragraphs[0]
+        p.text = f"SLIDE 0{i+1}"
+        p.font.size = Pt(10)
+        p.font.bold = True
+        p.font.color.rgb = ORANGE_ACCENT if i % 2 == 0 else CYAN_ACCENT
+
+        tBox = slide.shapes.add_textbox(Inches(0.8), Inches(0.95), Inches(7.2), Inches(0.9))
+        tf = tBox.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = item["title"]
+        p.font.size = Pt(26)
+        p.font.bold = True
+        p.font.color.rgb = WHITE_TEXT
+
+        if item.get("subtitle"):
+            p_sub = tf.add_paragraph()
+            p_sub.text = item["subtitle"]
+            p_sub.font.size = Pt(13)
+            p_sub.font.color.rgb = MUTED_TEXT
+
+        bullets = item.get("bullets", [])
+        start_y = 2.0
+        card_h = 1.05
+        spacing = 0.2
+
+        for b_idx, bullet_text in enumerate(bullets[:4]):
+            y_pos = start_y + b_idx * (card_h + spacing)
+            b_card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(y_pos), Inches(7.2), Inches(card_h))
+            b_card.fill.solid()
+            b_card.fill.fore_color.rgb = CARD_BG
+            b_card.line.color.rgb = BORDER_COLOR
+
+            strip = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(y_pos), Inches(0.12), Inches(card_h))
+            strip.fill.solid()
+            strip.fill.fore_color.rgb = ORANGE_ACCENT if b_idx % 2 == 0 else CYAN_ACCENT
+            strip.line.fill.background()
+
+            bt_box = slide.shapes.add_textbox(Inches(1.1), Inches(y_pos + 0.1), Inches(6.7), Inches(card_h - 0.2))
+            bt_tf = bt_box.text_frame
+            bt_tf.word_wrap = True
+            bp = bt_tf.paragraphs[0]
+            bp.text = bullet_text
+            bp.font.size = Pt(14)
+            bp.font.color.rgb = WHITE_TEXT
+
+        img_path = fetch_slide_image(item.get("image_prompt", item["title"]), i)
+        if img_path and os.path.exists(img_path):
+            try:
+                frame = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.3), Inches(1.5), Inches(4.3), Inches(5.2))
+                frame.fill.solid()
+                frame.fill.fore_color.rgb = CARD_BG
+                frame.line.color.rgb = BORDER_COLOR
+                frame.line.width = Pt(1.5)
+
+                slide.shapes.add_picture(img_path, Inches(8.45), Inches(1.65), width=Inches(4.0), height=Inches(4.4))
+                
+                cap_box = slide.shapes.add_textbox(Inches(8.45), Inches(6.1), Inches(4.0), Inches(0.5))
+                cap_tf = cap_box.text_frame
+                cap_p = cap_tf.paragraphs[0]
+                cap_p.text = f"📷 {item.get('image_prompt', 'AI Visual Card')[:35]}..."
+                cap_p.font.size = Pt(10)
+                cap_p.font.color.rgb = MUTED_TEXT
+            except Exception:
+                pass
+            finally:
+                if os.path.exists(img_path):
+                    try:
+                        os.unlink(img_path)
+                    except Exception:
+                        pass
+
+    path = "apollo_gamma_presentation.pptx"
+    prs.save(path)
+    return path
+
+    with st.expander("✨ Open Gamma Slide Editor & Preview", expanded=False):
+        st.markdown("Live-edit your generated Gamma slides, subtitles, and image prompts before downloading.")
+        tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
+        
+        for i, tab in enumerate(tabs):
+            with tab:
+                slide_info = st.session_state.slides_data[i]
+                
+                st.markdown(f"""
+                <div style='background: #18181b; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 12px;'>
+                    <span style='background: rgba(249,115,22,0.1); color: #f97316; border: 1px solid rgba(249,115,22,0.3); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px;'>SLIDE 0{i+1} PREVIEW</span>
+                    <h4 style='color: white; margin-top: 6px; margin-bottom: 2px;'>{slide_info.get("title", "")}</h4>
+                    <p style='color: #a1a1aa; font-size: 0.8rem; margin-bottom: 8px;'><em>{slide_info.get("subtitle", "")}</em></p>
+                    <div style='font-size: 0.75rem; color: #38bdf8;'>🎨 Image Prompt: {slide_info.get("image_prompt", "")}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                new_title = st.text_input(f"Title {i+1}", slide_info["title"], key=f"title_{i}")
+                new_sub = st.text_input(f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}")
+                new_img_p = st.text_input(f"Image Prompt {i+1}", slide_info.get("image_prompt", ""), key=f"img_p_{i}")
+                
+                st.session_state.slides_data[i]["title"] = new_title
+                st.session_state.slides_data[i]["subtitle"] = new_sub
+                st.session_state.slides_data[i]["image_prompt"] = new_img_p
+                
+                updated_bullets = []
+                for j, bullet in enumerate(slide_info.get("bullets", [])):
+                    b_val = st.text_input(f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}")
+                    updated_bullets.append(b_val)
+                st.session_state.slides_data[i]["bullets"] = updated_bullets
+
+        if st.button("📥 Download Gamma .pptx File", use_container_width=True):
+            with st.spinner("Rendering Gamma AI Presentation with images & themes..."):
+                file_path = create_gamma_pptx(st.session_state.slides_data)
+                with open(file_path, "rb") as f:
+                    st.download_button(
+                        label="Click here to download Gamma PPTX",
+                        data=f,
+                        file_name="Apollo_Gamma_Presentation.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        use_container_width=True
+                    )
     st.markdown("</div>", unsafe_allow_html=True)
 
     # --- SECURED WEB SEARCH INDEXER (TAVILY REST API) ---
