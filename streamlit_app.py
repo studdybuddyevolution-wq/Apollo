@@ -24,7 +24,7 @@ st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 cookie_manager = stx.CookieManager()
 cookies = cookie_manager.get_all()
 if cookies is None:
-    st.stop()
+    cookies = {}
 
 # 3. Key/Token Initialization
 try:
@@ -67,11 +67,10 @@ if "node_count" not in st.session_state: st.session_state.node_count = 0
 
 # Persistent Auth State Handling via Cookies
 auth_cookie = cookies.get("apollo_somaiya_session")
-if "authenticated" not in st.session_state:
-    if auth_cookie == "verified_student":
-        st.session_state.authenticated = True
-    else:
-        st.session_state.authenticated = False
+if auth_cookie == "verified_student":
+    st.session_state.authenticated = True
+elif "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
 if "otp_sent" not in st.session_state: st.session_state.otp_sent = False
 if "generated_otp" not in st.session_state: st.session_state.generated_otp = None
@@ -144,12 +143,12 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Gemini PPT Generator Function (Using gemini-1.5-flash)
+# 8. Gemini PPT Generator Function (Using free-tier optimized gemini-2.5-flash)
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key.strip()}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key.strip()}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
@@ -207,7 +206,7 @@ def send_otp_email(target_email, otp_code):
 # 10. Advanced CSS Injection (Forcing Dark Mode)
 st.markdown("""
 <style>
-    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -548,7 +547,7 @@ with col_left:
             else:
                 with st.spinner("Executing secure web retrieval..."):
                     try:
-                        api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
+                        api_url = "https://api.tavily.com/search"
                         payload = {
                             "api_key": TAVILY_KEY.strip(),
                             "query": web_query,
