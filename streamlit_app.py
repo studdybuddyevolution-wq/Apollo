@@ -149,7 +149,7 @@ def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key.strip()}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
@@ -550,7 +550,7 @@ with col_left:
                     try:
                         api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
                         payload = {
-                            "api_key": TAVILY_KEY,
+                            "api_key": TAVILY_KEY.strip(),
                             "query": web_query,
                             "search_depth": "advanced",
                             "include_answer": False,
