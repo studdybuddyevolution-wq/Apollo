@@ -12,3 +12,5 @@ requests
 torchvision
 python-pptx
 extra-streamlit-components
+groq
+pillow
