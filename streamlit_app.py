@@ -158,11 +158,9 @@ def get_best_active_gemini_model(gemini_key):
             for m in models_list:
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods:
-                    # Strip 'models/' prefix if present
                     clean_name = m.get("name", "").replace("models/", "")
                     valid_models.append(clean_name)
             
-            # Prioritize high-speed Flash models
             for m in valid_models:
                 if "flash" in m.lower():
                     return m
@@ -172,14 +170,12 @@ def get_best_active_gemini_model(gemini_key):
     except Exception:
         pass
     
-    # Absolute fallback if discovery endpoint fails
     return "gemini-1.5-flash"
 
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
-    # Dynamically select active model name from Google API
     active_model = get_best_active_gemini_model(gemini_key)
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={gemini_key.strip()}"
@@ -511,6 +507,13 @@ with col_left:
 
     with st.expander("✨ Open NotebookLM Slide Editor", expanded=False):
         st.markdown("Live-edit your generated slides before downloading.")
+        
+        # Safety fallback protection against empty state exceptions
+        if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
+            st.session_state.slides_data = [
+                {"title": "Slide 1", "bullets": ["Add a bullet point or generate slides via Gemini"]}
+            ]
+            
         tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
         
         for i, tab in enumerate(tabs):
@@ -581,7 +584,6 @@ with col_left:
             else:
                 with st.spinner("Executing secure web retrieval..."):
                     try:
-                        # Clean string definition to fix connection adapter errors
                         api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
                         payload = {
                             "api_key": TAVILY_KEY.strip(),
