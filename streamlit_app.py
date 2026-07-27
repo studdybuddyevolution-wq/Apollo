@@ -2,6 +2,7 @@ import os
 import time
 import tempfile
 import json
+import re
 import requests
 import random
 import smtplib
@@ -20,27 +21,32 @@ from PIL import Image
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 
-# 2. Initialize Cookie Manager for Persistent Auth (Safely Handled)
+# 2. Initialize Cookie Manager for Persistent Auth
 cookie_manager = stx.CookieManager()
 cookies = cookie_manager.get_all()
 if cookies is None:
     cookies = {}
 
-# 3. Key/Token Initialization
+# 3. Explicit Key/Token Initialization
 try:
-    OR_TOKEN = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 except Exception:
-    OR_TOKEN = os.getenv("OPENROUTER_API_KEY", "")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 try:
-    TAVILY_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", ""))
+    OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
 except Exception:
-    TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 try:
-    GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+    TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", ""))
 except Exception:
-    GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
+try:
+    GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+except Exception:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # 4. Resource Caching Pipelines
 @st.cache_resource
@@ -84,34 +90,57 @@ if "slides_data" not in st.session_state:
         {"title": "Core Architecture & Workflow", "bullets": ["Retrieval-Augmented Generation (RAG)", "Multi-model micro-agent routing"]}
     ]
 
-# 6. Stable OpenRouter Model Matrix
+# 6. Multi-Provider Model Matrix
 MODEL_OPTIONS = {
+    "Qwen 3.6 27B (Groq LPU)": {
+        "provider": "groq",
+        "model_id": "qwen/qwen3.6-27b",
+        "desc": "Alibaba Qwen 3.6 running at blazingly fast inference speed via Groq LPUs."
+    },
+    "Qwen 2.5 Coder 32B (OpenRouter)": {
+        "provider": "openrouter",
+        "model_id": "qwen/qwen-2.5-coder-32b-instruct",
+        "desc": "Specialized Qwen Coder model optimized for structured JSON and code logic."
+    },
     "Google Gemma 4 26B (Free)": {
-        "or_id": "google/gemma-4-26b-a4b-it:free",
+        "provider": "openrouter",
+        "model_id": "google/gemma-4-26b-a4b-it:free",
         "desc": "Google's highly efficient 26B model. Excellent for fast retrieval and text tasks."
     },
     "Meta Llama 3.3 70B (Free)": {
-        "or_id": "meta-llama/llama-3.3-70b-instruct:free",
+        "provider": "openrouter",
+        "model_id": "meta-llama/llama-3.3-70b-instruct:free",
         "desc": "Massive 70B model. Incredible at general reasoning and completely free."
     }
 }
 
-# 7. OpenRouter Exclusive LLM Streamer
-def generate_llm_stream(messages, token, selected_model_name):
-    if not token or not token.startswith("sk-or-"):
-        yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-v1-' in your Streamlit Secrets Dashboard."
-        return
+# 7. Unified LLM Streamer
+def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
+    model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
+    provider = model_cfg.get("provider", "openrouter")
+    model_id = model_cfg.get("model_id", "")
 
-    model_id = MODEL_OPTIONS[selected_model_name]["or_id"]
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    
-    headers = {
-        "Authorization": f"Bearer {token.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8501", 
-        "X-Title": "APOLLO OMNI" 
-    }
-    
+    if provider == "groq":
+        if not groq_key or not groq_key.startswith("gsk_"):
+            yield "❌ MISSING CONFIGURATION: Please set a valid 'GROQ_API_KEY' starting with 'gsk_' in Streamlit Secrets."
+            return
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {groq_key.strip()}",
+            "Content-Type": "application/json"
+        }
+    else:
+        if not or_token or not or_token.startswith("sk-or-"):
+            yield "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY' starting with 'sk-or-' in Streamlit Secrets."
+            return
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {or_token.strip()}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:8501", 
+            "X-Title": "APOLLO OMNI" 
+        }
+
     payload = {
         "model": model_id,
         "messages": messages,
@@ -144,60 +173,125 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Dynamic Gemini Model Discovery (Filtered against deprecated models) & PPT Generator Function
+# 8. Qwen 3 PPT Generator Function
+def generate_slides_with_qwen(topic, groq_key="", openrouter_key=""):
+    prompt = f"""Create a highly professional presentation outline about '{topic}'.
+Return ONLY a valid JSON array of 4-6 slide objects.
+Do NOT include markdown formatting code blocks like ```json or conversational text. Return raw JSON text.
+
+Schema format:
+[
+  {{"title": "Slide Title (Concise)", "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"]}}
+]"""
+
+    # 1st Attempt: Use Groq API with Qwen 3.6
+    if groq_key and groq_key.startswith("gsk_"):
+        url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
+        headers = {
+            "Authorization": f"Bearer {groq_key.strip()}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "qwen/qwen3.6-27b",
+            "messages": [
+                {"role": "system", "content": "You are a specialized presentation generator. Output strictly valid JSON arrays."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"}
+        }
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                raw_text = res.json()['choices'][0]['message']['content'].strip()
+                raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```$", "", raw_text).strip()
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, dict):
+                    for v in parsed.values():
+                        if isinstance(v, list):
+                            parsed = v
+                            break
+                if isinstance(parsed, list):
+                    return parsed, "Success (Qwen via Groq)"
+        except Exception:
+            pass
+
+    # 2nd Attempt: Fallback to OpenRouter with Qwen Coder
+    if openrouter_key and openrouter_key.startswith("sk-or-"):
+        url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
+        headers = {
+            "Authorization": f"Bearer {openrouter_key.strip()}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:8501",
+            "X-Title": "APOLLO OMNI PPT Engine"
+        }
+        payload = {
+            "model": "qwen/qwen-2.5-coder-32b-instruct",
+            "messages": [
+                {"role": "system", "content": "You output strictly valid, raw JSON array objects."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3
+        }
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                raw_text = res.json()['choices'][0]['message']['content'].strip()
+                raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```$", "", raw_text).strip()
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, dict):
+                    for v in parsed.values():
+                        if isinstance(v, list):
+                            parsed = v
+                            break
+                if isinstance(parsed, list):
+                    return parsed, "Success (Qwen via OpenRouter)"
+            else:
+                return None, f"OpenRouter API Error ({res.status_code}): {res.text}"
+        except Exception as e:
+            return None, f"Qwen Generation Error: {str(e)}"
+
+    return None, "Missing active GROQ_API_KEY or OPENROUTER_API_KEY in Streamlit Secrets."
+
+# 9. Legacy Gemini PPT Generator Function
 def get_best_active_gemini_model(gemini_key):
-    """Queries Google's models API directly to discover active content-generation models, skipping legacy/deprecated versions."""
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key.strip()}"
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models?key=](https://generativelanguage.googleapis.com/v1beta/models?key=){gemini_key.strip()}"
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             data = response.json()
             models_list = data.get("models", [])
-            
             valid_models = []
             for m in models_list:
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods:
                     clean_name = m.get("name", "").replace("models/", "")
-                    # Filter out older deprecated versions like 2.5 or 1.5 that trigger 404s for new users
                     if not any(deprecated in clean_name.lower() for deprecated in ["2.5-flash", "1.5-flash", "1.0"]):
                         valid_models.append(clean_name)
-            
             for m in valid_models:
                 if "flash" in m.lower():
                     return m
-            
             if valid_models:
                 return valid_models[0]
     except Exception:
         pass
-    
-    return "gemini-3.6-flash"
+    return "gemini-2.0-flash"
 
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
-    
     active_model = get_best_active_gemini_model(gemini_key)
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={gemini_key.strip()}"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){active_model}:generateContent?key={gemini_key.strip()}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
-    Return ONLY a valid JSON array of objects, where each object has a 'title' (string) and 'bullets' (list of 3-4 structured strings). Do not include markdown formatting code blocks like ```json, just return raw JSON text.
-    Example format:
-    [
-      {{"title": "Slide Title", "bullets": ["Bullet point 1", "Bullet point 2"]}}
-    ]"""
-    
+Return ONLY a valid JSON array of objects, where each object has a 'title' (string) and 'bullets' (list of 3-4 structured strings). Do not include markdown formatting code blocks like ```json, just return raw JSON text."""
+
     payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.4,
-            "responseMimeType": "application/json"
-        }
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json"}
     }
     
     try:
@@ -212,12 +306,11 @@ def generate_slides_with_gemini(topic, gemini_key):
     except Exception as e:
         return None, str(e)
 
-# 9. Email Dispatcher Function
+# 10. Email Dispatcher Function
 def send_otp_email(target_email, otp_code):
     try:
         sender_email = st.secrets.get("EMAIL_SENDER", "")
         sender_pass = st.secrets.get("EMAIL_PASSWORD", "")
-        
         if not sender_email or not sender_pass:
             return False, "Email credentials missing in Streamlit secrets."
             
@@ -235,10 +328,10 @@ def send_otp_email(target_email, otp_code):
     except Exception as e:
         return False, str(e)
 
-# 10. Advanced CSS Injection (Forcing Dark Mode)
+# 11. CSS Styling & Custom UI Layer
 st.markdown("""
 <style>
-    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -273,11 +366,7 @@ st.markdown("""
         justify-content: space-between;
         align-items: center;
     }
-    .header-left {
-        display: flex;
-        align-items: center;
-        gap: 15px;
-    }
+    .header-left { display: flex; align-items: center; gap: 15px; }
     .status-badge {
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.75rem;
@@ -343,43 +432,10 @@ st.markdown("""
         background-color: transparent !important;
     }
 
-    [data-testid="stFileUploadDropzone"] {
-        background-color: #18181b !important;
-        border: 1px dashed rgba(255, 255, 255, 0.2) !important;
-    }
-    [data-testid="stFileUploadDropzone"] * {
-        color: #a1a1aa !important;
-    }
-    [data-testid="stFileUploadDropzone"]:hover {
-        border-color: #f97316 !important;
-        background-color: #27272a !important;
-    }
-
     .stButton button {
         background: linear-gradient(180deg, #f97316 0%, #ea580c 100%) !important;
         color: #fff !important;
         border: none !important;
-    }
-
-    div[data-baseweb="select"] > div {
-        background-color: #18181b !important;
-        border-color: rgba(255, 255, 255, 0.1) !important;
-        color: white !important;
-    }
-    div[data-baseweb="select"] span {
-        color: white !important;
-    }
-    ul[role="listbox"] {
-        background-color: #18181b !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    }
-    li[role="option"] {
-        background-color: #18181b !important;
-        color: #e5e7eb !important;
-    }
-    li[role="option"]:hover {
-        background-color: #f97316 !important;
-        color: white !important;
     }
 
     .source-box {
@@ -446,7 +502,7 @@ if not st.session_state.authenticated:
                             st.session_state.otp_sent = True
                             st.rerun()
                         else:
-                            st.error(f"❌ Failed to send email. Ensure EMAIL_SENDER and EMAIL_PASSWORD are set in secrets. Error: {error_msg}")
+                            st.error(f"❌ Failed to send email: {error_msg}")
                 else:
                     st.error("❌ Access Denied. Only @somaiya.edu accounts are permitted.")
         else:
@@ -476,44 +532,66 @@ if not st.session_state.authenticated:
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
-# ================= LEFT COLUMN: INGESTION & GEMINI PPT STUDIO =================
+# ================= LEFT COLUMN: INGESTION & QWEN/GEMINI PPT STUDIO =================
 with col_left:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>⚙️ Zero-Cost Engine</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>⚙️ Multi-Model Engine</div>", unsafe_allow_html=True)
     selected_model = st.selectbox("API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0)
     st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- GEMINI-POWERED INTERACTIVE PPT STUDIO ---
+    # --- QWEN & GEMINI POWERED PPT STUDIO ---
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='panel-header'>📊 Gemini PPT Studio</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'>📊 Multi-LLM PPT Studio</div>", unsafe_allow_html=True)
     
-    if GEMINI_KEY:
-        st.markdown("<span style='font-size:0.8rem; color:#4ade80;'>✅ Gemini API Key Linked Safely</span>", unsafe_allow_html=True)
+    # Key status indicators
+    status_msg = []
+    if GROQ_API_KEY: status_msg.append("⚡ Groq (Qwen 3)")
+    if OPENROUTER_API_KEY: status_msg.append("🌐 OpenRouter")
+    if GEMINI_API_KEY: status_msg.append("✨ Gemini")
+    
+    if status_msg:
+        st.markdown(f"<span style='font-size:0.8rem; color:#4ade80;'>Active Keys: {', '.join(status_msg)}</span>", unsafe_allow_html=True)
     else:
-        st.markdown("<span style='font-size:0.8rem; color:#f87171;'>❌ Missing GEMINI_API_KEY in Secrets</span>", unsafe_allow_html=True)
+        st.markdown("<span style='font-size:0.8rem; color:#f87171;'>❌ No API Keys Configured in Secrets</span>", unsafe_allow_html=True)
 
     ppt_topic_input = st.text_input("Presentation Topic:", placeholder="e.g. Quantum Cryptography")
-    if st.button("✨ Generate Slides via Gemini", use_container_width=True):
-        if not GEMINI_KEY:
-            st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
-        elif ppt_topic_input:
-            with st.spinner("Discovering active model & generating slide structure..."):
-                new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_KEY)
-                if new_slides and isinstance(new_slides, list):
-                    st.session_state.slides_data = new_slides
-                    st.success("Successfully generated new presentation structure!")
-                    st.rerun()
-                else:
-                    st.error(f"Failed to generate slides: {err}")
+    
+    btn_qwen, btn_gemini = st.columns(2)
+    with btn_qwen:
+        if st.button("🚀 Qwen 3 PPT", use_container_width=True):
+            if not GROQ_API_KEY and not OPENROUTER_API_KEY:
+                st.error("Please add GROQ_API_KEY or OPENROUTER_API_KEY to your Streamlit secrets.")
+            elif ppt_topic_input:
+                with st.spinner("Generating slide structure via Qwen 3..."):
+                    new_slides, err = generate_slides_with_qwen(ppt_topic_input, GROQ_API_KEY, OPENROUTER_API_KEY)
+                    if new_slides and isinstance(new_slides, list):
+                        st.session_state.slides_data = new_slides
+                        st.success("Successfully generated slides via Qwen 3!")
+                        st.rerun()
+                    else:
+                        st.error(f"Qwen Generation Failed: {err}")
+                        
+    with btn_gemini:
+        if st.button("✨ Gemini PPT", use_container_width=True):
+            if not GEMINI_API_KEY:
+                st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
+            elif ppt_topic_input:
+                with st.spinner("Generating slide structure via Gemini..."):
+                    new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_API_KEY)
+                    if new_slides and isinstance(new_slides, list):
+                        st.session_state.slides_data = new_slides
+                        st.success("Successfully generated slides via Gemini!")
+                        st.rerun()
+                    else:
+                        st.error(f"Gemini Generation Failed: {err}")
 
     with st.expander("✨ Open NotebookLM Slide Editor", expanded=False):
         st.markdown("Live-edit your generated slides before downloading.")
         
-        # Safety fallback protection against empty state exceptions
         if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
             st.session_state.slides_data = [
-                {"title": "Slide 1", "bullets": ["Add a bullet point or generate slides via Gemini"]}
+                {"title": "Slide 1", "bullets": ["Add a bullet point or generate slides via Qwen/Gemini"]}
             ]
             
         tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
@@ -521,11 +599,12 @@ with col_left:
         for i, tab in enumerate(tabs):
             with tab:
                 slide_info = st.session_state.slides_data[i]
-                new_title = st.text_input(f"Title {i+1}", slide_info["title"], key=f"title_{i}")
+                new_title = st.text_input(f"Title {i+1}", slide_info.get("title", ""), key=f"title_{i}")
                 st.session_state.slides_data[i]["title"] = new_title
                 
                 updated_bullets = []
-                for j, bullet in enumerate(slide_info["bullets"]):
+                bullets_list = slide_info.get("bullets", [])
+                for j, bullet in enumerate(bullets_list):
                     b_val = st.text_input(f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}")
                     updated_bullets.append(b_val)
                 st.session_state.slides_data[i]["bullets"] = updated_bullets
@@ -560,22 +639,17 @@ with col_left:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
     st.markdown("<div class='panel-header'>🌐 AI Web Search (Tavily)</div>", unsafe_allow_html=True)
     
-    if TAVILY_KEY:
+    if TAVILY_API_KEY:
         st.markdown("<span style='font-size:0.8rem; color:#4ade80;'>✅ Tavily API Key Linked Safely</span>", unsafe_allow_html=True)
     else:
         st.markdown("<span style='font-size:0.8rem; color:#f87171;'>❌ Missing TAVILY_API_KEY in Secrets</span>", unsafe_allow_html=True)
         
     web_query = st.text_input("Enter topic to scrape & index...", placeholder="e.g. Current AI news", label_visibility="collapsed")
     
-    RESTRICTED_TERMS = [
-        "porn", "nsfw", "xxx", "sex", "nude", "onlyfans", "erotic",
-        "kill", "suicide", "murder", "gore", "violence", "torture", "dead body",
-        "weapon", "bomb", "gun", "ammunition", "firearm", "explosive", "rifle",
-        "drugs", "meth", "cocaine", "heroin"
-    ]
+    RESTRICTED_TERMS = ["porn", "nsfw", "xxx", "sex", "nude", "kill", "suicide", "murder", "gore", "weapon", "bomb", "drugs"]
     
     if st.button("SEARCH & INDEX", use_container_width=True):
-        if not TAVILY_KEY or not TAVILY_KEY.startswith("tvly-"):
+        if not TAVILY_API_KEY or not TAVILY_API_KEY.startswith("tvly-"):
             st.error("No active Tavily API Key found in Streamlit Secrets.")
         elif web_query:
             query_lower = web_query.lower()
@@ -586,9 +660,9 @@ with col_left:
             else:
                 with st.spinner("Executing secure web retrieval..."):
                     try:
-                        api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
+                        api_url = "https://api.tavily.com/search"
                         payload = {
-                            "api_key": TAVILY_KEY.strip(),
+                            "api_key": TAVILY_API_KEY.strip(),
                             "query": web_query,
                             "search_depth": "advanced",
                             "include_answer": False,
@@ -715,7 +789,7 @@ with col_mid:
         with chat_scroll_pane:
             with st.chat_message("assistant"):
                 try:
-                    stream = generate_llm_stream(message_stream, OR_TOKEN, selected_model)
+                    stream = generate_llm_stream(message_stream, GROQ_API_KEY, OPENROUTER_API_KEY, selected_model)
                     collected_tokens = st.write_stream(stream)
                     
                     if not collected_tokens or not str(collected_tokens).strip(): 
