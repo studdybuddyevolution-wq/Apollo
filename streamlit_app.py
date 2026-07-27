@@ -144,9 +144,9 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Dynamic Gemini Model Discovery & PPT Generator Function
+# 8. Dynamic Gemini Model Discovery (Filtered against deprecated models) & PPT Generator Function
 def get_best_active_gemini_model(gemini_key):
-    """Queries Google's models API directly to discover active content-generation models, preferring Flash."""
+    """Queries Google's models API directly to discover active content-generation models, skipping legacy/deprecated versions."""
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key.strip()}"
         response = requests.get(url, timeout=10)
@@ -159,7 +159,9 @@ def get_best_active_gemini_model(gemini_key):
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods:
                     clean_name = m.get("name", "").replace("models/", "")
-                    valid_models.append(clean_name)
+                    # Filter out older deprecated versions like 2.5 or 1.5 that trigger 404s for new users
+                    if not any(deprecated in clean_name.lower() for deprecated in ["2.5-flash", "1.5-flash", "1.0"]):
+                        valid_models.append(clean_name)
             
             for m in valid_models:
                 if "flash" in m.lower():
@@ -170,7 +172,7 @@ def get_best_active_gemini_model(gemini_key):
     except Exception:
         pass
     
-    return "gemini-1.5-flash"
+    return "gemini-3.6-flash"
 
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
