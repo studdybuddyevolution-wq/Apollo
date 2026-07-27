@@ -9,6 +9,7 @@ import tempfile
 import time
 from email.mime.text import MIMEText
 import extra_streamlit_components as stx
+from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -144,7 +145,7 @@ MODEL_OPTIONS = {
 }
 
 
-# 7. Unified LLM Streamer
+# 7. Unified LLM Streamer (Using Groq SDK)
 def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   provider = model_cfg.get("provider", "groq")
@@ -157,11 +158,22 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           " with 'gsk_' in Streamlit Secrets."
       )
       return
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {groq_key.strip()}",
-        "Content-Type": "application/json",
-    }
+    try:
+      client = Groq(api_key=groq_key.strip())
+      stream = client.chat.completions.create(
+          model=model_id,
+          messages=messages,
+          temperature=0.3,
+          max_tokens=1024,
+          stream=True,
+      )
+      for chunk in stream:
+        token_text = chunk.choices[0].delta.content or ""
+        if token_text:
+          yield token_text
+    except Exception as e:
+      yield f"❌ Groq SDK Failure: {str(e)}"
+      return
   else:
     if not or_token or not or_token.startswith("sk-or-"):
       yield (
@@ -176,50 +188,52 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
         "HTTP-Referer": "http://localhost:8501",
         "X-Title": "APOLLO OMNI",
     }
-
-  payload = {
-      "model": model_id,
-      "messages": messages,
-      "temperature": 0.3,
-      "max_tokens": 1024,
-      "stream": True,
-  }
-
-  try:
-    response = requests.post(url, headers=headers, json=payload, stream=True, timeout=30)
-
-    if response.status_code != 200:
-      yield f"❌ API Error ({response.status_code}): {response.text}"
-      return
-
-    for line in response.iter_lines():
-      if line:
-        decoded = line.decode("utf-8").strip()
-        if decoded.startswith("data: "):
-          data_str = decoded[6:]
-          if data_str == "[DONE]":
-            break
-          try:
-            data_json = json.loads(data_str)
-            token_text = (
-                data_json.get("choices", [{}])[0]
-                .get("delta", {})
-                .get("content", "")
-            )
-            if token_text:
-              yield token_text
-          except Exception:
-            pass
-  except Exception as e:
-    yield f"❌ Network Failure: {str(e)}"
+    payload = {
+        "model": model_id,
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": 1024,
+        "stream": True,
+    }
+    try:
+      response = requests.post(
+          url, headers=headers, json=payload, stream=True, timeout=30
+      )
+      if response.status_code != 200:
+        yield f"❌ API Error ({response.status_code}): {response.text}"
+        return
+      for line in response.iter_lines():
+        if line:
+          decoded = line.decode("utf-8").strip()
+          if decoded.startswith("data: "):
+            data_str = decoded[6:]
+            if data_str == "[DONE]":
+              break
+            try:
+              data_json = json.loads(data_str)
+              token_text = (
+                  data_json.get("choices", [{}])[0]
+                  .get("delta", {})
+                  .get("content", "")
+              )
+              if token_text:
+                yield token_text
+            except Exception:
+              pass
+    except Exception as e:
+      yield f"❌ Network Failure: {str(e)}"
 
 
-# 8. Qwen 3.6 PPT Generator Function using Groq API
+# 8. Qwen 3.6 PPT Generator Function using Groq SDK
 def generate_slides_with_qwen(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
 
   if not groq_key or not groq_key.startswith("gsk_"):
-    return None, "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets."
+    return (
+        None,
+        "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit"
+        " Secrets.",
+    )
 
   prompt = f"""Create a highly professional presentation outline about '{topic}'.
 Return ONLY a valid JSON array of 4-6 slide objects.
@@ -242,39 +256,31 @@ Schema format:
       return parsed
     return None
 
-  url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
-  headers = {
-      "Authorization": f"Bearer {groq_key}",
-      "Content-Type": "application/json",
-  }
-  payload = {
-      "model": "qwen/qwen3.6-27b",
-      "messages": [
-          {
-              "role": "system",
-              "content": (
-                  "You are a specialized presentation generator. Output"
-                  " strictly valid JSON arrays."
-              ),
-          },
-          {"role": "user", "content": prompt},
-      ],
-      "temperature": 0.2,
-      "response_format": {"type": "json_object"},
-  }
   try:
-    res = requests.post(url, headers=headers, json=payload, timeout=20)
-    if res.status_code == 200:
-      raw_text = res.json()["choices"][0]["message"]["content"]
-      parsed_slides = parse_json_response(raw_text)
-      if parsed_slides:
-        return parsed_slides, "Success (Qwen 3.6 via Groq API)"
+    client = Groq(api_key=groq_key)
+    completion = client.chat.completions.create(
+        model="qwen/qwen3.6-27b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a specialized presentation generator. Output"
+                    " strictly valid JSON arrays."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    raw_text = completion.choices[0].message.content
+    parsed_slides = parse_json_response(raw_text)
+    if parsed_slides:
+      return parsed_slides, "Success (Qwen 3.6 via Groq SDK)"
     else:
-      return None, f"Groq API Error ({res.status_code}): {res.text}"
+      return None, "Failed to parse JSON slides structure."
   except Exception as e:
     return None, f"Qwen Generation Error: {str(e)}"
-
-  return None, "Failed to connect to Groq API."
 
 
 # 9. Legacy Gemini PPT Generator Function
