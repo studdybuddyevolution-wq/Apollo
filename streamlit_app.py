@@ -121,39 +121,27 @@ if "slides_data" not in st.session_state:
       },
   ]
 
-# 6. Multi-Provider Model Matrix
+# 6. Multi-Provider Model Matrix (Featuring Qwen 3 via Groq)
 MODEL_OPTIONS = {
+    "Qwen 3 32B (Groq LPU)": {
+        "provider": "groq",
+        "model_id": "qwen/qwen3-32b",
+        "desc": "Alibaba Qwen 3 32B running at ultra-fast inference speed via Groq LPUs.",
+    },
     "Qwen 3.6 27B (Groq LPU)": {
         "provider": "groq",
         "model_id": "qwen/qwen3.6-27b",
-        "desc": (
-            "Alibaba Qwen 3.6 running at blazingly fast inference speed via Groq"
-            " LPUs."
-        ),
+        "desc": "Alibaba Qwen 3.6 multimodal model running via Groq LPUs.",
     },
-    "Qwen 2.5 Coder 32B (OpenRouter)": {
-        "provider": "openrouter",
-        "model_id": "qwen/qwen-2.5-coder-32b-instruct",
-        "desc": (
-            "Specialized Qwen Coder model optimized for structured JSON and"
-            " code logic."
-        ),
+    "Meta Llama 3.3 70B (Groq)": {
+        "provider": "groq",
+        "model_id": "llama-3.3-70b-versatile",
+        "desc": "Massive 70B model running with exceptional speed on Groq.",
     },
-    "Google Gemma 4 26B (Free)": {
+    "Google Gemma 4 26B (OpenRouter)": {
         "provider": "openrouter",
         "model_id": "google/gemma-4-26b-a4b-it:free",
-        "desc": (
-            "Google's highly efficient 26B model. Excellent for fast retrieval"
-            " and text tasks."
-        ),
-    },
-    "Meta Llama 3.3 70B (Free)": {
-        "provider": "openrouter",
-        "model_id": "meta-llama/llama-3.3-70b-instruct:free",
-        "desc": (
-            "Massive 70B model. Incredible at general reasoning and completely"
-            " free."
-        ),
+        "desc": "Google's efficient 26B model via OpenRouter gateway.",
     },
 }
 
@@ -161,7 +149,7 @@ MODEL_OPTIONS = {
 # 7. Unified LLM Streamer
 def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
-  provider = model_cfg.get("provider", "openrouter")
+  provider = model_cfg.get("provider", "groq")
   model_id = model_cfg.get("model_id", "")
 
   if provider == "groq":
@@ -228,7 +216,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
     yield f"❌ Network Failure: {str(e)}"
 
 
-# 8. Qwen 3 PPT Generator Function (Sanitized URLs & Keys)
+# 8. Qwen 3 PPT Generator Function using Groq API
 def generate_slides_with_qwen(topic, groq_key="", openrouter_key=""):
   groq_key = groq_key.strip() if groq_key else ""
   openrouter_key = openrouter_key.strip() if openrouter_key else ""
@@ -254,7 +242,7 @@ Schema format:
       return parsed
     return None
 
-  # 1st Attempt: Use Groq API with Qwen 3.6
+  # 1st Attempt: Use Groq API with Qwen 3 32B
   if groq_key and groq_key.startswith("gsk_"):
     url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)".strip()
     headers = {
@@ -262,7 +250,7 @@ Schema format:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "qwen/qwen3.6-27b",
+        "model": "qwen/qwen3-32b",
         "messages": [
             {
                 "role": "system",
@@ -282,8 +270,8 @@ Schema format:
         raw_text = res.json()["choices"][0]["message"]["content"]
         parsed_slides = parse_json_response(raw_text)
         if parsed_slides:
-          return parsed_slides, "Success (Qwen via Groq)"
-    except Exception:
+          return parsed_slides, "Success (Qwen 3 via Groq)"
+    except Exception as e:
       pass
 
   # 2nd Attempt: Fallback to OpenRouter with Qwen Coder
@@ -640,7 +628,7 @@ if not st.session_state.authenticated:
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
-# ================= LEFT COLUMN: INGESTION & QWEN/GEMINI PPT STUDIO =================
+# ================= LEFT COLUMN: INGESTION & QWEN PPT STUDIO =================
 with col_left:
   st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
   st.markdown(
@@ -653,10 +641,10 @@ with col_left:
   st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # --- QWEN & GEMINI POWERED PPT STUDIO ---
+  # --- QWEN 3 & GEMINI POWERED PPT STUDIO ---
   st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
   st.markdown(
-      "<div class='panel-header'>📊 Multi-LLM PPT Studio</div>",
+      "<div class='panel-header'>📊 Qwen 3 PPT Studio (Groq)</div>",
       unsafe_allow_html=True,
   )
 
@@ -694,7 +682,7 @@ with col_left:
             " secrets."
         )
       elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Qwen 3..."):
+        with st.spinner("Generating slide structure via Qwen 3 (Groq)..."):
           new_slides, err = generate_slides_with_qwen(
               ppt_topic_input, GROQ_API_KEY, OPENROUTER_API_KEY
           )
