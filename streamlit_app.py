@@ -695,6 +695,15 @@ with col_left:
     for i, tab in enumerate(tabs):
       with tab:
         slide_info = st.session_state.slides_data[i]
+        
+        # Defensive fix: ensure slide_info is always a valid dict
+        if isinstance(slide_info, str):
+          slide_info = {"title": slide_info, "bullets": []}
+          st.session_state.slides_data[i] = slide_info
+        elif not isinstance(slide_info, dict):
+          slide_info = {"title": f"Slide {i+1}", "bullets": []}
+          st.session_state.slides_data[i] = slide_info
+
         new_title = st.text_input(
             f"Title {i+1}", slide_info.get("title", ""), key=f"title_{i}"
         )
@@ -702,6 +711,9 @@ with col_left:
 
         updated_bullets = []
         bullets_list = slide_info.get("bullets", [])
+        if not isinstance(bullets_list, list):
+          bullets_list = [str(bullets_list)]
+          
         for j, bullet in enumerate(bullets_list):
           b_val = st.text_input(
               f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}"
@@ -713,13 +725,15 @@ with col_left:
     def create_pptx(data):
       prs = Presentation()
       for item in data:
+        if not isinstance(item, dict):
+          continue
         slide_layout = prs.slide_layouts[1]
         slide = prs.slides.add_slide(slide_layout)
-        slide.shapes.title.text = item["title"]
+        slide.shapes.title.text = item.get("title", "Slide")
         tf = slide.placeholders[1].text_frame
-        for bullet in item["bullets"]:
+        for bullet in item.get("bullets", []):
           p = tf.add_paragraph()
-          p.text = bullet
+          p.text = str(bullet)
       path = "apollo_presentation.pptx"
       prs.save(path)
       return path
@@ -1047,6 +1061,15 @@ with col_right:
       st.session_state.source_reference = (
           "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
       )
+      st.session_state.slides_data = [
+          {
+              "title": "Introduction to Institutional AI",
+              "bullets": [
+                  "Overview of Apollo Omni platform",
+                  "Secure @somaiya.edu integration",
+              ],
+          }
+      ]
       st.rerun()
   with c2:
     chat_log = "\n".join([
