@@ -121,17 +121,15 @@ if "slides_data" not in st.session_state:
       },
   ]
 
-# 6. Multi-Provider Model Matrix (Featuring Qwen 3 via Groq)
+# 6. Multi-Provider Model Matrix
 MODEL_OPTIONS = {
-    "Qwen 3 32B (Groq LPU)": {
-        "provider": "groq",
-        "model_id": "qwen/qwen3-32b",
-        "desc": "Alibaba Qwen 3 32B running at ultra-fast inference speed via Groq LPUs.",
-    },
     "Qwen 3.6 27B (Groq LPU)": {
         "provider": "groq",
         "model_id": "qwen/qwen3.6-27b",
-        "desc": "Alibaba Qwen 3.6 multimodal model running via Groq LPUs.",
+        "desc": (
+            "Alibaba Qwen 3.6 running at blazingly fast inference speed via Groq"
+            " LPUs."
+        ),
     },
     "Meta Llama 3.3 70B (Groq)": {
         "provider": "groq",
@@ -159,7 +157,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           " with 'gsk_' in Streamlit Secrets."
       )
       return
-    url = "https://api.groq.com/openai/v1/chat/completions".strip()
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {groq_key.strip()}",
         "Content-Type": "application/json",
@@ -171,7 +169,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           " starting with 'sk-or-' in Streamlit Secrets."
       )
       return
-    url = "https://openrouter.ai/api/v1/chat/completions".strip()
+    url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {or_token.strip()}",
         "Content-Type": "application/json",
@@ -216,10 +214,12 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
     yield f"❌ Network Failure: {str(e)}"
 
 
-# 8. Qwen 3 PPT Generator Function using Groq API
-def generate_slides_with_qwen(topic, groq_key="", openrouter_key=""):
+# 8. Qwen 3.6 PPT Generator Function using Groq API
+def generate_slides_with_qwen(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
-  openrouter_key = openrouter_key.strip() if openrouter_key else ""
+
+  if not groq_key or not groq_key.startswith("gsk_"):
+    return None, "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets."
 
   prompt = f"""Create a highly professional presentation outline about '{topic}'.
 Return ONLY a valid JSON array of 4-6 slide objects.
@@ -242,74 +242,39 @@ Schema format:
       return parsed
     return None
 
-  # 1st Attempt: Use Groq API with Qwen 3 32B
-  if groq_key and groq_key.startswith("gsk_"):
-    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)".strip()
-    headers = {
-        "Authorization": f"Bearer {groq_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "qwen/qwen3-32b",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a specialized presentation generator. Output"
-                    " strictly valid JSON arrays."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-    }
-    try:
-      res = requests.post(url, headers=headers, json=payload, timeout=20)
-      if res.status_code == 200:
-        raw_text = res.json()["choices"][0]["message"]["content"]
-        parsed_slides = parse_json_response(raw_text)
-        if parsed_slides:
-          return parsed_slides, "Success (Qwen 3 via Groq)"
-    except Exception as e:
-      pass
+  url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
+  headers = {
+      "Authorization": f"Bearer {groq_key}",
+      "Content-Type": "application/json",
+  }
+  payload = {
+      "model": "qwen/qwen3.6-27b",
+      "messages": [
+          {
+              "role": "system",
+              "content": (
+                  "You are a specialized presentation generator. Output"
+                  " strictly valid JSON arrays."
+              ),
+          },
+          {"role": "user", "content": prompt},
+      ],
+      "temperature": 0.2,
+      "response_format": {"type": "json_object"},
+  }
+  try:
+    res = requests.post(url, headers=headers, json=payload, timeout=20)
+    if res.status_code == 200:
+      raw_text = res.json()["choices"][0]["message"]["content"]
+      parsed_slides = parse_json_response(raw_text)
+      if parsed_slides:
+        return parsed_slides, "Success (Qwen 3.6 via Groq API)"
+    else:
+      return None, f"Groq API Error ({res.status_code}): {res.text}"
+  except Exception as e:
+    return None, f"Qwen Generation Error: {str(e)}"
 
-  # 2nd Attempt: Fallback to OpenRouter with Qwen Coder
-  if openrouter_key and openrouter_key.startswith("sk-or-"):
-    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)".strip()
-    headers = {
-        "Authorization": f"Bearer {openrouter_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8501",
-        "X-Title": "APOLLO OMNI PPT Engine",
-    }
-    payload = {
-        "model": "qwen/qwen-2.5-coder-32b-instruct",
-        "messages": [
-            {
-                "role": "system",
-                "content": "You output strictly valid, raw JSON array objects.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.3,
-    }
-    try:
-      res = requests.post(url, headers=headers, json=payload, timeout=25)
-      if res.status_code == 200:
-        raw_text = res.json()["choices"][0]["message"]["content"]
-        parsed_slides = parse_json_response(raw_text)
-        if parsed_slides:
-          return parsed_slides, "Success (Qwen via OpenRouter)"
-      else:
-        return None, f"OpenRouter API Error ({res.status_code}): {res.text}"
-    except Exception as e:
-      return None, f"Qwen Generation Error: {str(e)}"
-
-  return (
-      None,
-      "Missing active GROQ_API_KEY or OPENROUTER_API_KEY in Streamlit Secrets.",
-  )
+  return None, "Failed to connect to Groq API."
 
 
 # 9. Legacy Gemini PPT Generator Function
@@ -641,18 +606,16 @@ with col_left:
   st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # --- QWEN 3 & GEMINI POWERED PPT STUDIO ---
+  # --- QWEN 3.6 & GEMINI POWERED PPT STUDIO ---
   st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
   st.markdown(
-      "<div class='panel-header'>📊 Qwen 3 PPT Studio (Groq)</div>",
+      "<div class='panel-header'>📊 Qwen 3.6 PPT Studio (Groq)</div>",
       unsafe_allow_html=True,
   )
 
   status_msg = []
   if GROQ_API_KEY:
-    status_msg.append("⚡ Groq (Qwen 3)")
-  if OPENROUTER_API_KEY:
-    status_msg.append("🌐 OpenRouter")
+    status_msg.append("⚡ Groq (Qwen 3.6)")
   if GEMINI_API_KEY:
     status_msg.append("✨ Gemini")
 
@@ -675,20 +638,17 @@ with col_left:
 
   btn_qwen, btn_gemini = st.columns(2)
   with btn_qwen:
-    if st.button("🚀 Qwen 3 PPT", use_container_width=True):
-      if not GROQ_API_KEY and not OPENROUTER_API_KEY:
-        st.error(
-            "Please add GROQ_API_KEY or OPENROUTER_API_KEY to your Streamlit"
-            " secrets."
-        )
+    if st.button("🚀 Qwen 3.6 PPT", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Please add GROQ_API_KEY to your Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Qwen 3 (Groq)..."):
+        with st.spinner("Generating slide structure via Qwen 3.6 (Groq)..."):
           new_slides, err = generate_slides_with_qwen(
-              ppt_topic_input, GROQ_API_KEY, OPENROUTER_API_KEY
+              ppt_topic_input, GROQ_API_KEY
           )
           if new_slides and isinstance(new_slides, list):
             st.session_state.slides_data = new_slides
-            st.success("Successfully generated slides via Qwen 3!")
+            st.success("Successfully generated slides via Qwen 3.6!")
             st.rerun()
           else:
             st.error(f"Qwen Generation Failed: {err}")
