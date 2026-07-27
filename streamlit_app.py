@@ -82,23 +82,11 @@ if "generated_otp" not in st.session_state: st.session_state.generated_otp = Non
 if "user_email" not in st.session_state: st.session_state.user_email = ""
 if "pptx_bytes" not in st.session_state: st.session_state.pptx_bytes = None
 if "pptx_ready" not in st.session_state: st.session_state.pptx_ready = False
+if "current_topic" not in st.session_state: st.session_state.current_topic = ""
 
-# NotebookLM-Style Gamma PPT Studio State
+# Clear the hardcoded Apollo slides to prevent branding overriding user prompts
 if "slides_data" not in st.session_state:
-    st.session_state.slides_data = [
-        {
-            "title": "Introduction to Institutional AI",
-            "subtitle": "Modernizing Academic & Enterprise Intelligence",
-            "bullets": ["Overview of Apollo Omni platform", "Secure @somaiya.edu integration", "Privacy-first zero data persistence"],
-            "image_prompt": "Futuristic 3d AI neural network avatar glowing orange in dark room"
-        },
-        {
-            "title": "Core Architecture & RAG Workflow",
-            "subtitle": "Vector Storage & Multi-Model Orchestration",
-            "bullets": ["Retrieval-Augmented Generation (RAG)", "Sub-second FAISS vector indexing", "Multi-model micro-agent routing"],
-            "image_prompt": "3d render of database data nodes connected with glowing cyber light beams"
-        }
-    ]
+    st.session_state.slides_data = []
 
 # 6. Stable OpenRouter Model Matrix
 MODEL_OPTIONS = {
@@ -160,7 +148,7 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Gemini PPT Generator Function (With dynamic model discovery & fallback)
+# 8. Gemini PPT Generator Function
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
@@ -168,18 +156,17 @@ def generate_slides_with_gemini(topic, gemini_key):
     clean_key = gemini_key.strip()
     headers = {"Content-Type": "application/json"}
     
-    prompt = f"""Create a modern Gamma AI-style presentation outline about '{topic}'. 
+    # Enhanced prompt to strictly respect user's visual/tone requests
+    prompt = f"""Create a highly professional presentation outline based STRICTLY on this prompt: '{topic}'. 
+    Ensure the content perfectly matches the requested tone, target audience, and subject matter.
     Return ONLY a valid JSON array of 4-6 slide objects. Each object MUST have:
     - 'title': Slide title (concise, impactful)
     - 'subtitle': Brief 1-line summary/tagline
     - 'bullets': Array of 3-4 detailed bullet strings
-    - 'image_prompt': A specific 3D render/visual image description for this slide (e.g. 'Futuristic cybernetic neural network glowing orange')
+    - 'image_prompt': A specific, highly detailed 3D render/visual image description for this slide. Ensure it matches any color palette requested by the user (e.g. 'cinematic 3d render of aerospace engineering, deep blue and silver').
 
     Do NOT include markdown formatting code blocks like ```json, just return raw JSON text.
-    Example format:
-    [
-      {{"title": "AI Architecture", "subtitle": "Scalable Neural Processing", "bullets": ["High-performance compute clusters", "Sub-millisecond latency routing"], "image_prompt": "3d render of neural network glowing orange"}}
-    ]"""
+    """
     
     payload = {
         "contents": [{
@@ -193,7 +180,7 @@ def generate_slides_with_gemini(topic, gemini_key):
     
     discovered_models = []
     try:
-        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+        models_url = f"[https://generativelanguage.googleapis.com/v1beta/models?key=](https://generativelanguage.googleapis.com/v1beta/models?key=){clean_key}"
         res = requests.get(models_url, timeout=10)
         if res.status_code == 200:
             m_data = res.json().get("models", [])
@@ -213,7 +200,7 @@ def generate_slides_with_gemini(topic, gemini_key):
         
     last_error = ""
     for model_name in candidate_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={clean_key}"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             if response.status_code == 200:
@@ -251,11 +238,11 @@ def send_otp_email(target_email, otp_code):
     except Exception as e:
         return False, str(e)
 
-# Helper to fetch dynamic AI visuals / images for slide cards
+# Helper to fetch dynamic AI visuals
 def fetch_slide_image(prompt_text, slide_index):
     try:
-        clean_prompt = urllib.parse.quote(f"modern presentation visual {prompt_text} cinematic dark mode 8k")
-        img_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=800&height=600&nologo=true&seed={slide_index+42}"
+        clean_prompt = urllib.parse.quote(f"professional presentation visual {prompt_text} cinematic 8k")
+        img_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){clean_prompt}?width=800&height=600&nologo=true&seed={slide_index+42}"
         res = requests.get(img_url, timeout=12)
         if res.status_code == 200:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
@@ -274,25 +261,30 @@ def fetch_slide_image(prompt_text, slide_index):
             draw.line([(x, 0), (x, 600)], fill=(39, 39, 42), width=1)
         for y in range(0, 600, 40):
             draw.line([(0, y), (800, y)], fill=(39, 39, 42), width=1)
-        draw.rounded_rectangle([80, 120, 720, 480], radius=16, fill=(30, 41, 59), outline=(249, 115, 22), width=3)
+        # Replaced the cyberpunk orange outline with a cleaner neutral silver outline
+        draw.rounded_rectangle([80, 120, 720, 480], radius=16, fill=(30, 41, 59), outline=(192, 192, 192), width=3)
         img.save(tmp.name)
         return tmp.name
     except Exception:
         return None
 
-def create_gamma_pptx(data):
+def create_gamma_pptx(data, topic=""):
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
     blank_layout = prs.slide_layouts[6]
 
-    DARK_BG = RGBColor(15, 15, 17)        # #0F0F11
-    CARD_BG = RGBColor(24, 24, 27)        # #18181B
-    BORDER_COLOR = RGBColor(63, 63, 70)   # #3F3F46
-    ORANGE_ACCENT = RGBColor(249, 115, 22)# #F97316
-    CYAN_ACCENT = RGBColor(56, 189, 248)  # #38BDF8
+    # Dynamic Theme Engine based on User Prompt Keywords
+    topic_lower = topic.lower()
+    is_aero = any(keyword in topic_lower for keyword in ["aerospace", "boeing", "aviation", "flight", "space"])
+    
+    DARK_BG = RGBColor(10, 25, 47) if is_aero else RGBColor(15, 15, 17)        
+    CARD_BG = RGBColor(23, 42, 69) if is_aero else RGBColor(24, 24, 27)        
+    BORDER_COLOR = RGBColor(148, 163, 184) if is_aero else RGBColor(63, 63, 70)   
+    ACCENT_1 = RGBColor(192, 192, 192) if is_aero else RGBColor(249, 115, 22) # Silver vs Orange
+    ACCENT_2 = RGBColor(255, 255, 255) if is_aero else RGBColor(56, 189, 248) # Clean White vs Cyan
     WHITE_TEXT = RGBColor(255, 255, 255)
-    MUTED_TEXT = RGBColor(161, 161, 170)
+    MUTED_TEXT = RGBColor(148, 163, 184) if is_aero else RGBColor(161, 161, 170)
 
     # 1. Cover Slide
     cover_slide = prs.slides.add_slide(blank_layout)
@@ -308,16 +300,18 @@ def create_gamma_pptx(data):
 
     badge = cover_slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.5), Inches(1.5), Inches(3.5), Inches(0.4))
     badge.fill.solid()
-    badge.fill.fore_color.rgb = RGBColor(30, 41, 59)
-    badge.line.color.rgb = CYAN_ACCENT
+    badge.fill.fore_color.rgb = CARD_BG
+    badge.line.color.rgb = ACCENT_2
     tf = badge.text_frame
     p = tf.paragraphs[0]
-    p.text = "⚡ GAMMA AI DESIGN ENGINE"
+    
+    # Removed hardcoded Gamma AI label
+    p.text = "⚡ " + (topic.upper()[:25] if topic else "CORPORATE PRESENTATION")
     p.font.size = Pt(11)
     p.font.bold = True
-    p.font.color.rgb = CYAN_ACCENT
+    p.font.color.rgb = ACCENT_2
 
-    first_title = data[0]["title"] if data else "Apollo Omni AI Presentation"
+    first_title = data[0]["title"] if data else "AI Presentation"
     txBox = cover_slide.shapes.add_textbox(Inches(1.5), Inches(2.2), Inches(10.333), Inches(1.5))
     tf = txBox.text_frame
     tf.word_wrap = True
@@ -325,9 +319,9 @@ def create_gamma_pptx(data):
     p.text = first_title
     p.font.size = Pt(40)
     p.font.bold = True
-    p.font.color.rgb = ORANGE_ACCENT
+    p.font.color.rgb = ACCENT_1
 
-    first_sub = data[0].get("subtitle", "AI-Generated Interactive Knowledge Studio") if data else ""
+    first_sub = data[0].get("subtitle", "") if data else ""
     txBox2 = cover_slide.shapes.add_textbox(Inches(1.5), Inches(3.8), Inches(10.333), Inches(1.0))
     tf2 = txBox2.text_frame
     tf2.word_wrap = True
@@ -339,7 +333,9 @@ def create_gamma_pptx(data):
     txBox3 = cover_slide.shapes.add_textbox(Inches(1.5), Inches(5.3), Inches(10.333), Inches(0.6))
     tf3 = txBox3.text_frame
     p3 = tf3.paragraphs[0]
-    p3.text = "Generated by APOLLO OMNI AI • Powered by Gemini & Gamma Engine"
+    
+    # Removed hardcoded Apollo Omni text
+    p3.text = "Generated by AI Presentation Engine"
     p3.font.size = Pt(12)
     p3.font.color.rgb = MUTED_TEXT
 
@@ -352,19 +348,19 @@ def create_gamma_pptx(data):
 
         top_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.1))
         top_bar.fill.solid()
-        top_bar.fill.fore_color.rgb = ORANGE_ACCENT if i % 2 == 0 else CYAN_ACCENT
+        top_bar.fill.fore_color.rgb = ACCENT_1 if i % 2 == 0 else ACCENT_2
         top_bar.line.fill.background()
 
         badge = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(0.5), Inches(1.8), Inches(0.35))
         badge.fill.solid()
         badge.fill.fore_color.rgb = CARD_BG
-        badge.line.color.rgb = ORANGE_ACCENT if i % 2 == 0 else CYAN_ACCENT
+        badge.line.color.rgb = ACCENT_1 if i % 2 == 0 else ACCENT_2
         tf = badge.text_frame
         p = tf.paragraphs[0]
         p.text = f"SLIDE 0{i+1}"
         p.font.size = Pt(10)
         p.font.bold = True
-        p.font.color.rgb = ORANGE_ACCENT if i % 2 == 0 else CYAN_ACCENT
+        p.font.color.rgb = ACCENT_1 if i % 2 == 0 else ACCENT_2
 
         tBox = slide.shapes.add_textbox(Inches(0.8), Inches(0.95), Inches(7.2), Inches(0.9))
         tf = tBox.text_frame
@@ -395,7 +391,7 @@ def create_gamma_pptx(data):
 
             strip = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(y_pos), Inches(0.12), Inches(card_h))
             strip.fill.solid()
-            strip.fill.fore_color.rgb = ORANGE_ACCENT if b_idx % 2 == 0 else CYAN_ACCENT
+            strip.fill.fore_color.rgb = ACCENT_1 if b_idx % 2 == 0 else ACCENT_2
             strip.line.fill.background()
 
             bt_box = slide.shapes.add_textbox(Inches(1.1), Inches(y_pos + 0.1), Inches(6.7), Inches(card_h - 0.2))
@@ -439,7 +435,7 @@ def create_gamma_pptx(data):
 # 10. Advanced CSS Injection (Forcing Dark Mode)
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -699,6 +695,7 @@ with col_left:
         if not GEMINI_KEY:
             st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
         elif ppt_topic_input:
+            st.session_state.current_topic = ppt_topic_input # Store for later PPTX rendering
             with st.spinner("Generating slide structure with Gemini..."):
                 new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_KEY)
                 if new_slides and isinstance(new_slides, list):
@@ -708,61 +705,64 @@ with col_left:
                 else:
                     st.error(f"Failed to generate slides: {err}")
 
-    with st.expander("✨ Open Gamma Slide Editor & Preview", expanded=False):
-        st.markdown("Live-edit your generated Gamma slides, subtitles, and image prompts before downloading.")
-        tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
-        
-        for i, tab in enumerate(tabs):
-            with tab:
-                slide_info = st.session_state.slides_data[i]
-                
-                st.markdown(f"""
-                <div style='background: #18181b; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 12px;'>
-                    <span style='background: rgba(249,115,22,0.1); color: #f97316; border: 1px solid rgba(249,115,22,0.3); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px;'>SLIDE 0{i+1} PREVIEW</span>
-                    <h4 style='color: white; margin-top: 6px; margin-bottom: 2px;'>{slide_info.get("title", "")}</h4>
-                    <p style='color: #a1a1aa; font-size: 0.8rem; margin-bottom: 8px;'><em>{slide_info.get("subtitle", "")}</em></p>
-                    <div style='font-size: 0.75rem; color: #38bdf8;'>🎨 Image Prompt: {slide_info.get("image_prompt", "")}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                new_title = st.text_input(f"Title {i+1}", slide_info["title"], key=f"title_{i}")
-                new_sub = st.text_input(f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}")
-                new_img_p = st.text_input(f"Image Prompt {i+1}", slide_info.get("image_prompt", ""), key=f"img_p_{i}")
-                
-                st.session_state.slides_data[i]["title"] = new_title
-                st.session_state.slides_data[i]["subtitle"] = new_sub
-                st.session_state.slides_data[i]["image_prompt"] = new_img_p
-                
-                updated_bullets = []
-                for j, bullet in enumerate(slide_info.get("bullets", [])):
-                    b_val = st.text_input(f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}")
-                    updated_bullets.append(b_val)
-                st.session_state.slides_data[i]["bullets"] = updated_bullets
+    # Hide Editor if empty state
+    if not st.session_state.slides_data:
+        st.info("👈 Enter a topic above and click 'Generate Slides via Gemini' to create your presentation.")
+    else:
+        with st.expander("✨ Open Gamma Slide Editor & Preview", expanded=True):
+            st.markdown("Live-edit your generated Gamma slides, subtitles, and image prompts before downloading.")
+            tabs = st.tabs([f"Slide {i+1}" for i in range(len(st.session_state.slides_data))])
+            
+            for i, tab in enumerate(tabs):
+                with tab:
+                    slide_info = st.session_state.slides_data[i]
+                    
+                    st.markdown(f"""
+                    <div style='background: #18181b; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 12px;'>
+                        <span style='background: rgba(249,115,22,0.1); color: #f97316; border: 1px solid rgba(249,115,22,0.3); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px;'>SLIDE 0{i+1} PREVIEW</span>
+                        <h4 style='color: white; margin-top: 6px; margin-bottom: 2px;'>{slide_info.get("title", "")}</h4>
+                        <p style='color: #a1a1aa; font-size: 0.8rem; margin-bottom: 8px;'><em>{slide_info.get("subtitle", "")}</em></p>
+                        <div style='font-size: 0.75rem; color: #38bdf8;'>🎨 Image Prompt: {slide_info.get("image_prompt", "")}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    new_title = st.text_input(f"Title {i+1}", slide_info["title"], key=f"title_{i}")
+                    new_sub = st.text_input(f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}")
+                    new_img_p = st.text_input(f"Image Prompt {i+1}", slide_info.get("image_prompt", ""), key=f"img_p_{i}")
+                    
+                    st.session_state.slides_data[i]["title"] = new_title
+                    st.session_state.slides_data[i]["subtitle"] = new_sub
+                    st.session_state.slides_data[i]["image_prompt"] = new_img_p
+                    
+                    updated_bullets = []
+                    for j, bullet in enumerate(slide_info.get("bullets", [])):
+                        b_val = st.text_input(f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}")
+                        updated_bullets.append(b_val)
+                    st.session_state.slides_data[i]["bullets"] = updated_bullets
 
-        if st.button("🎨 Render Gamma Presentation", use_container_width=True):
-            with st.spinner("Fetching AI visuals & building your Gamma .pptx deck..."):
-                try:
-                    file_path = create_gamma_pptx(st.session_state.slides_data)
-                    with open(file_path, "rb") as fh:
-                        st.session_state.pptx_bytes = fh.read()
-                    st.session_state.pptx_ready = True
-                    if os.path.exists(file_path):
-                        os.unlink(file_path)
-                    st.success("✅ Presentation rendered! Click the download button below.")
-                except Exception as e:
-                    st.error(f"Render failed: {e}")
-                    st.session_state.pptx_ready = False
+            if st.button("🎨 Render Gamma Presentation", use_container_width=True):
+                with st.spinner("Fetching AI visuals & building your Gamma .pptx deck..."):
+                    try:
+                        file_path = create_gamma_pptx(st.session_state.slides_data, st.session_state.get("current_topic", "Professional Presentation"))
+                        with open(file_path, "rb") as fh:
+                            st.session_state.pptx_bytes = fh.read()
+                        st.session_state.pptx_ready = True
+                        if os.path.exists(file_path):
+                            os.unlink(file_path)
+                        st.success("✅ Presentation rendered! Click the download button below.")
+                    except Exception as e:
+                        st.error(f"Render failed: {e}")
+                        st.session_state.pptx_ready = False
 
-        # Download button is ALWAYS visible once pptx is ready (persists across reruns)
-        if st.session_state.pptx_ready and st.session_state.pptx_bytes:
-            st.download_button(
-                label="📥 Download Gamma PPTX",
-                data=st.session_state.pptx_bytes,
-                file_name="Apollo_Gamma_Presentation.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                use_container_width=True,
-                key="pptx_dl_btn"
-            )
+            if st.session_state.pptx_ready and st.session_state.pptx_bytes:
+                st.download_button(
+                    label="📥 Download Gamma PPTX",
+                    data=st.session_state.pptx_bytes,
+                    file_name="Apollo_Gamma_Presentation.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True,
+                    key="pptx_dl_btn"
+                )
     st.markdown("</div>", unsafe_allow_html=True)
 
     # --- SECURED WEB SEARCH INDEXER (TAVILY REST API) ---
@@ -796,7 +796,7 @@ with col_left:
             else:
                 with st.spinner("Executing secure web retrieval..."):
                     try:
-                        api_url = "https://api.tavily.com/search"
+                        api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
                         payload = {
                             "api_key": TAVILY_KEY.strip(),
                             "query": web_query,
