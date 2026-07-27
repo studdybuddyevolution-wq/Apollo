@@ -271,7 +271,6 @@ Schema format:
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
-        response_format={"type": "json_object"},
     )
     raw_text = completion.choices[0].message.content
     parsed_slides = parse_json_response(raw_text)
@@ -695,8 +694,7 @@ with col_left:
     for i, tab in enumerate(tabs):
       with tab:
         slide_info = st.session_state.slides_data[i]
-        
-        # Defensive fix: ensure slide_info is always a valid dict
+
         if isinstance(slide_info, str):
           slide_info = {"title": slide_info, "bullets": []}
           st.session_state.slides_data[i] = slide_info
@@ -713,7 +711,7 @@ with col_left:
         bullets_list = slide_info.get("bullets", [])
         if not isinstance(bullets_list, list):
           bullets_list = [str(bullets_list)]
-          
+
         for j, bullet in enumerate(bullets_list):
           b_val = st.text_input(
               f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}"
