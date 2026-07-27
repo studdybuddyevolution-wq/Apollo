@@ -84,7 +84,6 @@ if "pptx_bytes" not in st.session_state: st.session_state.pptx_bytes = None
 if "pptx_ready" not in st.session_state: st.session_state.pptx_ready = False
 if "current_topic" not in st.session_state: st.session_state.current_topic = ""
 
-# Clear the hardcoded Apollo slides to prevent branding overriding user prompts
 if "slides_data" not in st.session_state:
     st.session_state.slides_data = []
 
@@ -148,22 +147,29 @@ def generate_llm_stream(messages, token, selected_model_name):
     except Exception as e:
         yield f"❌ Network Failure: {str(e)}"
 
-# 8. Gemini PPT Generator Function
+# 8. Gemini PPT Generator Function (Fixed & Sanitized)
 def generate_slides_with_gemini(topic, gemini_key):
     if not gemini_key:
         return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
     
-    clean_key = gemini_key.strip()
-    headers = {"Content-Type": "application/json"}
+    # Thoroughly sanitize key against hidden newlines, spaces, or extra quotes
+    clean_key = gemini_key.strip().strip("'\"").strip("\n").strip("\r")
+    if not clean_key:
+        return None, "GEMINI_API_KEY is empty after sanitization."
+
+    # Pass the API key securely via header to avoid URL truncation/adapter errors
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": clean_key
+    }
     
-    # Enhanced prompt to strictly respect user's visual/tone requests
     prompt = f"""Create a highly professional presentation outline based STRICTLY on this prompt: '{topic}'. 
     Ensure the content perfectly matches the requested tone, target audience, and subject matter.
     Return ONLY a valid JSON array of 4-6 slide objects. Each object MUST have:
     - 'title': Slide title (concise, impactful)
     - 'subtitle': Brief 1-line summary/tagline
     - 'bullets': Array of 3-4 detailed bullet strings
-    - 'image_prompt': A specific, highly detailed 3D render/visual image description for this slide. Ensure it matches any color palette requested by the user (e.g. 'cinematic 3d render of aerospace engineering, deep blue and silver').
+    - 'image_prompt': A specific, highly detailed 3D render/visual image description for this slide. Ensure it matches any color palette requested by the user.
 
     Do NOT include markdown formatting code blocks like ```json, just return raw JSON text.
     """
@@ -180,12 +186,12 @@ def generate_slides_with_gemini(topic, gemini_key):
     
     discovered_models = []
     try:
-        models_url = f"[https://generativelanguage.googleapis.com/v1beta/models?key=](https://generativelanguage.googleapis.com/v1beta/models?key=){clean_key}"
-        res = requests.get(models_url, timeout=10)
+        models_url = "[https://generativelanguage.googleapis.com/v1beta/models](https://generativelanguage.googleapis.com/v1beta/models)"
+        res = requests.get(models_url, headers=headers, timeout=10)
         if res.status_code == 200:
             m_data = res.json().get("models", [])
             for m in m_data:
-                m_name = m.get("name", "").replace("models/", "")
+                m_name = m.get("name", "").replace("models/", "").strip()
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods:
                     discovered_models.append(m_name)
@@ -196,11 +202,12 @@ def generate_slides_with_gemini(topic, gemini_key):
     candidate_models = flash_models + [m for m in discovered_models if m not in flash_models]
     
     if not candidate_models:
-        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-2.0-flash-exp"]
+        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
         
     last_error = ""
     for model_name in candidate_models:
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={clean_key}"
+        clean_model = model_name.strip()
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){clean_model}:generateContent"
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             if response.status_code == 200:
@@ -209,7 +216,7 @@ def generate_slides_with_gemini(topic, gemini_key):
                 parsed_json = json.loads(text_output)
                 return parsed_json, "Success"
             else:
-                last_error = f"Gemini API Error ({response.status_code}) [{model_name}]: {response.text}"
+                last_error = f"Gemini API Error ({response.status_code}) [{clean_model}]: {response.text}"
         except Exception as e:
             last_error = str(e)
             
@@ -261,7 +268,6 @@ def fetch_slide_image(prompt_text, slide_index):
             draw.line([(x, 0), (x, 600)], fill=(39, 39, 42), width=1)
         for y in range(0, 600, 40):
             draw.line([(0, y), (800, y)], fill=(39, 39, 42), width=1)
-        # Replaced the cyberpunk orange outline with a cleaner neutral silver outline
         draw.rounded_rectangle([80, 120, 720, 480], radius=16, fill=(30, 41, 59), outline=(192, 192, 192), width=3)
         img.save(tmp.name)
         return tmp.name
@@ -274,19 +280,18 @@ def create_gamma_pptx(data, topic=""):
     prs.slide_height = Inches(7.5)
     blank_layout = prs.slide_layouts[6]
 
-    # Dynamic Theme Engine based on User Prompt Keywords
     topic_lower = topic.lower()
     is_aero = any(keyword in topic_lower for keyword in ["aerospace", "boeing", "aviation", "flight", "space"])
     
     DARK_BG = RGBColor(10, 25, 47) if is_aero else RGBColor(15, 15, 17)        
     CARD_BG = RGBColor(23, 42, 69) if is_aero else RGBColor(24, 24, 27)        
     BORDER_COLOR = RGBColor(148, 163, 184) if is_aero else RGBColor(63, 63, 70)   
-    ACCENT_1 = RGBColor(192, 192, 192) if is_aero else RGBColor(249, 115, 22) # Silver vs Orange
-    ACCENT_2 = RGBColor(255, 255, 255) if is_aero else RGBColor(56, 189, 248) # Clean White vs Cyan
+    ACCENT_1 = RGBColor(192, 192, 192) if is_aero else RGBColor(249, 115, 22)
+    ACCENT_2 = RGBColor(255, 255, 255) if is_aero else RGBColor(56, 189, 248)
     WHITE_TEXT = RGBColor(255, 255, 255)
     MUTED_TEXT = RGBColor(148, 163, 184) if is_aero else RGBColor(161, 161, 170)
 
-    # 1. Cover Slide
+    # Cover Slide
     cover_slide = prs.slides.add_slide(blank_layout)
     cover_bg = cover_slide.background.fill
     cover_bg.solid()
@@ -305,7 +310,6 @@ def create_gamma_pptx(data, topic=""):
     tf = badge.text_frame
     p = tf.paragraphs[0]
     
-    # Removed hardcoded Gamma AI label
     p.text = "⚡ " + (topic.upper()[:25] if topic else "CORPORATE PRESENTATION")
     p.font.size = Pt(11)
     p.font.bold = True
@@ -333,13 +337,11 @@ def create_gamma_pptx(data, topic=""):
     txBox3 = cover_slide.shapes.add_textbox(Inches(1.5), Inches(5.3), Inches(10.333), Inches(0.6))
     tf3 = txBox3.text_frame
     p3 = tf3.paragraphs[0]
-    
-    # Removed hardcoded Apollo Omni text
     p3.text = "Generated by AI Presentation Engine"
     p3.font.size = Pt(12)
     p3.font.color.rgb = MUTED_TEXT
 
-    # 2. Content Slides (2-Column Gamma Layout)
+    # Content Slides
     for i, item in enumerate(data):
         slide = prs.slides.add_slide(blank_layout)
         s_bg = slide.background.fill
@@ -432,7 +434,7 @@ def create_gamma_pptx(data, topic=""):
     prs.save(path)
     return path
 
-# 10. Advanced CSS Injection (Forcing Dark Mode)
+# 10. Advanced CSS Injection
 st.markdown("""
 <style>
     @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
@@ -695,7 +697,7 @@ with col_left:
         if not GEMINI_KEY:
             st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
         elif ppt_topic_input:
-            st.session_state.current_topic = ppt_topic_input # Store for later PPTX rendering
+            st.session_state.current_topic = ppt_topic_input
             with st.spinner("Generating slide structure with Gemini..."):
                 new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_KEY)
                 if new_slides and isinstance(new_slides, list):
@@ -705,7 +707,6 @@ with col_left:
                 else:
                     st.error(f"Failed to generate slides: {err}")
 
-    # Hide Editor if empty state
     if not st.session_state.slides_data:
         st.info("👈 Enter a topic above and click 'Generate Slides via Gemini' to create your presentation.")
     else:
@@ -977,4 +978,4 @@ with col_right:
         cookie_manager.delete("apollo_somaiya_session")
         st.rerun()
         
-    st.markdown("</div>", unsafe_allow_html=True
+    st.markdown("</div>", unsafe_allow_html=True)
