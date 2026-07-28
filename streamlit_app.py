@@ -111,7 +111,7 @@ if "generated_otp" not in st.session_state:
 if "user_email" not in st.session_state:
   st.session_state.user_email = ""
 
-# Gamma AI Style Initial Slides State (Rich default deck)
+# Gamma AI Style Initial Slides State
 if "slides_data" not in st.session_state:
   st.session_state.slides_data = [
       {
@@ -185,39 +185,6 @@ if "slides_data" not in st.session_state:
           ],
       },
       {
-          "title": "Types of AI by Functionality",
-          "subtitle": "Categorization Based on Memory & Cognitive Depth",
-          "image_keyword": (
-              "digital artificial brain circuit board microchip microchip"
-          ),
-          "cards": [
-              {
-                  "heading": "Reactive Machines",
-                  "text": (
-                      "Basic systems operating purely on immediate input"
-                      " without storing past experiences or forming short-term"
-                      " memory (e.g., IBM Deep Blue)."
-                  ),
-              },
-              {
-                  "heading": "Limited Memory Systems",
-                  "text": (
-                      "Utilize short-term historical data to make real-time"
-                      " decisions and contextual predictions (e.g., self-driving"
-                      " cars, modern LLMs)."
-                  ),
-              },
-              {
-                  "heading": "Theory of Mind & Self-Awareness",
-                  "text": (
-                      "Advanced concepts capable of understanding human mental"
-                      " states, emotions, and self-conscious autonomous thought"
-                      " processes."
-                  ),
-              },
-          ],
-      },
-      {
           "title": "Primary Domains of Artificial Intelligence",
           "subtitle": "Core Technical Branches and Specialized Fields",
           "image_keyword": (
@@ -279,18 +246,17 @@ MODEL_OPTIONS = {
 }
 
 
-# 7. HIGH-RELEVANCE Dynamic Image Engine (Pollinations Tech AI Focus)
+# 7. Image Engine
 def fetch_image_by_keyword(keyword):
   if not keyword:
     keyword = "artificial intelligence neural technology"
 
   clean_kw = re.sub(r"[^\w\s]", "", keyword).strip()
   prompt_encoded = urllib.parse.quote(
-      f"sleek modern technological professional visual representation of"
-      f" {clean_kw}, high resolution, 8k, dark aesthetic, minimalist design"
+      f"sleek modern technological visual representation of {clean_kw}, high"
+      " resolution, 8k, dark aesthetic, minimalist design"
   )
 
-  # Dynamic generation endpoint producing exact thematic matches
   pollinations_url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
 
   try:
@@ -320,13 +286,12 @@ def create_gamma_style_pptx(slides_data):
   prs.slide_width = Inches(13.333)
   prs.slide_height = Inches(7.5)
 
-  # Gamma Dark Theme Palette
-  BG_COLOR = RGBColor(15, 23, 42)  # Slate 900
-  CARD_BG = RGBColor(30, 41, 59)  # Slate 800
-  CARD_BORDER = RGBColor(51, 65, 85)  # Slate 700
-  ACCENT_COLOR = RGBColor(249, 115, 22)  # Electric Amber
-  TEXT_PRIMARY = RGBColor(248, 250, 252)  # White
-  TEXT_MUTED = RGBColor(148, 163, 184)  # Slate Subtitle
+  BG_COLOR = RGBColor(15, 23, 42)
+  CARD_BG = RGBColor(30, 41, 59)
+  CARD_BORDER = RGBColor(51, 65, 85)
+  ACCENT_COLOR = RGBColor(249, 115, 22)
+  TEXT_PRIMARY = RGBColor(248, 250, 252)
+  TEXT_MUTED = RGBColor(148, 163, 184)
 
   blank_layout = prs.slide_layouts[6]
 
@@ -336,7 +301,6 @@ def create_gamma_style_pptx(slides_data):
 
     slide = prs.slides.add_slide(blank_layout)
 
-    # Fill Background
     background = slide.background
     fill = background.fill
     fill.solid()
@@ -347,7 +311,6 @@ def create_gamma_style_pptx(slides_data):
     keyword = slide_info.get("image_keyword", title_text)
     cards = slide_info.get("cards", [])
 
-    # Title Block
     title_box = slide.shapes.add_textbox(
         Inches(0.8), Inches(0.5), Inches(11.7), Inches(1.2)
     )
@@ -368,7 +331,6 @@ def create_gamma_style_pptx(slides_data):
       p2.font.color.rgb = TEXT_MUTED
       p2.font.name = "Arial"
 
-    # Image Handling
     img_path = fetch_image_by_keyword(keyword)
     has_image = img_path is not None
     content_width = Inches(7.6) if has_image else Inches(11.7)
@@ -399,7 +361,6 @@ def create_gamma_style_pptx(slides_data):
         if img_path and os.path.exists(img_path):
           os.unlink(img_path)
 
-    # Dynamic Card Box Generation
     if isinstance(cards, list) and len(cards) > 0:
       num_cards = min(len(cards), 4)
       card_height = Inches(4.8 / max(num_cards, 1) - 0.15)
@@ -479,7 +440,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           model=model_id,
           messages=messages,
           temperature=0.3,
-          max_tokens=1024,
+          max_tokens=2048,
           stream=True,
       )
       for chunk in stream:
@@ -507,7 +468,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
         "model": model_id,
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_tokens": 2048,
         "stream": True,
     }
     try:
@@ -539,7 +500,38 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
       yield f"❌ Network Failure: {str(e)}"
 
 
-# 10. HIGH-CONTENT Slide Generator Prompting
+# 10. ROBUST SLIDE GENERATOR (COT SUPPRESSION + STRICT PARSER)
+def parse_robust_json(raw_text):
+  if not raw_text:
+    return None
+
+  # Clean out thinking blocks if present
+  clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
+  if "</think>" in clean_text:
+    clean_text = clean_text.split("</think>")[-1]
+
+  # Slice directly from first '{' to last '}'
+  start = clean_text.find("{")
+  end = clean_text.rfind("}")
+
+  if start != -1 and end != -1 and end > start:
+    json_candidate = clean_text[start : end + 1]
+    try:
+      parsed = json.loads(json_candidate)
+      if isinstance(parsed, dict):
+        if "slides" in parsed and isinstance(parsed["slides"], list):
+          return parsed["slides"]
+        for val in parsed.values():
+          if isinstance(val, list):
+            return val
+      elif isinstance(parsed, list):
+        return parsed
+    except json.JSONDecodeError:
+      pass
+
+  return None
+
+
 def generate_slides_with_qwen(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
 
@@ -549,113 +541,73 @@ def generate_slides_with_qwen(topic, groq_key=""):
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  prompt = f"""You are an elite academic presentation designer creating a comprehensive presentation on: '{topic}'.
+  prompt = f"""Create a detailed presentation on: '{topic}'.
 
-CRITICAL REQUIREMENTS:
-1. Generate between 5 to 7 detailed, content-rich slides.
-2. The content MUST be deep, academic, and highly detailed. Provide thorough explanations in every card box (not just short phrases!).
-3. Cover ALL core subtopics including foundational definitions, major classifications/types, domains/subfields, real-world practical applications, and future challenges.
-4. For 'image_keyword', provide a realistic 3-5 word tech visual description (e.g. 'artificial intelligence neural network glowing circuit', 'robotics industrial automation arm').
-5. Format strictly as JSON.
+DO NOT output <think> tags, chain of thought reasoning, or introductory conversational filler.
+OUTPUT raw JSON ONLY. Start directly with '{{' and end with '}}'.
 
-Schema Required:
+SCHEMA REQUIRED:
 {{
   "slides": [
     {{
-      "title": "Comprehensive Slide Title",
-      "subtitle": "Informative subtitle summarizing this section",
+      "title": "Slide Title",
+      "subtitle": "Informative Subtitle",
       "image_keyword": "descriptive technology topic image prompt",
       "cards": [
         {{
-          "heading": "Specific Core Concept Heading",
-          "text": "Detailed, multi-sentence thorough breakdown explaining the principles, mechanisms, and real-world relevance of this point."
+          "heading": "Core Subtopic Heading",
+          "text": "Detailed, multi-sentence contextual explanation with deep insights."
         }},
         {{
-          "heading": "Secondary Aspect Heading",
-          "text": "Detailed, multi-sentence contextual explanation with technical depth."
+          "heading": "Technical Mechanics",
+          "text": "Detailed multi-sentence explanation of principles, applications, or mechanisms."
         }},
         {{
-          "heading": "Practical Implications",
-          "text": "Detailed, multi-sentence point on domain implementation and impact."
+          "heading": "Domain Relevance",
+          "text": "Detailed multi-sentence explanation of real-world implementation."
         }}
       ]
     }}
   ]
 }}"""
 
-  def parse_json_response(raw_text):
-    if not raw_text:
-      return None
+  client = Groq(api_key=groq_key)
 
-    clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
-    dict_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
-    list_match = re.search(r"\[.*\]", clean_text, re.DOTALL)
+  # Model attempt priority: Qwen 3.6 -> Fallback to Llama 3.3 70B
+  models_to_try = ["qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
 
-    if dict_match:
-      json_str = dict_match.group(0)
-    elif list_match:
-      json_str = list_match.group(0)
-    else:
-      json_str = clean_text.replace("```json", "").replace("```", "").strip()
-
-    try:
-      parsed = json.loads(json_str)
-      if isinstance(parsed, dict):
-        if "slides" in parsed and isinstance(parsed["slides"], list):
-          return parsed["slides"]
-        for v in parsed.values():
-          if isinstance(v, list):
-            return v
-      elif isinstance(parsed, list):
-        return parsed
-      return None
-    except json.JSONDecodeError:
-      return None
-
-  try:
-    client = Groq(api_key=groq_key)
+  for model_id in models_to_try:
     try:
       completion = client.chat.completions.create(
-          model="qwen/qwen3.6-27b",
+          model=model_id,
           messages=[
               {
                   "role": "system",
                   "content": (
-                      "You are a presentation JSON generator. You must output"
-                      " JSON only."
+                      "You are a presentation JSON generator. You output ONLY"
+                      " raw JSON without thinking tags or commentary."
                   ),
               },
               {"role": "user", "content": prompt},
           ],
-          response_format={"type": "json_object"},
           temperature=0.2,
+          max_tokens=4096,
       )
+
+      raw_text = completion.choices[0].message.content or ""
+      parsed_slides = parse_robust_json(raw_text)
+
+      if parsed_slides:
+        return parsed_slides, f"Success ({model_id})"
+
     except Exception:
-      completion = client.chat.completions.create(
-          model="qwen/qwen3.6-27b",
-          messages=[
-              {
-                  "role": "system",
-                  "content": "You are a JSON generator. You must output valid JSON.",
-              },
-              {"role": "user", "content": prompt},
-          ],
-          temperature=0.2,
-      )
+      continue
 
-    raw_text = completion.choices[0].message.content
-    parsed_slides = parse_json_response(raw_text)
-
-    if parsed_slides:
-      return parsed_slides, "Success"
-    else:
-      return (
-          None,
-          f"Failed to parse model JSON output. Raw snippet: '{raw_text[:100]}'",
-      )
-
-  except Exception as e:
-    return None, f"Qwen Generation Error: {str(e)}"
+  return (
+      None,
+      "Failed to parse JSON across available models. Please try clicking Gemini"
+      " Gamma or retry.",
+  )
 
 
 # 11. Legacy Gemini Slide Generator
@@ -667,6 +619,7 @@ def generate_slides_with_gemini(topic, gemini_key):
 
   prompt = f"""Create an in-depth academic presentation outline about '{topic}'.
 Return ONLY a valid JSON object with key 'slides' containing 5-6 detailed slide objects.
+Do NOT include commentary outside JSON.
 Schema:
 {{
   "slides": [
@@ -978,7 +931,7 @@ with col_left:
 
   ppt_topic_input = st.text_input(
       "Presentation Topic:",
-      placeholder="e.g. Types and Domains of Artificial Intelligence",
+      placeholder="e.g. Domains and Types of Artificial Intelligence",
   )
 
   btn_qwen, btn_gemini = st.columns(2)
@@ -988,15 +941,15 @@ with col_left:
         st.error("Please add GROQ_API_KEY to your Streamlit secrets.")
       elif ppt_topic_input:
         with st.spinner("Generating deep slide structure via Qwen 3.6..."):
-          new_slides, err = generate_slides_with_qwen(
+          new_slides, status_msg = generate_slides_with_qwen(
               ppt_topic_input, GROQ_API_KEY
           )
           if new_slides and isinstance(new_slides, list):
             st.session_state.slides_data = new_slides
-            st.success("Generated comprehensive deck with Qwen 3.6!")
+            st.success(f"Deck generated! ({status_msg})")
             st.rerun()
           else:
-            st.error(f"Generation Failed: {err}")
+            st.error(f"Generation Failed: {status_msg}")
 
   with btn_gemini:
     if st.button("✨ Gemini Gamma", use_container_width=True):
