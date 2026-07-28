@@ -224,7 +224,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
       yield f"❌ Network Failure: {str(e)}"
 
 
-# 8. Qwen 3.6 PPT Generator Function using Groq SDK
+# 8. Qwen 3.6 PPT Generator Function using Groq SDK (STRICT JSON MODE)
 def generate_slides_with_qwen(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
 
@@ -234,62 +234,93 @@ def generate_slides_with_qwen(topic, groq_key=""):
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  prompt = f"""Create a highly professional presentation outline about '{topic}'.
-You must return ONLY a valid JSON array of 4-6 slide objects.
-Do NOT include markdown formatting code blocks like ```json.
-Do NOT include any conversational filler (e.g., "Here is the JSON").
+  prompt = f"""Create a presentation outline about '{topic}'.
+Return a JSON object containing a "slides" array with 4-6 slide objects.
 
-Schema format:
-[
-  {{"title": "Slide Title (Concise)", "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"]}}
-]"""
+Required JSON Structure:
+{{
+  "slides": [
+    {{
+      "title": "Slide Title",
+      "bullets": ["Point 1", "Point 2", "Point 3"]
+    }}
+  ]
+}}"""
 
   def parse_json_response(raw_text):
-    match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-    if match:
-      clean_text = match.group(0)
+    if not raw_text:
+      return None
+
+    # Clean thinking tags from reasoning models
+    clean_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
+
+    # Search for JSON object or array payload
+    dict_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+    list_match = re.search(r'\[.*\]', clean_text, re.DOTALL)
+
+    if dict_match:
+      json_str = dict_match.group(0)
+    elif list_match:
+      json_str = list_match.group(0)
     else:
-      clean_text = raw_text.replace("```json", "").replace("```", "").strip()
+      json_str = clean_text.replace("```json", "").replace("```", "").strip()
 
     try:
-      parsed = json.loads(clean_text)
+      parsed = json.loads(json_str)
+
+      # Extract slides array from dictionary
       if isinstance(parsed, dict):
+        if "slides" in parsed and isinstance(parsed["slides"], list):
+          return parsed["slides"]
         for v in parsed.values():
           if isinstance(v, list):
             return v
       elif isinstance(parsed, list):
         return parsed
+
       return None
     except json.JSONDecodeError:
-      print(f"JSON Parse Failure. Raw Model Output:\n{raw_text}")
       return None
 
   try:
     client = Groq(api_key=groq_key)
-    completion = client.chat.completions.create(
-        model="qwen/qwen3.6-27b",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict JSON data generator. Output nothing but the requested JSON array."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
-    )
+    
+    # Attempt request using Groq's native JSON Mode
+    try:
+      completion = client.chat.completions.create(
+          model="qwen/qwen3.6-27b",
+          messages=[
+              {
+                  "role": "system",
+                  "content": "You are a JSON generator. You must output JSON only.",
+              },
+              {"role": "user", "content": prompt},
+          ],
+          response_format={"type": "json_object"},
+          temperature=0.2,
+      )
+    except Exception:
+      # Fallback without response_format if specific endpoint ignores it
+      completion = client.chat.completions.create(
+          model="qwen/qwen3.6-27b",
+          messages=[
+              {
+                  "role": "system",
+                  "content": "You are a JSON generator. You must output valid JSON.",
+              },
+              {"role": "user", "content": prompt},
+          ],
+          temperature=0.2,
+      )
+
     raw_text = completion.choices[0].message.content
-
-    if not raw_text:
-      return None, "Qwen returned an empty response."
-
     parsed_slides = parse_json_response(raw_text)
 
     if parsed_slides:
       return parsed_slides, "Success (Qwen 3.6 via Groq SDK)"
     else:
-      return None, "Failed to parse model output into JSON. Model output was likely plain text."
+      snippet = raw_text[:120].replace("\n", " ") if raw_text else "Empty"
+      return None, f"Could not parse response into slides. Model output start: '{snippet}'"
 
   except Exception as e:
     return None, f"Qwen Generation Error: {str(e)}"
@@ -298,7 +329,7 @@ Schema format:
 # 9. Legacy Gemini PPT Generator Function
 def get_best_active_gemini_model(gemini_key):
   try:
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models?key=](https://generativelanguage.googleapis.com/v1beta/models?key=){gemini_key.strip()}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key.strip()}"
     response = requests.get(url, timeout=10)
     if response.status_code == 200:
       data = response.json()
@@ -327,7 +358,7 @@ def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
   active_model = get_best_active_gemini_model(gemini_key)
-  url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){active_model}:generateContent?key={gemini_key.strip()}"
+  url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
   prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
@@ -384,7 +415,7 @@ def send_otp_email(target_email, otp_code):
 st.markdown(
     """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -819,7 +850,7 @@ with col_left:
       else:
         with st.spinner("Executing secure web retrieval..."):
           try:
-            api_url = "https://api.tavily.com/search"
+            api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
             payload = {
                 "api_key": TAVILY_API_KEY.strip(),
                 "query": web_query,
