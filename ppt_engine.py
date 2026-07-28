@@ -12,7 +12,7 @@ from pptx.util import Inches, Pt
 
 
 # --------------------------------------------------------------------------
-# Module-level definitions required by llm_service.py and main app
+# Module-level definitions required by llm_service.py and streamlit_app.py
 # --------------------------------------------------------------------------
 FORBIDDEN_METADATA_TERMS = [
     "internal_notes",
@@ -52,27 +52,6 @@ def parse_slide_json_response(raw_response: str) -> Dict[str, Any]:
     engine = PPTEngine()
     return engine.parse_slide_json(raw_response)
 
-def build_presentation(slides, theme_name="Dark Cyber", topic="Presentation", progress_callback=None):
-    """Convenience wrapper to build a presentation from slide lists using PPTEngine."""
-    if progress_callback:
-        progress_callback("layout", "Initializing presentation builder...")
-    
-    theme = LIGHT_THEME if theme_name == "Light Minimal" else DARK_THEME
-    engine = PPTEngine(theme=theme)
-    
-    payload = {"slides": normalize_slides(slides)}
-    prs = engine.generate_presentation(payload)
-    
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-    file_path = output_dir / "Gamma_Style_Presentation.pptx"
-    
-    if progress_callback:
-        progress_callback("visuals", "Saving presentation file...")
-        
-    prs.save(str(file_path))
-    return str(file_path)
-
 
 @dataclass
 class PresentationTheme:
@@ -109,6 +88,33 @@ LIGHT_THEME = PresentationTheme(
     accent=RGBColor(234, 88, 12),      # #ea580c
 )
 
+# Added to resolve the "cannot import name 'THEMES'" error
+THEMES = {
+    "Dark Cyber": DARK_THEME,
+    "Light Minimal": LIGHT_THEME,
+}
+
+def build_presentation(slides, theme_name="Dark Cyber", topic="Presentation", progress_callback=None):
+    """Convenience wrapper to build a presentation from slide lists using PPTEngine."""
+    if progress_callback:
+        progress_callback("layout", "Initializing presentation builder...")
+    
+    theme = THEMES.get(theme_name, DARK_THEME)
+    engine = PPTEngine(theme=theme)
+    
+    payload = {"slides": normalize_slides(slides)}
+    prs = engine.generate_presentation(payload)
+    
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+    file_path = output_dir / "Gamma_Style_Presentation.pptx"
+    
+    if progress_callback:
+        progress_callback("visuals", "Saving presentation file...")
+        
+    prs.save(str(file_path))
+    return str(file_path)
+
 
 class PPTEngine:
     def __init__(self, theme: Optional[PresentationTheme] = None):
@@ -129,7 +135,6 @@ class PPTEngine:
     def _strip_llm_noise(raw_text: str) -> str:
         """Strips markdown code fences and extraneous pre/post text from LLM output."""
         cleaned = raw_text.strip()
-        # Remove ```json ... ``` wrappers
         if "```" in cleaned:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
             if match:
@@ -175,14 +180,12 @@ class PPTEngine:
         """Main entry point to build slides from parsed JSON payload."""
         slides_data = data.get("slides", [])
         if not slides_data:
-            # Handle direct single-slide payload
             slides_data = [data]
 
         for slide_info in slides_data:
             try:
                 self._render_slide(slide_info)
             except Exception as err:
-                # Fallback rendering guarantees presentation creation never crashes
                 self._render_resilient_fallback(slide_info, str(err))
 
         return self.prs
@@ -208,17 +211,10 @@ class PPTEngine:
         elif layout_type == "bullets":
             bullets = slide_info.get("bullets", [])
             self._render_bullet_layout(slide, title, bullets)
-        elif layout_type == "cards":
-            cards = slide_info.get("cards", slide_info.get("content", []))
-            self._render_card_layout(slide, title, cards)
         else:
-            # Default to card layout
             cards = slide_info.get("cards", slide_info.get("content", []))
             self._render_card_layout(slide, title, cards)
 
-    # --------------------------------------------------------------------------
-    # Individual Layout Renderers
-    # --------------------------------------------------------------------------
     def _render_title_layout(self, slide, title: str, subtitle: str):
         tx_box = slide.shapes.add_textbox(Inches(1.0), Inches(2.5), Inches(11.333), Inches(3.0))
         tf = tx_box.text_frame
@@ -240,7 +236,6 @@ class PPTEngine:
             p_sub.alignment = PP_ALIGN.CENTER
 
     def _render_bullet_layout(self, slide, title: str, bullets: List[str]):
-        # Slide Header
         self._add_slide_header(slide, title)
 
         tx_box = slide.shapes.add_textbox(Inches(1.0), Inches(2.0), Inches(11.333), Inches(4.8))
@@ -298,9 +293,6 @@ class PPTEngine:
         p.font.bold = True
         p.font.color.rgb = self.current_theme.accent
 
-    # --------------------------------------------------------------------------
-    # Card Rendering Component (FIXED & REFACTORED)
-    # --------------------------------------------------------------------------
     def _add_card(
         self,
         slide,
@@ -313,7 +305,6 @@ class PPTEngine:
         badge: Optional[str] = None,
         theme: Optional[PresentationTheme] = None,
     ):
-        """Renders a structured card component with optional badge tag and dynamic theme contrast."""
         if theme is None:
             theme = self.current_theme
 
@@ -324,14 +315,12 @@ class PPTEngine:
         muted_text = getattr(theme, "muted", RGBColor(148, 163, 184) if is_dark else RGBColor(71, 85, 105))
         accent_color = getattr(theme, "accent", RGBColor(249, 115, 22))
 
-        # 1. Base Shape
         shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
         shape.fill.solid()
         shape.fill.fore_color.rgb = bg_color
         shape.line.color.rgb = border_color
         shape.line.width = Pt(1)
 
-        # 2. Text Container
         tf = shape.text_frame
         tf.word_wrap = True
         tf.margin_left = Inches(0.2)
@@ -339,7 +328,6 @@ class PPTEngine:
         tf.margin_top = Inches(0.2)
         tf.margin_bottom = Inches(0.2)
 
-        # 3. Optional Badge Tag
         if badge:
             p_badge = tf.paragraphs[0]
             p_badge.text = badge.upper()
@@ -351,25 +339,19 @@ class PPTEngine:
         else:
             p_title = tf.paragraphs[0]
 
-        # 4. Card Title
         p_title.text = title
         p_title.font.size = Pt(14)
         p_title.font.bold = True
         p_title.font.color.rgb = accent_color if is_dark else text_color
         p_title.space_after = Pt(4)
 
-        # 5. Card Body Text
         if body:
             p_body = tf.add_paragraph()
             p_body.text = body
             p_body.font.size = Pt(11)
             p_body.font.color.rgb = muted_text
 
-    # --------------------------------------------------------------------------
-    # Fallback Handling
-    # --------------------------------------------------------------------------
     def _render_resilient_fallback(self, slide_info: Dict[str, Any], error_msg: str):
-        """Fallback slide generator invoked when primary rendering hits unexpected data formats."""
         slide = self.prs.slides.add_slide(self.blank_layout)
         self._apply_background(slide)
 
@@ -381,7 +363,7 @@ class PPTEngine:
         tf.word_wrap = True
 
         p_err = tf.paragraphs[0]
-        p_err.text = f"Notice: Dynamic layout recovered due to render exception."
+        p_err.text = "Notice: Dynamic layout recovered due to render exception."
         p_err.font.size = Pt(12)
         p_err.font.italic = True
         p_err.font.color.rgb = self.current_theme.muted
