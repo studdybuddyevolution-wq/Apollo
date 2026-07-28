@@ -444,12 +444,17 @@ def render_chat(selected_model: str) -> None:
         )
         sys_instruction = (
             "You are APOLLO OMNI AI, an advanced study assistant. Answer using only the provided local context. "
-            "Do not include raw URLs, source brackets, or internal retrieval metadata."
+            "Do not include raw URLs, source brackets, or internal retrieval metadata. "
+            "Structure your response logically: provide a brief 1-sentence overview, break down the main points cleanly with bullet points, "
+            "and finish with a concise, actionable takeaway."
         )
         clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
         st.session_state.source_reference = f"<div class='source-box'><strong>Active local context:</strong><br><br>{clean_ctx}</div>"
     else:
-        sys_instruction = "You are APOLLO OMNI AI, an advanced study assistant. Answer from general knowledge with crisp, useful structure."
+        sys_instruction = (
+            "You are APOLLO OMNI AI, an advanced study assistant. Answer from general knowledge with a clear, "
+            "structured overview, organized bullet points, and a crisp final takeaway."
+        )
         st.session_state.source_reference = "<div class='source-box font-mono'>No local context indexed. General model response used.</div>"
 
     message_stream = [{"role": "system", "content": sys_instruction}]
