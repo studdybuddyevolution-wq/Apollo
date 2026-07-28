@@ -9,6 +9,7 @@ import smtplib
 import tempfile
 import time
 from email.mime.text import MIMEText
+import urllib.parse
 
 import extra_streamlit_components as stx
 from groq import Groq
@@ -110,54 +111,148 @@ if "generated_otp" not in st.session_state:
 if "user_email" not in st.session_state:
   st.session_state.user_email = ""
 
-# Gamma AI Style Initial Slides State
+# Gamma AI Style Initial Slides State (Rich default deck)
 if "slides_data" not in st.session_state:
   st.session_state.slides_data = [
       {
-          "title": "Types & Domains of Artificial Intelligence",
-          "subtitle": "A Structured Overview of Machine Cognition",
-          "image_keyword": "artificial intelligence technology",
+          "title": "Artificial Intelligence: Foundational Overview",
+          "subtitle": (
+              "Understanding Cognitive Architecture and Modern Computing"
+          ),
+          "image_keyword": (
+              "futuristic artificial intelligence neural network dark blue glow"
+          ),
           "cards": [
               {
-                  "heading": "Core Capabilities",
+                  "heading": "Core Definition",
                   "text": (
-                      "Perception, logical reasoning, continuous learning, and"
-                      " autonomous decision-making."
+                      "Artificial Intelligence (AI) refers to the simulation of"
+                      " human intelligence in machines programmed to think,"
+                      " learn, reason, and make autonomous decisions."
                   ),
               },
               {
-                  "heading": "Primary Objective",
+                  "heading": "Historical Evolution",
                   "text": (
-                      "Simulating cognitive functions to solve complex problems"
-                      " across specialized domains."
+                      "Evolved from symbolic logic and rule-based expert systems"
+                      " in the 1950s to modern statistical learning, deep"
+                      " neural networks, and generative models."
+                  ),
+              },
+              {
+                  "heading": "Primary Paradigm Shift",
+                  "text": (
+                      "Shifting from explicit hard-coded software engineering to"
+                      " data-driven pattern recognition and self-improving"
+                      " cognitive algorithms."
+                  ),
+              },
+          ],
+      },
+      {
+          "title": "Types of AI by Capability",
+          "subtitle": (
+              "Classification Based on Performance & Autonomy Levels"
+          ),
+          "image_keyword": (
+              "futuristic robot brain technology cybernetic interface"
+          ),
+          "cards": [
+              {
+                  "heading": "Narrow AI (ANI)",
+                  "text": (
+                      "Specialized AI designed to perform dedicated tasks with"
+                      " high proficiency (e.g., Siri, facial recognition, search"
+                      " engines). Cannot operate outside its domain."
+                  ),
+              },
+              {
+                  "heading": "General AI (AGI)",
+                  "text": (
+                      "Hypothetical AI possessing human-level intelligence across"
+                      " diverse domains, capable of transfer learning, abstract"
+                      " reasoning, and adaptability."
+                  ),
+              },
+              {
+                  "heading": "Super AI (ASI)",
+                  "text": (
+                      "Theoretical future state where artificial systems"
+                      " surpass human intelligence in all creative,"
+                      " scientific, emotional, and strategic domains."
                   ),
               },
           ],
       },
       {
           "title": "Types of AI by Functionality",
-          "subtitle": "Categorization Based on Memory and Cognition",
-          "image_keyword": "robotics brain circuit",
+          "subtitle": "Categorization Based on Memory & Cognitive Depth",
+          "image_keyword": (
+              "digital artificial brain circuit board microchip microchip"
+          ),
           "cards": [
               {
                   "heading": "Reactive Machines",
                   "text": (
-                      "Process real-time inputs instantly without past memory"
-                      " or experience (e.g., Deep Blue)."
+                      "Basic systems operating purely on immediate input"
+                      " without storing past experiences or forming short-term"
+                      " memory (e.g., IBM Deep Blue)."
                   ),
               },
               {
-                  "heading": "Limited Memory",
+                  "heading": "Limited Memory Systems",
                   "text": (
-                      "Leverage historical data for short-term predictions"
-                      " (e.g., autonomous vehicles)."
+                      "Utilize short-term historical data to make real-time"
+                      " decisions and contextual predictions (e.g., self-driving"
+                      " cars, modern LLMs)."
                   ),
               },
               {
-                  "heading": "Theory of Mind & Self-Aware AI",
+                  "heading": "Theory of Mind & Self-Awareness",
                   "text": (
-                      "Theoretical future concepts understanding human emotion,"
-                      " intent, and consciousness."
+                      "Advanced concepts capable of understanding human mental"
+                      " states, emotions, and self-conscious autonomous thought"
+                      " processes."
+                  ),
+              },
+          ],
+      },
+      {
+          "title": "Primary Domains of Artificial Intelligence",
+          "subtitle": "Core Technical Branches and Specialized Fields",
+          "image_keyword": (
+              "machine learning deep learning data visual science concept"
+          ),
+          "cards": [
+              {
+                  "heading": "Machine & Deep Learning",
+                  "text": (
+                      "Statistical foundation allowing algorithms to parse"
+                      " massive datasets, optimize parameters, and construct"
+                      " predictive neural models."
+                  ),
+              },
+              {
+                  "heading": "Natural Language Processing (NLP)",
+                  "text": (
+                      "Enables machines to comprehend, interpret, generate, and"
+                      " translate human languages via transformer architectures"
+                      " and semantic analysis."
+                  ),
+              },
+              {
+                  "heading": "Computer Vision & Visual AI",
+                  "text": (
+                      "Enables software to extract structured context from"
+                      " digital images and video streams for object tracking and"
+                      " visual diagnostics."
+                  ),
+              },
+              {
+                  "heading": "Robotics & Autonomous Systems",
+                  "text": (
+                      "Integrates physical actuators, sensor fusion, and spatial"
+                      " navigation algorithms for hardware operational autonomy."
                   ),
               },
           ],
@@ -169,10 +264,7 @@ MODEL_OPTIONS = {
     "Qwen 3.6 27B (Groq LPU)": {
         "provider": "groq",
         "model_id": "qwen/qwen3.6-27b",
-        "desc": (
-            "Alibaba Qwen 3.6 running at blazingly fast inference speed via Groq"
-            " LPUs."
-        ),
+        "desc": "Alibaba Qwen 3.6 running at ultra-fast inference speed via Groq.",
     },
     "Meta Llama 3.3 70B (Groq)": {
         "provider": "groq",
@@ -182,53 +274,57 @@ MODEL_OPTIONS = {
     "Google Gemma 4 26B (OpenRouter)": {
         "provider": "openrouter",
         "model_id": "google/gemma-4-26b-a4b-it:free",
-        "desc": "Google's efficient 26B model via OpenRouter gateway.",
+        "desc": "Google's efficient model via OpenRouter gateway.",
     },
 }
 
 
-# 7. Dynamic Image Fetcher for Gamma AI Visuals
+# 7. HIGH-RELEVANCE Dynamic Image Engine (Pollinations Tech AI Focus)
 def fetch_image_by_keyword(keyword):
   if not keyword:
-    keyword = "technology"
-  clean_kw = re.sub(r"[^\w\s]", "", keyword).strip().replace(" ", ",")
-  image_urls = [
-      f"https://loremflickr.com/800/600/{clean_kw}",
-      f"https://picsum.photos/seed/{hash(keyword) % 10000}/800/600",
-  ]
-  for url in image_urls:
-    try:
-      resp = requests.get(
-          url,
-          timeout=4,
-          headers={
-              "User-Agent": (
-                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0"
-              )
-          },
-      )
-      if resp.status_code == 200 and len(resp.content) > 5000:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-        tmp.write(resp.content)
-        tmp.close()
-        return tmp.name
-    except Exception:
-      continue
+    keyword = "artificial intelligence neural technology"
+
+  clean_kw = re.sub(r"[^\w\s]", "", keyword).strip()
+  prompt_encoded = urllib.parse.quote(
+      f"sleek modern technological professional visual representation of"
+      f" {clean_kw}, high resolution, 8k, dark aesthetic, minimalist design"
+  )
+
+  # Dynamic generation endpoint producing exact thematic matches
+  pollinations_url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
+
+  try:
+    resp = requests.get(
+        pollinations_url,
+        timeout=10,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
+            )
+        },
+    )
+    if resp.status_code == 200 and len(resp.content) > 5000:
+      tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+      tmp.write(resp.content)
+      tmp.close()
+      return tmp.name
+  except Exception:
+    pass
+
   return None
 
 
 # 8. Gamma AI PPTX Builder Engine
 def create_gamma_style_pptx(slides_data):
   prs = Presentation()
-  # Set 16:9 Widescreen aspect ratio (Gamma AI Default)
   prs.slide_width = Inches(13.333)
   prs.slide_height = Inches(7.5)
 
-  # Gamma AI Modern Dark Theme Palette
+  # Gamma Dark Theme Palette
   BG_COLOR = RGBColor(15, 23, 42)  # Slate 900
   CARD_BG = RGBColor(30, 41, 59)  # Slate 800
   CARD_BORDER = RGBColor(51, 65, 85)  # Slate 700
-  ACCENT_COLOR = RGBColor(249, 115, 22)  # Electric Amber/Orange
+  ACCENT_COLOR = RGBColor(249, 115, 22)  # Electric Amber
   TEXT_PRIMARY = RGBColor(248, 250, 252)  # White
   TEXT_MUTED = RGBColor(148, 163, 184)  # Slate Subtitle
 
@@ -240,7 +336,7 @@ def create_gamma_style_pptx(slides_data):
 
     slide = prs.slides.add_slide(blank_layout)
 
-    # 1. Fill Dark Background
+    # Fill Background
     background = slide.background
     fill = background.fill
     fill.solid()
@@ -251,7 +347,7 @@ def create_gamma_style_pptx(slides_data):
     keyword = slide_info.get("image_keyword", title_text)
     cards = slide_info.get("cards", [])
 
-    # 2. Modern Title & Subtitle Header Block
+    # Title Block
     title_box = slide.shapes.add_textbox(
         Inches(0.8), Inches(0.5), Inches(11.7), Inches(1.2)
     )
@@ -260,7 +356,7 @@ def create_gamma_style_pptx(slides_data):
 
     p = tf.paragraphs[0]
     p.text = title_text
-    p.font.size = Pt(28)
+    p.font.size = Pt(26)
     p.font.bold = True
     p.font.color.rgb = ACCENT_COLOR
     p.font.name = "Arial"
@@ -268,18 +364,17 @@ def create_gamma_style_pptx(slides_data):
     if subtitle_text:
       p2 = tf.add_paragraph()
       p2.text = subtitle_text
-      p2.font.size = Pt(15)
+      p2.font.size = Pt(14)
       p2.font.color.rgb = TEXT_MUTED
       p2.font.name = "Arial"
 
-    # 3. Fetch Image for Gamma Side Panel
+    # Image Handling
     img_path = fetch_image_by_keyword(keyword)
     has_image = img_path is not None
     content_width = Inches(7.6) if has_image else Inches(11.7)
 
     if has_image:
       try:
-        # Styled picture card background frame
         img_card = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
             Inches(8.8),
@@ -291,7 +386,6 @@ def create_gamma_style_pptx(slides_data):
         img_card.fill.fore_color.rgb = CARD_BG
         img_card.line.color.rgb = CARD_BORDER
 
-        # Insert Image inside container area
         slide.shapes.add_picture(
             img_path,
             Inches(8.95),
@@ -305,7 +399,7 @@ def create_gamma_style_pptx(slides_data):
         if img_path and os.path.exists(img_path):
           os.unlink(img_path)
 
-    # 4. Render Gamma Container Boxes / Cards
+    # Dynamic Card Box Generation
     if isinstance(cards, list) and len(cards) > 0:
       num_cards = min(len(cards), 4)
       card_height = Inches(4.8 / max(num_cards, 1) - 0.15)
@@ -315,7 +409,6 @@ def create_gamma_style_pptx(slides_data):
         card_item = cards[i]
         top_pos = start_top + i * (card_height + Inches(0.15))
 
-        # Draw Rounded Rectangular Box
         shape = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
             Inches(0.8),
@@ -327,13 +420,12 @@ def create_gamma_style_pptx(slides_data):
         shape.fill.fore_color.rgb = CARD_BG
         shape.line.color.rgb = CARD_BORDER
 
-        # Format Card Content
         tf_card = shape.text_frame
         tf_card.word_wrap = True
         tf_card.margin_left = Inches(0.25)
         tf_card.margin_right = Inches(0.25)
-        tf_card.margin_top = Inches(0.15)
-        tf_card.margin_bottom = Inches(0.15)
+        tf_card.margin_top = Inches(0.12)
+        tf_card.margin_bottom = Inches(0.12)
 
         heading = (
             card_item.get("heading", "") if isinstance(card_item, dict) else ""
@@ -348,18 +440,18 @@ def create_gamma_style_pptx(slides_data):
         if heading:
           p_head.text = f"▪ {heading}"
           p_head.font.bold = True
-          p_head.font.size = Pt(16)
+          p_head.font.size = Pt(15)
           p_head.font.color.rgb = ACCENT_COLOR
           p_head.font.name = "Arial"
 
           p_body = tf_card.add_paragraph()
           p_body.text = text
-          p_body.font.size = Pt(13)
+          p_body.font.size = Pt(12)
           p_body.font.color.rgb = TEXT_PRIMARY
           p_body.font.name = "Arial"
         else:
           p_head.text = f"▪ {text}"
-          p_head.font.size = Pt(14)
+          p_head.font.size = Pt(13)
           p_head.font.color.rgb = TEXT_PRIMARY
           p_head.font.name = "Arial"
 
@@ -447,7 +539,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
       yield f"❌ Network Failure: {str(e)}"
 
 
-# 10. Gamma AI Format Slide Generator via Qwen 3.6
+# 10. HIGH-CONTENT Slide Generator Prompting
 def generate_slides_with_qwen(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
 
@@ -457,30 +549,34 @@ def generate_slides_with_qwen(topic, groq_key=""):
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  prompt = f"""Create a Gamma AI style presentation outline strictly about '{topic}'.
+  prompt = f"""You are an elite academic presentation designer creating a comprehensive presentation on: '{topic}'.
 
-CRITICAL INSTRUCTIONS:
-- Focus 100% on '{topic}'.
-- DO NOT mention any platform names, company names, or university context.
-- Format every slide with modern visual cards and image keywords.
-
-Return a JSON object containing a "slides" array with 4-5 slide objects.
+CRITICAL REQUIREMENTS:
+1. Generate between 5 to 7 detailed, content-rich slides.
+2. The content MUST be deep, academic, and highly detailed. Provide thorough explanations in every card box (not just short phrases!).
+3. Cover ALL core subtopics including foundational definitions, major classifications/types, domains/subfields, real-world practical applications, and future challenges.
+4. For 'image_keyword', provide a realistic 3-5 word tech visual description (e.g. 'artificial intelligence neural network glowing circuit', 'robotics industrial automation arm').
+5. Format strictly as JSON.
 
 Schema Required:
 {{
   "slides": [
     {{
-      "title": "Slide Title",
-      "subtitle": "Short supporting subtitle overview",
-      "image_keyword": "relevant 2-word topic image query",
+      "title": "Comprehensive Slide Title",
+      "subtitle": "Informative subtitle summarizing this section",
+      "image_keyword": "descriptive technology topic image prompt",
       "cards": [
         {{
-          "heading": "Card Title 1",
-          "text": "Detailed explanation point for this container box."
+          "heading": "Specific Core Concept Heading",
+          "text": "Detailed, multi-sentence thorough breakdown explaining the principles, mechanisms, and real-world relevance of this point."
         }},
         {{
-          "heading": "Card Title 2",
-          "text": "Detailed explanation point for this container box."
+          "heading": "Secondary Aspect Heading",
+          "text": "Detailed, multi-sentence contextual explanation with technical depth."
+        }},
+        {{
+          "heading": "Practical Implications",
+          "text": "Detailed, multi-sentence point on domain implementation and impact."
         }}
       ]
     }}
@@ -562,24 +658,24 @@ Schema Required:
     return None, f"Qwen Generation Error: {str(e)}"
 
 
-# 11. Legacy Gemini PPT Generator
+# 11. Legacy Gemini Slide Generator
 def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
   url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
-  prompt = f"""Create a Gamma AI style presentation outline about '{topic}'.
-Return ONLY a valid JSON object with key 'slides' containing 4-5 slide objects.
+  prompt = f"""Create an in-depth academic presentation outline about '{topic}'.
+Return ONLY a valid JSON object with key 'slides' containing 5-6 detailed slide objects.
 Schema:
 {{
   "slides": [
     {{
       "title": "Title",
       "subtitle": "Subtitle",
-      "image_keyword": "keyword",
+      "image_keyword": "descriptive technology prompt",
       "cards": [
-        {{"heading": "Heading", "text": "Explanation text"}}
+        {{"heading": "Heading", "text": "Comprehensive multi-sentence explanation text."}}
       ]
     }}
   ]
@@ -891,13 +987,13 @@ with col_left:
       if not GROQ_API_KEY:
         st.error("Please add GROQ_API_KEY to your Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating visual slide structure via Qwen 3.6..."):
+        with st.spinner("Generating deep slide structure via Qwen 3.6..."):
           new_slides, err = generate_slides_with_qwen(
               ppt_topic_input, GROQ_API_KEY
           )
           if new_slides and isinstance(new_slides, list):
             st.session_state.slides_data = new_slides
-            st.success("Generated visual slides with Qwen 3.6!")
+            st.success("Generated comprehensive deck with Qwen 3.6!")
             st.rerun()
           else:
             st.error(f"Generation Failed: {err}")
@@ -907,13 +1003,13 @@ with col_left:
       if not GEMINI_API_KEY:
         st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating visual slide structure via Gemini..."):
+        with st.spinner("Generating deep slide structure via Gemini..."):
           new_slides, err = generate_slides_with_gemini(
               ppt_topic_input, GEMINI_API_KEY
           )
           if new_slides and isinstance(new_slides, list):
             st.session_state.slides_data = new_slides
-            st.success("Generated visual slides with Gemini!")
+            st.success("Generated comprehensive deck with Gemini!")
             st.rerun()
           else:
             st.error(f"Generation Failed: {err}")
