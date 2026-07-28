@@ -231,13 +231,13 @@ def generate_slides_with_qwen(topic, groq_key=""):
   if not groq_key or not groq_key.startswith("gsk_"):
     return (
         None,
-        "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit"
-        " Secrets.",
+        "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
   prompt = f"""Create a highly professional presentation outline about '{topic}'.
-Return ONLY a valid JSON array of 4-6 slide objects.
-Do NOT include markdown formatting code blocks like ```json or conversational text. Return raw JSON text.
+You must return ONLY a valid JSON array of 4-6 slide objects.
+Do NOT include markdown formatting code blocks like ```json.
+Do NOT include any conversational filler (e.g., "Here is the JSON").
 
 Schema format:
 [
@@ -245,16 +245,24 @@ Schema format:
 ]"""
 
   def parse_json_response(raw_text):
-    clean_text = re.sub(r"^```[a-zA-Z]*\s*", "", raw_text.strip())
-    clean_text = re.sub(r"\s*```$", "", clean_text).strip()
-    parsed = json.loads(clean_text)
-    if isinstance(parsed, dict):
-      for v in parsed.values():
-        if isinstance(v, list):
-          return v
-    elif isinstance(parsed, list):
-      return parsed
-    return None
+    match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+    if match:
+      clean_text = match.group(0)
+    else:
+      clean_text = raw_text.replace("```json", "").replace("```", "").strip()
+
+    try:
+      parsed = json.loads(clean_text)
+      if isinstance(parsed, dict):
+        for v in parsed.values():
+          if isinstance(v, list):
+            return v
+      elif isinstance(parsed, list):
+        return parsed
+      return None
+    except json.JSONDecodeError:
+      print(f"JSON Parse Failure. Raw Model Output:\n{raw_text}")
+      return None
 
   try:
     client = Groq(api_key=groq_key)
@@ -264,8 +272,7 @@ Schema format:
             {
                 "role": "system",
                 "content": (
-                    "You are a specialized presentation generator. Output"
-                    " strictly valid JSON arrays."
+                    "You are a strict JSON data generator. Output nothing but the requested JSON array."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -273,11 +280,17 @@ Schema format:
         temperature=0.2,
     )
     raw_text = completion.choices[0].message.content
+
+    if not raw_text:
+      return None, "Qwen returned an empty response."
+
     parsed_slides = parse_json_response(raw_text)
+
     if parsed_slides:
       return parsed_slides, "Success (Qwen 3.6 via Groq SDK)"
     else:
-      return None, "Failed to parse JSON slides structure."
+      return None, "Failed to parse model output into JSON. Model output was likely plain text."
+
   except Exception as e:
     return None, f"Qwen Generation Error: {str(e)}"
 
