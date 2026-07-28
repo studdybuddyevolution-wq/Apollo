@@ -1,7 +1,5 @@
-# Updated app.py
-# (Based on original streamlit_app.py with PPT generation moved to ppt_engine.create_gamma_style_pptx,
-# improved JSON parsing/enforcement for LLM outputs, and step-by-step status updates.)
 import datetime
+import io
 import json
 import os
 import random
@@ -11,6 +9,7 @@ import smtplib
 import tempfile
 import time
 from email.mime.text import MIMEText
+
 import extra_streamlit_components as stx
 from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -19,11 +18,13 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PIL import Image
-from pptx import Presentation
-import streamlit as st
 
-# Import the new PPT engine
-from ppt_engine import create_gamma_style_pptx, fetch_image_by_keyword
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt
+import streamlit as st
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
@@ -94,7 +95,7 @@ if "source_reference" not in st.session_state:
 if "node_count" not in st.session_state:
   st.session_state.node_count = 0
 
-# Persistent Auth State Handling via Cookies (30-Day Persistence)
+# Persistent Auth State Handling
 auth_cookie = cookies.get("apollo_somaiya_session")
 if "authenticated" not in st.session_state:
   if auth_cookie == "verified_student":
@@ -109,21 +110,56 @@ if "generated_otp" not in st.session_state:
 if "user_email" not in st.session_state:
   st.session_state.user_email = ""
 
-# NotebookLM-Style PPT Studio State
+# Gamma AI Style Initial Slides State
 if "slides_data" not in st.session_state:
   st.session_state.slides_data = [
       {
-          "title": "Introduction to Institutional AI",
-          "bullets": [
-              "Overview of Apollo Omni platform",
-              "Secure @somaiya.edu integration",
+          "title": "Types & Domains of Artificial Intelligence",
+          "subtitle": "A Structured Overview of Machine Cognition",
+          "image_keyword": "artificial intelligence technology",
+          "cards": [
+              {
+                  "heading": "Core Capabilities",
+                  "text": (
+                      "Perception, logical reasoning, continuous learning, and"
+                      " autonomous decision-making."
+                  ),
+              },
+              {
+                  "heading": "Primary Objective",
+                  "text": (
+                      "Simulating cognitive functions to solve complex problems"
+                      " across specialized domains."
+                  ),
+              },
           ],
       },
       {
-          "title": "Core Architecture & Workflow",
-          "bullets": [
-              "Retrieval-Augmented Generation (RAG)",
-              "Multi-model micro-agent routing",
+          "title": "Types of AI by Functionality",
+          "subtitle": "Categorization Based on Memory and Cognition",
+          "image_keyword": "robotics brain circuit",
+          "cards": [
+              {
+                  "heading": "Reactive Machines",
+                  "text": (
+                      "Process real-time inputs instantly without past memory"
+                      " or experience (e.g., Deep Blue)."
+                  ),
+              },
+              {
+                  "heading": "Limited Memory",
+                  "text": (
+                      "Leverage historical data for short-term predictions"
+                      " (e.g., autonomous vehicles)."
+                  ),
+              },
+              {
+                  "heading": "Theory of Mind & Self-Aware AI",
+                  "text": (
+                      "Theoretical future concepts understanding human emotion,"
+                      " intent, and consciousness."
+                  ),
+              },
           ],
       },
   ]
@@ -151,7 +187,188 @@ MODEL_OPTIONS = {
 }
 
 
-# 7. Unified LLM Streamer (Using Groq SDK)
+# 7. Dynamic Image Fetcher for Gamma AI Visuals
+def fetch_image_by_keyword(keyword):
+  if not keyword:
+    keyword = "technology"
+  clean_kw = re.sub(r"[^\w\s]", "", keyword).strip().replace(" ", ",")
+  image_urls = [
+      f"https://loremflickr.com/800/600/{clean_kw}",
+      f"https://picsum.photos/seed/{hash(keyword) % 10000}/800/600",
+  ]
+  for url in image_urls:
+    try:
+      resp = requests.get(
+          url,
+          timeout=4,
+          headers={
+              "User-Agent": (
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0"
+              )
+          },
+      )
+      if resp.status_code == 200 and len(resp.content) > 5000:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        tmp.write(resp.content)
+        tmp.close()
+        return tmp.name
+    except Exception:
+      continue
+  return None
+
+
+# 8. Gamma AI PPTX Builder Engine
+def create_gamma_style_pptx(slides_data):
+  prs = Presentation()
+  # Set 16:9 Widescreen aspect ratio (Gamma AI Default)
+  prs.slide_width = Inches(13.333)
+  prs.slide_height = Inches(7.5)
+
+  # Gamma AI Modern Dark Theme Palette
+  BG_COLOR = RGBColor(15, 23, 42)  # Slate 900
+  CARD_BG = RGBColor(30, 41, 59)  # Slate 800
+  CARD_BORDER = RGBColor(51, 65, 85)  # Slate 700
+  ACCENT_COLOR = RGBColor(249, 115, 22)  # Electric Amber/Orange
+  TEXT_PRIMARY = RGBColor(248, 250, 252)  # White
+  TEXT_MUTED = RGBColor(148, 163, 184)  # Slate Subtitle
+
+  blank_layout = prs.slide_layouts[6]
+
+  for index, slide_info in enumerate(slides_data):
+    if not isinstance(slide_info, dict):
+      continue
+
+    slide = prs.slides.add_slide(blank_layout)
+
+    # 1. Fill Dark Background
+    background = slide.background
+    fill = background.fill
+    fill.solid()
+    fill.fore_color.rgb = BG_COLOR
+
+    title_text = slide_info.get("title", f"Slide {index+1}")
+    subtitle_text = slide_info.get("subtitle", "")
+    keyword = slide_info.get("image_keyword", title_text)
+    cards = slide_info.get("cards", [])
+
+    # 2. Modern Title & Subtitle Header Block
+    title_box = slide.shapes.add_textbox(
+        Inches(0.8), Inches(0.5), Inches(11.7), Inches(1.2)
+    )
+    tf = title_box.text_frame
+    tf.word_wrap = True
+
+    p = tf.paragraphs[0]
+    p.text = title_text
+    p.font.size = Pt(28)
+    p.font.bold = True
+    p.font.color.rgb = ACCENT_COLOR
+    p.font.name = "Arial"
+
+    if subtitle_text:
+      p2 = tf.add_paragraph()
+      p2.text = subtitle_text
+      p2.font.size = Pt(15)
+      p2.font.color.rgb = TEXT_MUTED
+      p2.font.name = "Arial"
+
+    # 3. Fetch Image for Gamma Side Panel
+    img_path = fetch_image_by_keyword(keyword)
+    has_image = img_path is not None
+    content_width = Inches(7.6) if has_image else Inches(11.7)
+
+    if has_image:
+      try:
+        # Styled picture card background frame
+        img_card = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE,
+            Inches(8.8),
+            Inches(1.8),
+            Inches(3.8),
+            Inches(5.0),
+        )
+        img_card.fill.solid()
+        img_card.fill.fore_color.rgb = CARD_BG
+        img_card.line.color.rgb = CARD_BORDER
+
+        # Insert Image inside container area
+        slide.shapes.add_picture(
+            img_path,
+            Inches(8.95),
+            Inches(1.95),
+            width=Inches(3.5),
+            height=Inches(4.7),
+        )
+      except Exception:
+        pass
+      finally:
+        if img_path and os.path.exists(img_path):
+          os.unlink(img_path)
+
+    # 4. Render Gamma Container Boxes / Cards
+    if isinstance(cards, list) and len(cards) > 0:
+      num_cards = min(len(cards), 4)
+      card_height = Inches(4.8 / max(num_cards, 1) - 0.15)
+      start_top = Inches(1.8)
+
+      for i in range(num_cards):
+        card_item = cards[i]
+        top_pos = start_top + i * (card_height + Inches(0.15))
+
+        # Draw Rounded Rectangular Box
+        shape = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE,
+            Inches(0.8),
+            top_pos,
+            content_width,
+            card_height,
+        )
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = CARD_BG
+        shape.line.color.rgb = CARD_BORDER
+
+        # Format Card Content
+        tf_card = shape.text_frame
+        tf_card.word_wrap = True
+        tf_card.margin_left = Inches(0.25)
+        tf_card.margin_right = Inches(0.25)
+        tf_card.margin_top = Inches(0.15)
+        tf_card.margin_bottom = Inches(0.15)
+
+        heading = (
+            card_item.get("heading", "") if isinstance(card_item, dict) else ""
+        )
+        text = (
+            card_item.get("text", str(card_item))
+            if isinstance(card_item, dict)
+            else str(card_item)
+        )
+
+        p_head = tf_card.paragraphs[0]
+        if heading:
+          p_head.text = f"▪ {heading}"
+          p_head.font.bold = True
+          p_head.font.size = Pt(16)
+          p_head.font.color.rgb = ACCENT_COLOR
+          p_head.font.name = "Arial"
+
+          p_body = tf_card.add_paragraph()
+          p_body.text = text
+          p_body.font.size = Pt(13)
+          p_body.font.color.rgb = TEXT_PRIMARY
+          p_body.font.name = "Arial"
+        else:
+          p_head.text = f"▪ {text}"
+          p_head.font.size = Pt(14)
+          p_head.font.color.rgb = TEXT_PRIMARY
+          p_head.font.name = "Arial"
+
+  path = "apollo_gamma_presentation.pptx"
+  prs.save(path)
+  return path
+
+
+# 9. Unified LLM Streamer
 def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   provider = model_cfg.get("provider", "groq")
@@ -230,7 +447,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
       yield f"❌ Network Failure: {str(e)}"
 
 
-# 8. Qwen 3.6 PPT Generator Function using Groq SDK (STRICT JSON MODE)
+# 10. Gamma AI Format Slide Generator via Qwen 3.6
 def generate_slides_with_qwen(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
 
@@ -240,75 +457,64 @@ def generate_slides_with_qwen(topic, groq_key=""):
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  # Strong prompt enforcement to avoid topic bleed or injecting system/app context
-  prompt = f"""Create a presentation outline about the single topic: '{topic}'.
-Return ONLY a JSON object containing a single "slides" array with 4-6 slide objects.
-Each slide object must have:
-  - "title": short string (no mentions of 'Apollo' or 'Somaiya' or any system/RAG/service names)
-  - "bullets": array of 2-6 short strings
-Optional:
-  - "image_keyword": a short keyword phrase to fetch an illustrative image
+  prompt = f"""Create a Gamma AI style presentation outline strictly about '{topic}'.
 
-STRICT REQUIREMENTS:
-- Output valid JSON exclusively, no markdown, no commentary, no explanation.
-- Do NOT mention 'Apollo', 'Somaiya', 'RAG', or any internal service names anywhere in titles or bullets.
-- Keep titles <= 60 chars and bullets <= 160 chars.
-Example output:
-{{ "slides": [ {{ "title": "Slide 1", "bullets": ["a","b"] }}, ... ] }}"""
+CRITICAL INSTRUCTIONS:
+- Focus 100% on '{topic}'.
+- DO NOT mention any platform names, company names, or university context.
+- Format every slide with modern visual cards and image keywords.
 
-  def robust_json_extract(raw_text: str):
+Return a JSON object containing a "slides" array with 4-5 slide objects.
+
+Schema Required:
+{{
+  "slides": [
+    {{
+      "title": "Slide Title",
+      "subtitle": "Short supporting subtitle overview",
+      "image_keyword": "relevant 2-word topic image query",
+      "cards": [
+        {{
+          "heading": "Card Title 1",
+          "text": "Detailed explanation point for this container box."
+        }},
+        {{
+          "heading": "Card Title 2",
+          "text": "Detailed explanation point for this container box."
+        }}
+      ]
+    }}
+  ]
+}}"""
+
+  def parse_json_response(raw_text):
     if not raw_text:
       return None
-    text = raw_text
 
-    # Strip <think>...</think> tags
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
+    dict_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
+    list_match = re.search(r"\[.*\]", clean_text, re.DOTALL)
 
-    # Remove markdown json fences
-    text = text.replace("```json", "").replace("```", "")
-
-    # Remove trailing commas in objects/arrays (best-effort)
-    # remove ",]" or ",}" patterns
-    text = re.sub(r',\s*([\]\}])', r'\1', text)
-
-    # Find the first JSON object or array
-    m = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
-    if m:
-      candidate = m.group(0)
+    if dict_match:
+      json_str = dict_match.group(0)
+    elif list_match:
+      json_str = list_match.group(0)
     else:
-      candidate = text.strip()
+      json_str = clean_text.replace("```json", "").replace("```", "").strip()
 
     try:
-      parsed = json.loads(candidate)
-      # if it's an object with "slides", extract that
-      if isinstance(parsed, dict) and "slides" in parsed and isinstance(parsed["slides"], list):
-        # Filter out any slides that mention forbidden tokens
-        filtered = []
-        for s in parsed["slides"]:
-          t = s.get("title", "")
-          b = " ".join(s.get("bullets", [])) if isinstance(s.get("bullets", []), list) else ""
-          if any(tok.lower() in (t + " " + b).lower() for tok in ["apollo", "somaiya", "rag"]):
-            # strip forbidden mentions; best effort: reject slide
-            continue
-          filtered.append(s)
-        return filtered
-      # if parsed is list, return it as list of slides
-      if isinstance(parsed, list):
+      parsed = json.loads(json_str)
+      if isinstance(parsed, dict):
+        if "slides" in parsed and isinstance(parsed["slides"], list):
+          return parsed["slides"]
+        for v in parsed.values():
+          if isinstance(v, list):
+            return v
+      elif isinstance(parsed, list):
         return parsed
-    except Exception:
-      # last attempt: try to balance braces by truncation heuristics
-      try:
-        # try to find the JSON substring by searching for first { and last }
-        start = text.find('{')
-        end = text.rfind('}')
-        if start != -1 and end != -1 and end > start:
-          substr = text[start:end + 1]
-          substr = re.sub(r',\s*([\]\}])', r'\1', substr)
-          parsed = json.loads(substr)
-          return parsed.get("slides", parsed if isinstance(parsed, list) else None)
-      except Exception:
-        pass
-    return None
+      return None
+    except json.JSONDecodeError:
+      return None
 
   try:
     client = Groq(api_key=groq_key)
@@ -316,7 +522,13 @@ Example output:
       completion = client.chat.completions.create(
           model="qwen/qwen3.6-27b",
           messages=[
-              {"role": "system", "content": "You are a JSON only generator. Output valid JSON only."},
+              {
+                  "role": "system",
+                  "content": (
+                      "You are a presentation JSON generator. You must output"
+                      " JSON only."
+                  ),
+              },
               {"role": "user", "content": prompt},
           ],
           response_format={"type": "json_object"},
@@ -326,129 +538,75 @@ Example output:
       completion = client.chat.completions.create(
           model="qwen/qwen3.6-27b",
           messages=[
-              {"role": "system", "content": "You are a JSON only generator. Output valid JSON only."},
+              {
+                  "role": "system",
+                  "content": "You are a JSON generator. You must output valid JSON.",
+              },
               {"role": "user", "content": prompt},
           ],
           temperature=0.2,
       )
 
-    raw_text = ""
-    try:
-      raw_text = completion.choices[0].message.content
-    except Exception:
-      raw_text = str(completion)
+    raw_text = completion.choices[0].message.content
+    parsed_slides = parse_json_response(raw_text)
 
-    parsed_slides = robust_json_extract(raw_text)
     if parsed_slides:
-      return parsed_slides, "Success (Qwen 3.6 via Groq SDK)"
+      return parsed_slides, "Success"
     else:
-      snippet = raw_text[:240].replace("\n", " ") if raw_text else "Empty"
-      return None, f"Could not parse response into slides. Model output start: '{snippet}'"
+      return (
+          None,
+          f"Failed to parse model JSON output. Raw snippet: '{raw_text[:100]}'",
+      )
+
   except Exception as e:
     return None, f"Qwen Generation Error: {str(e)}"
 
 
-# 9. Legacy Gemini PPT Generator Function (improved JSON extraction & isolation)
-def get_best_active_gemini_model(gemini_key):
-  try:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key.strip()}"
-    response = requests.get(url, timeout=10)
-    if response.status_code == 200:
-      data = response.json()
-      models_list = data.get("models", [])
-      valid_models = []
-      for m in models_list:
-        methods = m.get("supportedGenerationMethods", [])
-        if "generateContent" in methods:
-          clean_name = m.get("name", "").replace("models/", "")
-          if not any(
-              deprecated in clean_name.lower()
-              for deprecated in ["2.5-flash", "1.5-flash", "1.0"]
-          ):
-            valid_models.append(clean_name)
-      for m in valid_models:
-        if "flash" in m.lower():
-          return m
-      if valid_models:
-        return valid_models[0]
-  except Exception:
-    pass
-  return "gemini-2.0-flash"
-
-
+# 11. Legacy Gemini PPT Generator
 def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
-  active_model = get_best_active_gemini_model(gemini_key)
-
-  prompt = f"""Create a presentation outline purely about '{topic}'.
-Return a single valid JSON array or object containing slides as in:
-[{{"title":"...","bullets":["a","b"], "image_keyword":"..."}}, ...]
-Requirements:
-- Output only JSON, no markdown/code fences/no commentary.
-- Avoid mentioning 'Apollo', 'Somaiya', 'RAG' or other platform or contexts.
-- Titles <= 60 chars; bullets <= 160 chars.
-"""
-
-  url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={gemini_key.strip()}"
+  url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
+
+  prompt = f"""Create a Gamma AI style presentation outline about '{topic}'.
+Return ONLY a valid JSON object with key 'slides' containing 4-5 slide objects.
+Schema:
+{{
+  "slides": [
+    {{
+      "title": "Title",
+      "subtitle": "Subtitle",
+      "image_keyword": "keyword",
+      "cards": [
+        {{"heading": "Heading", "text": "Explanation text"}}
+      ]
+    }}
+  ]
+}}"""
 
   payload = {
       "contents": [{"parts": [{"text": prompt}]}],
       "generationConfig": {
-          "temperature": 0.4,
+          "temperature": 0.3,
           "responseMimeType": "application/json",
       },
   }
-
-  def _robust_parse(text: str):
-    if not text:
-      return None
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = text.replace("```json", "").replace("```", "")
-    text = re.sub(r',\s*([\]\}])', r'\1', text)
-    m = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
-    if not m:
-      return None
-    try:
-      parsed = json.loads(m.group(0))
-      if isinstance(parsed, dict) and "slides" in parsed:
-        return parsed["slides"]
-      if isinstance(parsed, list):
-        return parsed
-    except Exception:
-      try:
-        # try fallback bracket-balancing
-        start = text.find('[')
-        end = text.rfind(']')
-        if start != -1 and end != -1 and end > start:
-          substr = text[start:end+1]
-          parsed = json.loads(substr)
-          return parsed
-      except Exception:
-        pass
-    return None
 
   try:
     response = requests.post(url, headers=headers, json=payload, timeout=30)
     if response.status_code == 200:
       data = response.json()
-      try:
-        text_output = data["candidates"][0]["content"]["parts"][0]["text"]
-      except Exception:
-        text_output = json.dumps(data)
-      parsed = _robust_parse(text_output)
-      if parsed:
-        return parsed, "Success"
-      else:
-        return None, f"Could not parse Gemini response start: '{text_output[:240]}'"
+      text_output = data["candidates"][0]["content"]["parts"][0]["text"]
+      parsed_json = json.loads(text_output)
+      return parsed_json.get("slides", parsed_json), "Success"
     else:
       return None, f"Gemini API Error ({response.status_code}): {response.text}"
   except Exception as e:
     return None, str(e)
 
 
-# 10. Email Dispatcher Function
+# 12. Email Dispatcher Function
 def send_otp_email(target_email, otp_code):
   try:
     sender_email = st.secrets.get("EMAIL_SENDER", "")
@@ -474,11 +632,11 @@ def send_otp_email(target_email, otp_code):
     return False, str(e)
 
 
-# 11. CSS Styling & Custom UI Layer
+# 13. CSS Styling & Custom UI Layer
 st.markdown(
     """
 <style>
-    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;6[...]
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -513,7 +671,6 @@ st.markdown(
         justify-content: space-between;
         align-items: center;
     }
-    .header-left { display: flex; align-items: center; gap: 15px; }
     .status-badge {
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.75rem;
@@ -601,13 +758,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Custom Brand Header Matrix
+# Custom Header
 logo_loaded = False
 if os.path.exists("logo.png"):
   try:
     with Image.open("logo.png") as img:
       img.verify()
-
     col_logo, col_badge = st.columns([8, 2])
     with col_logo:
       st.image("logo.png", width=220)
@@ -639,7 +795,7 @@ if not logo_loaded:
       unsafe_allow_html=True,
   )
 
-# ================= PERSISTENT DOMAIN OTP GATEKEEPER =================
+# ================= AUTHENTICATION GATEKEEPER =================
 if not st.session_state.authenticated:
   st.markdown(
       "<div style='text-align: center; margin-top: 80px;'><h2"
@@ -652,7 +808,6 @@ if not st.session_state.authenticated:
   col_space1, col_login, col_space3 = st.columns([3, 4, 3])
   with col_login:
     st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
-
     if not st.session_state.otp_sent:
       email_input = st.text_input(
           "University Email", placeholder="your.name@somaiya.edu"
@@ -705,7 +860,7 @@ if not st.session_state.authenticated:
 
 col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
 
-# ================= LEFT COLUMN: INGESTION & QWEN PPT STUDIO =================
+# ================= LEFT COLUMN: GAMMA AI PPT STUDIO & INGESTION =================
 with col_left:
   st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
   st.markdown(
@@ -718,80 +873,60 @@ with col_left:
   st.caption(f"**Desc:** {MODEL_OPTIONS[selected_model]['desc']}")
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # --- QWEN 3.6 & GEMINI POWERED PPT STUDIO ---
+  # --- GAMMA AI PPT STUDIO ---
   st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
   st.markdown(
-      "<div class='panel-header'>📊 Qwen 3.6 PPT Studio (Groq)</div>",
+      "<div class='panel-header'>🎨 Gamma AI PPT Studio</div>",
       unsafe_allow_html=True,
   )
 
-  status_msg = []
-  if GROQ_API_KEY:
-    status_msg.append("⚡ Groq (Qwen 3.6)")
-  if GEMINI_API_KEY:
-    status_msg.append("✨ Gemini")
-
-  if status_msg:
-    st.markdown(
-        f"<span style='font-size:0.8rem; color:#4ade80;'>Active Keys:"
-        f" {', '.join(status_msg)}</span>",
-        unsafe_allow_html=True,
-    )
-  else:
-    st.markdown(
-        "<span style='font-size:0.8rem; color:#f87171;'>❌ No API Keys"
-        " Configured in Secrets</span>",
-        unsafe_allow_html=True,
-    )
-
   ppt_topic_input = st.text_input(
-      "Presentation Topic:", placeholder="e.g. Quantum Cryptography"
+      "Presentation Topic:",
+      placeholder="e.g. Types and Domains of Artificial Intelligence",
   )
 
   btn_qwen, btn_gemini = st.columns(2)
   with btn_qwen:
-    if st.button("🚀 Qwen 3.6 PPT", use_container_width=True):
+    if st.button("🚀 Qwen Gamma", use_container_width=True):
       if not GROQ_API_KEY:
         st.error("Please add GROQ_API_KEY to your Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Qwen 3.6 (Groq)..."):
+        with st.spinner("Generating visual slide structure via Qwen 3.6..."):
           new_slides, err = generate_slides_with_qwen(
               ppt_topic_input, GROQ_API_KEY
           )
           if new_slides and isinstance(new_slides, list):
             st.session_state.slides_data = new_slides
-            st.success("Successfully generated slides via Qwen 3.6!")
+            st.success("Generated visual slides with Qwen 3.6!")
             st.rerun()
           else:
-            st.error(f"Qwen Generation Failed: {err}")
+            st.error(f"Generation Failed: {err}")
 
   with btn_gemini:
-    if st.button("✨ Gemini PPT", use_container_width=True):
+    if st.button("✨ Gemini Gamma", use_container_width=True):
       if not GEMINI_API_KEY:
         st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Gemini..."):
+        with st.spinner("Generating visual slide structure via Gemini..."):
           new_slides, err = generate_slides_with_gemini(
               ppt_topic_input, GEMINI_API_KEY
           )
           if new_slides and isinstance(new_slides, list):
             st.session_state.slides_data = new_slides
-            st.success("Successfully generated slides via Gemini!")
+            st.success("Generated visual slides with Gemini!")
             st.rerun()
           else:
-            st.error(f"Gemini Generation Failed: {err}")
+            st.error(f"Generation Failed: {err}")
 
-  with st.expander("✨ Open NotebookLM Slide Editor", expanded=False):
-    st.markdown("Live-edit your generated slides before downloading.")
-
+  with st.expander("✏️ Live Slide Layout & Cards Editor", expanded=False):
     if not st.session_state.slides_data or not isinstance(
         st.session_state.slides_data, list
     ):
       st.session_state.slides_data = [{
           "title": "Slide 1",
-          "bullets": [
-              "Add a bullet point or generate slides via Qwen/Gemini"
-          ],
+          "subtitle": "Overview",
+          "image_keyword": "technology",
+          "cards": [{"heading": "Card 1", "text": "Details"}],
       }]
 
     tabs = st.tabs(
@@ -801,145 +936,69 @@ with col_left:
     for i, tab in enumerate(tabs):
       with tab:
         slide_info = st.session_state.slides_data[i]
-
-        if isinstance(slide_info, str):
-          slide_info = {"title": slide_info, "bullets": []}
+        if not isinstance(slide_info, dict):
+          slide_info = {
+              "title": f"Slide {i+1}",
+              "subtitle": "",
+              "image_keyword": "ai",
+              "cards": [],
+          }
           st.session_state.slides_data[i] = slide_info
-        elif not isinstance(slide_info, dict):
-          slide_info = {"title": f"Slide {i+1}", "bullets": []}
-          st.session_state.slides_data[i] = slide_info
 
-        new_title = st.text_input(
-            f"Title {i+1}", slide_info.get("title", ""), key=f"title_{i}"
+        st.session_state.slides_data[i]["title"] = st.text_input(
+            f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}"
         )
-        st.session_state.slides_data[i]["title"] = new_title
+        st.session_state.slides_data[i]["subtitle"] = st.text_input(
+            f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}"
+        )
+        st.session_state.slides_data[i]["image_keyword"] = st.text_input(
+            f"Image Keyword {i+1}",
+            slide_info.get("image_keyword", ""),
+            key=f"img_{i}",
+        )
 
-        updated_bullets = []
-        bullets_list = slide_info.get("bullets", [])
-        if not isinstance(bullets_list, list):
-          bullets_list = [str(bullets_list)]
+        cards = slide_info.get("cards", [])
+        if not isinstance(cards, list):
+          cards = [{"heading": "Detail", "text": str(cards)}]
 
-        for j, bullet in enumerate(bullets_list):
-          b_val = st.text_input(
-              f"Bullet {j+1}", bullet, key=f"bullet_{i}_{j}"
-          )
-          updated_bullets.append(b_val)
-        st.session_state.slides_data[i]["bullets"] = updated_bullets
-
-    # New: Use create_gamma_style_pptx from ppt_engine.py
-    def _generate_and_download_pptx():
-      # Use st.status() if available, otherwise fallback to st.empty
-      status_func = getattr(st, "status", None)
-      status_ctx = status_func("Starting...") if status_func else st.empty()
-      temp_output = None
-      temp_images_to_cleanup = []
-      try:
-        # Stage 1
-        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
-          status_ctx.text("1/4 — Generating slide content outline...")
-        else:
-          status_ctx.markdown("**1/4 — Generating slide content outline...**")
-
-        slides_payload = st.session_state.slides_data
-
-        # Stage 2
-        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
-          status_ctx.text("2/4 — Fetching visual assets per slide...")
-        else:
-          status_ctx.markdown("**2/4 — Fetching visual assets per slide...**")
-
-        # Pre-fetch a few images per slide to speed up layout (non blocking)
-        # We'll try to fetch at most 1 image per slide keyword (best-effort)
-        for s in slides_payload:
-          kw = s.get("image_keyword") or (s.get("bullets") and s.get("bullets")[0]) or s.get("title")
-          if kw:
-            try:
-              img_path = fetch_image_by_keyword(str(kw))
-              if img_path:
-                # attach local image path to slide for engine to pick up
-                s["_fetched_image"] = img_path
-                temp_images_to_cleanup.append(img_path)
-            except Exception:
-              # skip failing images
-              pass
-
-        # Stage 3
-        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
-          status_ctx.text("3/4 — Constructing widescreen 16:9 layout containers...")
-        else:
-          status_ctx.markdown("**3/4 — Constructing widescreen 16:9 layout containers...**")
-
-        # Call the engine
-        # The engine expects 'image_keyword' fields or will attempt to fetch by bullets/title.
-        out_path = f"apollo_presentation_{int(time.time())}.pptx"
-        saved_path, temp_images = create_gamma_style_pptx(slides_payload, out_path)
-
-        # Stage 4
-        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
-          status_ctx.text("4/4 — Presentation ready!")
-        else:
-          status_ctx.markdown("**4/4 — Presentation ready!**")
-
-        # Return saved path and images to cleanup
-        return saved_path, temp_images
-      finally:
-        # no immediate cleanup here; caller will delete after download
-        try:
-          if hasattr(status_ctx, "empty"):
-            status_ctx.empty()
-        except Exception:
-          pass
-
-    if st.button("📥 Generate & Download .pptx File", use_container_width=True):
-      try:
-        saved_path, temp_images = _generate_and_download_pptx()
-        if saved_path and os.path.exists(saved_path):
-          with open(saved_path, "rb") as f:
-            st.download_button(
-                label="Click here to download",
-                data=f,
-                file_name=os.path.basename(saved_path),
-                mime=(
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                ),
-                use_container_width=True,
+        for j, card in enumerate(cards):
+          st.markdown(f"**Card Box {j+1}**")
+          if isinstance(card, dict):
+            h_val = st.text_input(
+                f"Card {j+1} Heading",
+                card.get("heading", ""),
+                key=f"ch_{i}_{j}",
             )
-          # cleanup temp images and saved file after providing a moment
-          for p in temp_images:
-            try:
-              os.unlink(p)
-            except Exception:
-              pass
-          try:
-            os.unlink(saved_path)
-          except Exception:
-            pass
-        else:
-          st.error("Failed to produce presentation.")
-      except Exception as e:
-        st.error(f"Presentation generation failed: {e}")
+            b_val = st.text_area(
+                f"Card {j+1} Text", card.get("text", ""), key=f"ct_{i}_{j}"
+            )
+            cards[j] = {"heading": h_val, "text": b_val}
+          else:
+            b_val = st.text_input(f"Card {j+1}", str(card), key=f"ct_{i}_{j}")
+            cards[j] = {"heading": "Note", "text": b_val}
+        st.session_state.slides_data[i]["cards"] = cards
 
+  if st.button("📥 Export Gamma .pptx File", use_container_width=True):
+    with st.spinner("Building modern widescreen slide deck with pictures..."):
+      file_path = create_gamma_style_pptx(st.session_state.slides_data)
+      with open(file_path, "rb") as f:
+        st.download_button(
+            label="Click here to download deck",
+            data=f,
+            file_name="Gamma_Style_Presentation.pptx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
+            use_container_width=True,
+        )
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # --- SECURED WEB SEARCH INDEXER (TAVILY REST API) ---
+  # --- SECURED WEB SEARCH INDEXER ---
   st.markdown("<div class='cyber-card'>", unsafe_allow_html=True)
   st.markdown(
       "<div class='panel-header'>🌐 AI Web Search (Tavily)</div>",
       unsafe_allow_html=True,
   )
-
-  if TAVILY_API_KEY:
-    st.markdown(
-        "<span style='font-size:0.8rem; color:#4ade80;'>✅ Tavily API Key Linked"
-        " Safely</span>",
-        unsafe_allow_html=True,
-    )
-  else:
-    st.markdown(
-        "<span style='font-size:0.8rem; color:#f87171;'>❌ Missing"
-        " TAVILY_API_KEY in Secrets</span>",
-        unsafe_allow_html=True,
-    )
 
   web_query = st.text_input(
       "Enter topic to scrape & index...",
@@ -947,94 +1006,47 @@ with col_left:
       label_visibility="collapsed",
   )
 
-  RESTRICTED_TERMS = [
-      "porn",
-      "nsfw",
-      "xxx",
-      "sex",
-      "nude",
-      "kill",
-      "suicide",
-      "murder",
-      "gore",
-      "weapon",
-      "bomb",
-      "drugs",
-  ]
-
   if st.button("SEARCH & INDEX", use_container_width=True):
     if not TAVILY_API_KEY or not TAVILY_API_KEY.startswith("tvly-"):
       st.error("No active Tavily API Key found in Streamlit Secrets.")
     elif web_query:
-      query_lower = web_query.lower()
-      violation_found = any(term in query_lower for term in RESTRICTED_TERMS)
-
-      if violation_found:
-        st.error(
-            "🚨 **SECURITY ALERT:** Your search query violates safety policy."
-        )
-      else:
-        with st.spinner("Executing secure web retrieval..."):
-          try:
-            api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
-            payload = {
-                "api_key": TAVILY_API_KEY.strip(),
-                "query": web_query,
-                "search_depth": "advanced",
-                "include_answer": False,
-                "include_images": False,
-                "include_raw_content": False,
-                "max_results": 10,
-            }
-
-            response = requests.post(api_url, json=payload, timeout=25)
-
-            if response.status_code == 200:
-              data = response.json()
-              results = data.get("results", [])
-              unique_docs = {}
-
-              for r in results:
-                source_url = r.get("url", "")
-                content = r.get("content", "")
-                title = r.get("title", "Verified Source")
-
-                if source_url and content and (source_url not in unique_docs):
-                  unique_docs[source_url] = {"content": content, "title": title}
-
-              web_docs = []
-              for url, info in unique_docs.items():
-                web_docs.append(
-                    Document(
-                        page_content=(
-                            f"Title: {info['title']}\nSource:"
-                            f" {url}\nContext: {info['content']}"
-                        ),
-                        metadata={"source": url, "title": info["title"]},
-                    )
+      with st.spinner("Executing secure web retrieval..."):
+        try:
+          api_url = "https://api.tavily.com/search"
+          payload = {
+              "api_key": TAVILY_API_KEY.strip(),
+              "query": web_query,
+              "search_depth": "advanced",
+              "max_results": 8,
+          }
+          response = requests.post(api_url, json=payload, timeout=25)
+          if response.status_code == 200:
+            results = response.json().get("results", [])
+            web_docs = [
+                Document(
+                    page_content=(
+                        f"Title: {r.get('title')}\nSource:"
+                        f" {r.get('url')}\nContext: {r.get('content')}"
+                    ),
+                    metadata={
+                        "source": r.get("url", ""),
+                        "title": r.get("title", ""),
+                    },
                 )
-
-              if web_docs:
-                chunks = text_splitter.split_documents(web_docs)
-                valid_chunks = [c for c in chunks if c.page_content.strip()]
-
-                if valid_chunks:
-                  if st.session_state.vector_db is None:
-                    st.session_state.vector_db = FAISS.from_documents(
-                        valid_chunks, embedder
-                    )
-                  else:
-                    st.session_state.vector_db.add_documents(valid_chunks)
-
-                  st.session_state.node_count += len(valid_chunks)
-                  st.success(
-                      f"Indexed {len(valid_chunks)} verified blocks via"
-                      " Tavily!"
-                  )
-            else:
-              st.error(f"Tavily API Error: {response.text}")
-          except Exception as e:
-            st.error(f"Tavily connection failed: {str(e)}")
+                for r in results
+            ]
+            chunks = text_splitter.split_documents(web_docs)
+            if chunks:
+              if st.session_state.vector_db is None:
+                st.session_state.vector_db = FAISS.from_documents(
+                    chunks, embedder
+                )
+              else:
+                st.session_state.vector_db.add_documents(chunks)
+              st.session_state.node_count += len(chunks)
+              st.success(f"Indexed {len(chunks)} verified blocks!")
+        except Exception as e:
+          st.error(f"Search failed: {str(e)}")
   st.markdown("</div>", unsafe_allow_html=True)
 
   # --- LOCAL DOCUMENTS INDEXER ---
@@ -1073,19 +1085,15 @@ with col_left:
 
         if docs:
           chunks = text_splitter.split_documents(docs)
-          valid_chunks = [c for c in chunks if c.page_content.strip()]
-
-          if valid_chunks:
+          if chunks:
             if st.session_state.vector_db is None:
               st.session_state.vector_db = FAISS.from_documents(
-                  valid_chunks, embedder
+                  chunks, embedder
               )
             else:
-              st.session_state.vector_db.add_documents(valid_chunks)
-            st.session_state.node_count += len(valid_chunks)
-            st.success(
-                f"Successfully Indexed {len(valid_chunks)} document blocks."
-            )
+              st.session_state.vector_db.add_documents(chunks)
+            st.session_state.node_count += len(chunks)
+            st.success(f"Indexed {len(chunks)} document blocks.")
   st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
@@ -1095,13 +1103,13 @@ with col_mid:
         """
         <div style='margin-top: 50px; margin-bottom: 30px; text-align: center;'>
             <h2 style='color: #f97316; font-family: "Inter", sans-serif; font-weight: 700;'>Study Console Initialized</h2>
-            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Use the left panel to index Web Data or Local Files, then chat here.</p>
+            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 0.85rem;'>Use the left panel to generate Gamma AI presentations, index Web Data, or chat here.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-  chat_scroll_pane = st.container()
+  chat_scroll_pane = st.container(height=650, border=False)
 
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
@@ -1112,7 +1120,6 @@ with col_mid:
 
   if user_query:
     st.session_state.chat_history.append({"role": "user", "content": user_query})
-
     start_time = time.time()
     context_payload = ""
 
@@ -1126,9 +1133,8 @@ with col_mid:
           for node in matched_nodes
       ])
       sys_instruction = (
-          "You are APOLLO OMNI AI, an advanced AI study buddy. Formulate a"
-          " crisp response using ONLY the provided context below. DO NOT"
-          " include raw URLs or brackets."
+          "You are APOLLO OMNI AI, an advanced study buddy. Answer using ONLY"
+          " context below."
       )
       clean_ctx = (
           context_payload.replace("<", "&lt;")
@@ -1141,8 +1147,8 @@ with col_mid:
       )
     else:
       sys_instruction = (
-          "You are APOLLO OMNI AI, an advanced AI study buddy. Answer based on"
-          " general knowledge. Be crisp and concise."
+          "You are APOLLO OMNI AI, an advanced study buddy. Answer based on"
+          " general knowledge."
       )
       st.session_state.source_reference = (
           "<div class='source-box font-mono'>No active context. General weights"
@@ -1166,11 +1172,9 @@ with col_mid:
               message_stream, GROQ_API_KEY, OPENROUTER_API_KEY, selected_model
           )
           collected_tokens = st.write_stream(stream)
-
           if not collected_tokens or not str(collected_tokens).strip():
             collected_tokens = "⚠️ EMPTY RESPONSE."
             st.markdown(collected_tokens)
-
         except Exception as ex:
           collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
           st.markdown(collected_tokens)
@@ -1188,7 +1192,6 @@ with col_right:
       "<div class='panel-header'>📊 Analytics Dashboard</div>",
       unsafe_allow_html=True,
   )
-
   st.markdown(
       f"<div><div class='metric-title'>Inference Latency</div><div"
       f" class='metric-value'>{st.session_state.response_time}</div></div>",
@@ -1198,7 +1201,6 @@ with col_right:
       "<hr style='border-color: rgba(255,255,255,0.1); margin: 15px 0;'>",
       unsafe_allow_html=True,
   )
-
   st.markdown(
       f"<div><div class='metric-title'>Indexed Documents</div><div"
       f" class='metric-value'>{st.session_state.node_count}</div></div>",
@@ -1229,15 +1231,6 @@ with col_right:
       st.session_state.source_reference = (
           "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
       )
-      st.session_state.slides_data = [
-          {
-              "title": "Introduction to Institutional AI",
-              "bullets": [
-                  "Overview of Apollo Omni platform",
-                  "Secure @somaiya.edu integration",
-              ],
-          }
-      ]
       st.rerun()
   with c2:
     chat_log = "\n".join([
