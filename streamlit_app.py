@@ -522,7 +522,7 @@ def main() -> None:
     cookie_manager = stx.CookieManager()
 
     # Wait for stx.CookieManager JS component to initialize completely
-    cookies = cookie_manager.get_all()
+    cookies = cookie_manager.get_all(key="main_app_cookie_manager")
     if cookies is None:
         st.stop()
 
