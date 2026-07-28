@@ -47,6 +47,11 @@ def normalize_slides(slides_data):
         })
     return normalized
 
+def parse_slide_json_response(raw_response: str) -> Dict[str, Any]:
+    """Wrapper function to parse slide JSON using PPTEngine."""
+    engine = PPTEngine()
+    return engine.parse_slide_json(raw_response)
+
 def build_presentation(slides, theme_name="Dark Cyber", topic="Presentation", progress_callback=None):
     """Convenience wrapper to build a presentation from slide lists using PPTEngine."""
     if progress_callback:
