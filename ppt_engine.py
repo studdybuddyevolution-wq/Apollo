@@ -2,12 +2,71 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
+
+
+# --------------------------------------------------------------------------
+# Module-level definitions required by llm_service.py and main app
+# --------------------------------------------------------------------------
+FORBIDDEN_METADATA_TERMS = [
+    "internal_notes",
+    "prompt_injection",
+    "system_prompt",
+    "confidential_debug",
+]
+
+def enforce_topic_isolation(text: str) -> str:
+    """Ensures generated text adheres to safety guardrails."""
+    if not text:
+        return ""
+    clean_text = text
+    for term in FORBIDDEN_METADATA_TERMS:
+        clean_text = clean_text.replace(term, "[filtered]")
+    return clean_text
+
+def normalize_slides(slides_data):
+    """Normalizes raw slide inputs into a standardized structure."""
+    if not isinstance(slides_data, list):
+        return []
+    normalized = []
+    for slide in slides_data:
+        if not isinstance(slide, dict):
+            continue
+        normalized.append({
+            "title": slide.get("title", "Untitled Slide"),
+            "subtitle": slide.get("subtitle", ""),
+            "layout": slide.get("layout", "cards"),
+            "cards": slide.get("cards", slide.get("content", [])),
+            "bullets": slide.get("bullets", []),
+        })
+    return normalized
+
+def build_presentation(slides, theme_name="Dark Cyber", topic="Presentation", progress_callback=None):
+    """Convenience wrapper to build a presentation from slide lists using PPTEngine."""
+    if progress_callback:
+        progress_callback("layout", "Initializing presentation builder...")
+    
+    theme = LIGHT_THEME if theme_name == "Light Minimal" else DARK_THEME
+    engine = PPTEngine(theme=theme)
+    
+    payload = {"slides": normalize_slides(slides)}
+    prs = engine.generate_presentation(payload)
+    
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+    file_path = output_dir / "Gamma_Style_Presentation.pptx"
+    
+    if progress_callback:
+        progress_callback("visuals", "Saving presentation file...")
+        
+    prs.save(str(file_path))
+    return str(file_path)
 
 
 @dataclass
@@ -29,7 +88,7 @@ DARK_THEME = PresentationTheme(
     bg_color=RGBColor(15, 23, 42),      # #0f172a
     card_bg=RGBColor(30, 41, 59),      # #1e293b
     border=RGBColor(51, 65, 85),       # #334155
-    text=RGBColor(248, 250, 252),     # #f8fafc
+    text=RGBColor(248, 250, 252),      # #f8fafc
     muted=RGBColor(148, 163, 184),     # #94a3b8
     accent=RGBColor(249, 115, 22),     # #f97316
 )
@@ -275,13 +334,12 @@ class PPTEngine:
         tf.margin_top = Inches(0.2)
         tf.margin_bottom = Inches(0.2)
 
-        # 3. Optional Badge Tag (FIXED: Contrast aware rendering)
+        # 3. Optional Badge Tag
         if badge:
             p_badge = tf.paragraphs[0]
             p_badge.text = badge.upper()
             p_badge.font.size = Pt(9)
             p_badge.font.bold = True
-            # Ensures badge text is visible on both dark and light theme cards
             p_badge.font.color.rgb = RGBColor(255, 255, 255) if is_dark else text_color
             p_badge.space_after = Pt(6)
             p_title = tf.add_paragraph()
@@ -324,7 +382,6 @@ class PPTEngine:
         p_err.font.color.rgb = self.current_theme.muted
         p_err.space_after = Pt(12)
 
-        # Dump raw key-values gracefully
         for key, val in slide_info.items():
             if key in ["title", "layout"]:
                 continue
