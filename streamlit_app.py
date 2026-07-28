@@ -1,3 +1,6 @@
+# Updated app.py
+# (Based on original streamlit_app.py with PPT generation moved to ppt_engine.create_gamma_style_pptx,
+# improved JSON parsing/enforcement for LLM outputs, and step-by-step status updates.)
 import datetime
 import json
 import os
@@ -18,6 +21,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PIL import Image
 from pptx import Presentation
 import streamlit as st
+
+# Import the new PPT engine
+from ppt_engine import create_gamma_style_pptx, fetch_image_by_keyword
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
@@ -234,99 +240,115 @@ def generate_slides_with_qwen(topic, groq_key=""):
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  prompt = f"""Create a presentation outline about '{topic}'.
-Return a JSON object containing a "slides" array with 4-6 slide objects.
+  # Strong prompt enforcement to avoid topic bleed or injecting system/app context
+  prompt = f"""Create a presentation outline about the single topic: '{topic}'.
+Return ONLY a JSON object containing a single "slides" array with 4-6 slide objects.
+Each slide object must have:
+  - "title": short string (no mentions of 'Apollo' or 'Somaiya' or any system/RAG/service names)
+  - "bullets": array of 2-6 short strings
+Optional:
+  - "image_keyword": a short keyword phrase to fetch an illustrative image
 
-Required JSON Structure:
-{{
-  "slides": [
-    {{
-      "title": "Slide Title",
-      "bullets": ["Point 1", "Point 2", "Point 3"]
-    }}
-  ]
-}}"""
+STRICT REQUIREMENTS:
+- Output valid JSON exclusively, no markdown, no commentary, no explanation.
+- Do NOT mention 'Apollo', 'Somaiya', 'RAG', or any internal service names anywhere in titles or bullets.
+- Keep titles <= 60 chars and bullets <= 160 chars.
+Example output:
+{{ "slides": [ {{ "title": "Slide 1", "bullets": ["a","b"] }}, ... ] }}"""
 
-  def parse_json_response(raw_text):
+  def robust_json_extract(raw_text: str):
     if not raw_text:
       return None
+    text = raw_text
 
-    # Clean thinking tags from reasoning models
-    clean_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
+    # Strip <think>...</think> tags
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
 
-    # Search for JSON object or array payload
-    dict_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-    list_match = re.search(r'\[.*\]', clean_text, re.DOTALL)
+    # Remove markdown json fences
+    text = text.replace("```json", "").replace("```", "")
 
-    if dict_match:
-      json_str = dict_match.group(0)
-    elif list_match:
-      json_str = list_match.group(0)
+    # Remove trailing commas in objects/arrays (best-effort)
+    # remove ",]" or ",}" patterns
+    text = re.sub(r',\s*([\]\}])', r'\1', text)
+
+    # Find the first JSON object or array
+    m = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
+    if m:
+      candidate = m.group(0)
     else:
-      json_str = clean_text.replace("```json", "").replace("```", "").strip()
+      candidate = text.strip()
 
     try:
-      parsed = json.loads(json_str)
-
-      # Extract slides array from dictionary
-      if isinstance(parsed, dict):
-        if "slides" in parsed and isinstance(parsed["slides"], list):
-          return parsed["slides"]
-        for v in parsed.values():
-          if isinstance(v, list):
-            return v
-      elif isinstance(parsed, list):
+      parsed = json.loads(candidate)
+      # if it's an object with "slides", extract that
+      if isinstance(parsed, dict) and "slides" in parsed and isinstance(parsed["slides"], list):
+        # Filter out any slides that mention forbidden tokens
+        filtered = []
+        for s in parsed["slides"]:
+          t = s.get("title", "")
+          b = " ".join(s.get("bullets", [])) if isinstance(s.get("bullets", []), list) else ""
+          if any(tok.lower() in (t + " " + b).lower() for tok in ["apollo", "somaiya", "rag"]):
+            # strip forbidden mentions; best effort: reject slide
+            continue
+          filtered.append(s)
+        return filtered
+      # if parsed is list, return it as list of slides
+      if isinstance(parsed, list):
         return parsed
-
-      return None
-    except json.JSONDecodeError:
-      return None
+    except Exception:
+      # last attempt: try to balance braces by truncation heuristics
+      try:
+        # try to find the JSON substring by searching for first { and last }
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+          substr = text[start:end + 1]
+          substr = re.sub(r',\s*([\]\}])', r'\1', substr)
+          parsed = json.loads(substr)
+          return parsed.get("slides", parsed if isinstance(parsed, list) else None)
+      except Exception:
+        pass
+    return None
 
   try:
     client = Groq(api_key=groq_key)
-    
-    # Attempt request using Groq's native JSON Mode
     try:
       completion = client.chat.completions.create(
           model="qwen/qwen3.6-27b",
           messages=[
-              {
-                  "role": "system",
-                  "content": "You are a JSON generator. You must output JSON only.",
-              },
+              {"role": "system", "content": "You are a JSON only generator. Output valid JSON only."},
               {"role": "user", "content": prompt},
           ],
           response_format={"type": "json_object"},
           temperature=0.2,
       )
     except Exception:
-      # Fallback without response_format if specific endpoint ignores it
       completion = client.chat.completions.create(
           model="qwen/qwen3.6-27b",
           messages=[
-              {
-                  "role": "system",
-                  "content": "You are a JSON generator. You must output valid JSON.",
-              },
+              {"role": "system", "content": "You are a JSON only generator. Output valid JSON only."},
               {"role": "user", "content": prompt},
           ],
           temperature=0.2,
       )
 
-    raw_text = completion.choices[0].message.content
-    parsed_slides = parse_json_response(raw_text)
+    raw_text = ""
+    try:
+      raw_text = completion.choices[0].message.content
+    except Exception:
+      raw_text = str(completion)
 
+    parsed_slides = robust_json_extract(raw_text)
     if parsed_slides:
       return parsed_slides, "Success (Qwen 3.6 via Groq SDK)"
     else:
-      snippet = raw_text[:120].replace("\n", " ") if raw_text else "Empty"
+      snippet = raw_text[:240].replace("\n", " ") if raw_text else "Empty"
       return None, f"Could not parse response into slides. Model output start: '{snippet}'"
-
   except Exception as e:
     return None, f"Qwen Generation Error: {str(e)}"
 
 
-# 9. Legacy Gemini PPT Generator Function
+# 9. Legacy Gemini PPT Generator Function (improved JSON extraction & isolation)
 def get_best_active_gemini_model(gemini_key):
   try:
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key.strip()}"
@@ -358,11 +380,18 @@ def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
   active_model = get_best_active_gemini_model(gemini_key)
+
+  prompt = f"""Create a presentation outline purely about '{topic}'.
+Return a single valid JSON array or object containing slides as in:
+[{{"title":"...","bullets":["a","b"], "image_keyword":"..."}}, ...]
+Requirements:
+- Output only JSON, no markdown/code fences/no commentary.
+- Avoid mentioning 'Apollo', 'Somaiya', 'RAG' or other platform or contexts.
+- Titles <= 60 chars; bullets <= 160 chars.
+"""
+
   url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
-
-  prompt = f"""Create a comprehensive presentation outline about '{topic}'. 
-Return ONLY a valid JSON array of objects, where each object has a 'title' (string) and 'bullets' (list of 3-4 structured strings). Do not include markdown formatting code blocks like ```json, just return raw JSON text."""
 
   payload = {
       "contents": [{"parts": [{"text": prompt}]}],
@@ -372,13 +401,47 @@ Return ONLY a valid JSON array of objects, where each object has a 'title' (stri
       },
   }
 
+  def _robust_parse(text: str):
+    if not text:
+      return None
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = text.replace("```json", "").replace("```", "")
+    text = re.sub(r',\s*([\]\}])', r'\1', text)
+    m = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
+    if not m:
+      return None
+    try:
+      parsed = json.loads(m.group(0))
+      if isinstance(parsed, dict) and "slides" in parsed:
+        return parsed["slides"]
+      if isinstance(parsed, list):
+        return parsed
+    except Exception:
+      try:
+        # try fallback bracket-balancing
+        start = text.find('[')
+        end = text.rfind(']')
+        if start != -1 and end != -1 and end > start:
+          substr = text[start:end+1]
+          parsed = json.loads(substr)
+          return parsed
+      except Exception:
+        pass
+    return None
+
   try:
     response = requests.post(url, headers=headers, json=payload, timeout=30)
     if response.status_code == 200:
       data = response.json()
-      text_output = data["candidates"][0]["content"]["parts"][0]["text"]
-      parsed_json = json.loads(text_output)
-      return parsed_json, "Success"
+      try:
+        text_output = data["candidates"][0]["content"]["parts"][0]["text"]
+      except Exception:
+        text_output = json.dumps(data)
+      parsed = _robust_parse(text_output)
+      if parsed:
+        return parsed, "Success"
+      else:
+        return None, f"Could not parse Gemini response start: '{text_output[:240]}'"
     else:
       return None, f"Gemini API Error ({response.status_code}): {response.text}"
   except Exception as e:
@@ -415,7 +478,7 @@ def send_otp_email(target_email, otp_code):
 st.markdown(
     """
 <style>
-    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
+    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;6[...]
     
     :root {
         --background-color: #0f0f11 !important;
@@ -763,36 +826,99 @@ with col_left:
           updated_bullets.append(b_val)
         st.session_state.slides_data[i]["bullets"] = updated_bullets
 
+    # New: Use create_gamma_style_pptx from ppt_engine.py
+    def _generate_and_download_pptx():
+      # Use st.status() if available, otherwise fallback to st.empty
+      status_func = getattr(st, "status", None)
+      status_ctx = status_func("Starting...") if status_func else st.empty()
+      temp_output = None
+      temp_images_to_cleanup = []
+      try:
+        # Stage 1
+        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
+          status_ctx.text("1/4 — Generating slide content outline...")
+        else:
+          status_ctx.markdown("**1/4 — Generating slide content outline...**")
 
-    def create_pptx(data):
-      prs = Presentation()
-      for item in data:
-        if not isinstance(item, dict):
-          continue
-        slide_layout = prs.slide_layouts[1]
-        slide = prs.slides.add_slide(slide_layout)
-        slide.shapes.title.text = item.get("title", "Slide")
-        tf = slide.placeholders[1].text_frame
-        for bullet in item.get("bullets", []):
-          p = tf.add_paragraph()
-          p.text = str(bullet)
-      path = "apollo_presentation.pptx"
-      prs.save(path)
-      return path
+        slides_payload = st.session_state.slides_data
 
+        # Stage 2
+        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
+          status_ctx.text("2/4 — Fetching visual assets per slide...")
+        else:
+          status_ctx.markdown("**2/4 — Fetching visual assets per slide...**")
 
-    if st.button("📥 Download .pptx File", use_container_width=True):
-      file_path = create_pptx(st.session_state.slides_data)
-      with open(file_path, "rb") as f:
-        st.download_button(
-            label="Click here to download",
-            data=f,
-            file_name="Apollo_Presentation.pptx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            ),
-            use_container_width=True,
-        )
+        # Pre-fetch a few images per slide to speed up layout (non blocking)
+        # We'll try to fetch at most 1 image per slide keyword (best-effort)
+        for s in slides_payload:
+          kw = s.get("image_keyword") or (s.get("bullets") and s.get("bullets")[0]) or s.get("title")
+          if kw:
+            try:
+              img_path = fetch_image_by_keyword(str(kw))
+              if img_path:
+                # attach local image path to slide for engine to pick up
+                s["_fetched_image"] = img_path
+                temp_images_to_cleanup.append(img_path)
+            except Exception:
+              # skip failing images
+              pass
+
+        # Stage 3
+        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
+          status_ctx.text("3/4 — Constructing widescreen 16:9 layout containers...")
+        else:
+          status_ctx.markdown("**3/4 — Constructing widescreen 16:9 layout containers...**")
+
+        # Call the engine
+        # The engine expects 'image_keyword' fields or will attempt to fetch by bullets/title.
+        out_path = f"apollo_presentation_{int(time.time())}.pptx"
+        saved_path, temp_images = create_gamma_style_pptx(slides_payload, out_path)
+
+        # Stage 4
+        if hasattr(status_ctx, "text") and callable(getattr(status_ctx, "text")):
+          status_ctx.text("4/4 — Presentation ready!")
+        else:
+          status_ctx.markdown("**4/4 — Presentation ready!**")
+
+        # Return saved path and images to cleanup
+        return saved_path, temp_images
+      finally:
+        # no immediate cleanup here; caller will delete after download
+        try:
+          if hasattr(status_ctx, "empty"):
+            status_ctx.empty()
+        except Exception:
+          pass
+
+    if st.button("📥 Generate & Download .pptx File", use_container_width=True):
+      try:
+        saved_path, temp_images = _generate_and_download_pptx()
+        if saved_path and os.path.exists(saved_path):
+          with open(saved_path, "rb") as f:
+            st.download_button(
+                label="Click here to download",
+                data=f,
+                file_name=os.path.basename(saved_path),
+                mime=(
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                ),
+                use_container_width=True,
+            )
+          # cleanup temp images and saved file after providing a moment
+          for p in temp_images:
+            try:
+              os.unlink(p)
+            except Exception:
+              pass
+          try:
+            os.unlink(saved_path)
+          except Exception:
+            pass
+        else:
+          st.error("Failed to produce presentation.")
+      except Exception as e:
+        st.error(f"Presentation generation failed: {e}")
+
   st.markdown("</div>", unsafe_allow_html=True)
 
   # --- SECURED WEB SEARCH INDEXER (TAVILY REST API) ---
@@ -975,7 +1101,7 @@ with col_mid:
         unsafe_allow_html=True,
     )
 
-  chat_scroll_pane = st.container(height=650, border=False)
+  chat_scroll_pane = st.container()
 
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
