@@ -14,3 +14,4 @@ python-pptx
 extra-streamlit-components
 groq
 pillow
+plotly
