@@ -27,6 +27,9 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 import streamlit as st
 
+# Import the interactive Plotly chart engine
+from charts import render_dynamic_chart_from_text
+
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
 
@@ -257,7 +260,7 @@ def fetch_image_by_keyword(keyword):
       " resolution, 8k, dark aesthetic, minimalist design"
   )
 
-  pollinations_url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
+  pollinations_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
 
   try:
     resp = requests.get(
@@ -457,7 +460,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           " starting with 'sk-or-' in Streamlit Secrets."
       )
       return
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
     headers = {
         "Authorization": f"Bearer {or_token.strip()}",
         "Content-Type": "application/json",
@@ -614,7 +617,7 @@ SCHEMA REQUIRED:
 def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
-  url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
+  url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=){gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
   prompt = f"""Create an in-depth academic presentation outline about '{topic}'.
@@ -685,7 +688,7 @@ def send_otp_email(target_email, otp_code):
 st.markdown(
     """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap)');
     
     :root {
         --background-color: #0f0f11 !important;
@@ -1061,7 +1064,7 @@ with col_left:
     elif web_query:
       with st.spinner("Executing secure web retrieval..."):
         try:
-          api_url = "https://api.tavily.com/search"
+          api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
           payload = {
               "api_key": TAVILY_API_KEY.strip(),
               "query": web_query,
@@ -1160,10 +1163,14 @@ with col_mid:
 
   chat_scroll_pane = st.container(height=650, border=False)
 
+  # Render existing chat history using charts.py for assistant messages
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
       with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        if msg["role"] == "assistant":
+          render_dynamic_chart_from_text(msg["content"])
+        else:
+          st.markdown(msg["content"])
 
   user_query = st.chat_input("Enter your query...")
 
@@ -1171,6 +1178,22 @@ with col_mid:
     st.session_state.chat_history.append({"role": "user", "content": user_query})
     start_time = time.time()
     context_payload = ""
+
+    # Prompt extension to instruct LLM on chart output format
+    chart_instruction = (
+        "\n\nIf the user asks for a chart, graph, data visualization, or numerical comparison, "
+        "append a JSON code block at the very end of your response following this exact structure:\n"
+        "```json\n"
+        "{\n"
+        '  "type": "bar",  // options: "bar", "line", or "pie"\n'
+        '  "title": "Chart Title",\n'
+        '  "x_label": "X Axis Label",\n'
+        '  "y_label": "Y Axis Label",\n'
+        '  "x": ["Category A", "Category B"],\n'
+        '  "y": [10, 20]\n'
+        "}\n"
+        "```"
+    )
 
     if st.session_state.vector_db is not None:
       retriever = st.session_state.vector_db.as_retriever(
@@ -1183,7 +1206,7 @@ with col_mid:
       ])
       sys_instruction = (
           "You are APOLLO OMNI AI, an advanced study buddy. Answer using ONLY"
-          " context below."
+          f" context below.{chart_instruction}"
       )
       clean_ctx = (
           context_payload.replace("<", "&lt;")
@@ -1197,7 +1220,7 @@ with col_mid:
     else:
       sys_instruction = (
           "You are APOLLO OMNI AI, an advanced study buddy. Answer based on"
-          " general knowledge."
+          f" general knowledge.{chart_instruction}"
       )
       st.session_state.source_reference = (
           "<div class='source-box font-mono'>No active context. General weights"
