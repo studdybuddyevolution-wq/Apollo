@@ -460,7 +460,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           " starting with 'sk-or-' in Streamlit Secrets."
       )
       return
-    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
+    url = "https://openrouter.ai/api/v1/chat/completions".strip()
     headers = {
         "Authorization": f"Bearer {or_token.strip()}",
         "Content-Type": "application/json",
