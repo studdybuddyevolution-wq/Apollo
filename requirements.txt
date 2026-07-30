@@ -15,3 +15,4 @@ extra-streamlit-components
 groq
 pillow
 plotly
+audio-recorder-streamlit
