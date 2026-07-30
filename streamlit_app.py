@@ -259,7 +259,7 @@ def fetch_image_by_keyword(keyword):
       " resolution, 8k, dark aesthetic, minimalist design"
   )
 
-  pollinations_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
+  pollinations_url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
 
   try:
     resp = requests.get(
@@ -616,7 +616,7 @@ SCHEMA REQUIRED:
 def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
-  url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=){gemini_key.strip()}"
+  url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
   prompt = f"""Create an in-depth academic presentation outline about '{topic}'.
@@ -1004,8 +1004,21 @@ with st.sidebar:
   # Inference Engine
   st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
   st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>⚙️ Inference Engine</div>", unsafe_allow_html=True)
+  
+  if "user_prefs" not in st.session_state:
+      st.session_state.user_prefs = {
+          "default_model": "Qwen 3.6 27B (Groq LPU)"
+      }
+      
+  model_list = list(MODEL_OPTIONS.keys())
+  saved_model = st.session_state.user_prefs.get("default_model", "Qwen 3.6 27B (Groq LPU)")
+  default_index = model_list.index(saved_model) if saved_model in model_list else 0
+
   selected_model = st.selectbox(
-      "API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0, label_visibility="collapsed"
+      "API Gateway Endpoint:", 
+      options=model_list, 
+      index=default_index, 
+      label_visibility="collapsed"
   )
   st.markdown(f"<div style='font-size: 9px; color: #a1a1aa; font-family: \"JetBrains Mono\"; margin-top: 4px;'>{MODEL_OPTIONS[selected_model]['desc']}</div>", unsafe_allow_html=True)
   st.markdown("</div>", unsafe_allow_html=True)
@@ -1020,7 +1033,7 @@ with st.sidebar:
     elif web_query:
       with st.spinner("Executing secure web retrieval..."):
         try:
-          api_url = "[https://api.tavily.com/search](https://api.tavily.com/search)"
+          api_url = "https://api.tavily.com/search"
           payload = {
               "api_key": TAVILY_API_KEY.strip(),
               "query": web_query,
