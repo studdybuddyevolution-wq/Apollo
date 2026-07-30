@@ -886,6 +886,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# --- INJECT LAYOUT AND SPACING ADJUSTMENTS ---
+st.markdown("""
+<style>
+    /* Pull the UI up and expand width slightly */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 1rem !important;
+        max-width: 96% !important;
+    }
+    /* Adjust header to fit the new tighter padding */
+    .omni-header { margin-top: -10px !important; margin-bottom: 20px !important; }
+    /* Style the sidebar to match the Omni theme */
+    [data-testid="stSidebar"] {
+        background-color: #0a0a0c !important;
+        border-right: 1px solid rgba(255, 140, 0, 0.15) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 
 # ================= AUTHENTICATION GATEKEEPER =================
 if not st.session_state.authenticated:
@@ -951,190 +970,50 @@ if not st.session_state.authenticated:
 # ==============================================================
 
 
-# Main column layout matches the provided HTML specification: Left(3), Center(6), Right(3)
-col_left, col_mid, col_right = st.columns([3, 6, 3], gap="large")
-
-# ================= LEFT COLUMN: GAMMA AI PPT STUDIO & INGESTION =================
-with col_left:
+# ================= SIDEBAR: SETTINGS & TOOLS =================
+with st.sidebar:
+  st.markdown("<h2 class='omni-brand' style='font-size: 16px; margin-bottom: 20px;'>APOLLO <span>OMNI</span><br><span style='font-size: 9px; color: #71717a; font-family: \"JetBrains Mono\";'>SYSTEM CONTROL PANEL</span></h2>", unsafe_allow_html=True)
   
-  # API / Model Selection
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>⚙️ Inference Engine</div>",
-      unsafe_allow_html=True,
-  )
-  selected_model = st.selectbox(
-      "API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0, label_visibility="collapsed"
-  )
-  st.markdown(f"<div style='font-size: 10px; color: #a1a1aa; font-family: \"JetBrains Mono\"; margin-top: 8px;'>INFO: {MODEL_OPTIONS[selected_model]['desc']}</div>", unsafe_allow_html=True)
+  # Telemetry Row
+  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
+  c_lat, c_vec = st.columns(2)
+  with c_lat:
+      st.markdown(f"<div style='text-align:center;'><div style='font-size:20px; font-weight:900; color:white; font-family: \"JetBrains Mono\";'>{st.session_state.response_time}<span style='font-size:12px;color:#ff8c00;'>s</span></div><div style='font-size:9px; color:#a1a1aa; text-transform:uppercase;'>Latency</div></div>", unsafe_allow_html=True)
+  with c_vec:
+      st.markdown(f"<div style='text-align:center;'><div style='font-size:20px; font-weight:900; color:white; font-family: \"JetBrains Mono\";'>{st.session_state.node_count}</div><div style='font-size:9px; color:#a1a1aa; text-transform:uppercase;'>Vectors</div></div>", unsafe_allow_html=True)
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # HTML CSS-Only RAG Graphic representation
+  # RAG Visual
   st.markdown("""
-  <div class='glass-panel' style='padding: 0; overflow: hidden;'>
-      <div style='padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;'>
-          <h2 style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin: 0;'>RAG_ENGINE_VISUAL</h2>
-          <span style='font-size: 9px; font-family: "JetBrains Mono"; color: #ff8c00; background: rgba(255,140,0,0.1); padding: 2px 8px; border: 1px solid rgba(255,140,0,0.2);'>LIVE_FEED</span>
+  <div class='glass-panel' style='padding: 0; overflow: hidden; margin-bottom: 16px;'>
+      <div style='padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;'>
+          <h2 style='font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: #a1a1aa; text-transform: uppercase; margin: 0;'>RAG_ENGINE_VISUAL</h2>
+          <span style='font-size: 8px; font-family: "JetBrains Mono"; color: #ff8c00; background: rgba(255,140,0,0.1); padding: 2px 6px; border: 1px solid rgba(255,140,0,0.2);'>LIVE</span>
       </div>
-      <div style='height: 180px; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; position: relative;'>
-          <!-- CSS Visual -->
-          <div style='position: relative; width: 120px; height: 120px; display: flex; align-items: center; justify-content: center;'>
-              <div style='width: 32px; height: 32px; background: #ff8c00; border-radius: 50%; box-shadow: 0 0 30px rgba(255,140,0,0.6); z-index: 10; animation: float 4s ease-in-out infinite;'></div>
-              <div style='position: absolute; width: 80px; height: 80px; border: 1px solid rgba(255,255,255,0.1); border-radius: 50%;'></div>
-              <div style='position: absolute; width: 110px; height: 110px; border: 1px dashed rgba(255,140,0,0.3); border-radius: 50%;'></div>
-          </div>
-          <!-- Memory load bar -->
-          <div style='position: absolute; bottom: 16px; left: 24px; right: 24px;'>
-              <div style='display: flex; justify-content: space-between; font-size: 10px; font-family: "JetBrains Mono"; color: #a1a1aa; margin-bottom: 4px;'>
-                  <span>SYNC_LOAD</span><span>84.2%</span>
-              </div>
-              <div style='width: 100%; height: 2px; background: rgba(255,255,255,0.1);'>
-                  <div style='width: 84%; height: 100%; background: #ff8c00; box-shadow: 0 0 8px rgba(255,140,0,0.6);'></div>
-              </div>
+      <div style='height: 100px; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; position: relative;'>
+          <div style='position: relative; width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;'>
+              <div style='width: 16px; height: 16px; background: #ff8c00; border-radius: 50%; box-shadow: 0 0 15px rgba(255,140,0,0.6); z-index: 10; animation: float 4s ease-in-out infinite;'></div>
+              <div style='position: absolute; width: 40px; height: 40px; border: 1px solid rgba(255,255,255,0.1); border-radius: 50%;'></div>
+              <div style='position: absolute; width: 56px; height: 56px; border: 1px dashed rgba(255,140,0,0.3); border-radius: 50%;'></div>
           </div>
       </div>
   </div>
-  <style>
-      @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-10px); } }
-  </style>
+  <style>@keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }</style>
   """, unsafe_allow_html=True)
 
-
-  # --- GAMMA AI PPT STUDIO ---
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>🎨 Presentation Studio</div>",
-      unsafe_allow_html=True,
+  # Inference Engine
+  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
+  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>⚙️ Inference Engine</div>", unsafe_allow_html=True)
+  selected_model = st.selectbox(
+      "API Gateway Endpoint:", options=list(MODEL_OPTIONS.keys()), index=0, label_visibility="collapsed"
   )
-
-  ppt_topic_input = st.text_input(
-      "Presentation Topic:",
-      placeholder="e.g. Types of Artificial Intelligence",
-  )
-
-  btn_qwen, btn_gemini = st.columns(2)
-  with btn_qwen:
-    if st.button("🚀 Qwen Gen", use_container_width=True):
-      if not GROQ_API_KEY:
-        st.error("Please add GROQ_API_KEY to your Streamlit secrets.")
-      elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Qwen..."):
-          new_slides, status_msg = generate_slides_with_qwen(
-              ppt_topic_input, GROQ_API_KEY
-          )
-          if new_slides and isinstance(new_slides, list):
-            st.session_state.slides_data = new_slides
-            st.success(f"Deck generated! ({status_msg})")
-            st.rerun()
-          else:
-            st.error(f"Generation Failed: {status_msg}")
-
-  with btn_gemini:
-    if st.button("✨ Gemini Gen", use_container_width=True):
-      if not GEMINI_API_KEY:
-        st.error("Please add GEMINI_API_KEY to your Streamlit secrets.")
-      elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Gemini..."):
-          new_slides, err = generate_slides_with_gemini(
-              ppt_topic_input, GEMINI_API_KEY
-          )
-          if new_slides and isinstance(new_slides, list):
-            st.session_state.slides_data = new_slides
-            st.success("Generated comprehensive deck!")
-            st.rerun()
-          else:
-            st.error(f"Generation Failed: {err}")
-
-  with st.expander("✏️ Live Slide Editor", expanded=False):
-    if not st.session_state.slides_data or not isinstance(
-        st.session_state.slides_data, list
-    ):
-      st.session_state.slides_data = [{
-          "title": "Slide 1",
-          "subtitle": "Overview",
-          "image_keyword": "technology",
-          "cards": [{"heading": "Card 1", "text": "Details"}],
-      }]
-
-    tabs = st.tabs(
-        [f"S{i+1}" for i in range(len(st.session_state.slides_data))]
-    )
-
-    for i, tab in enumerate(tabs):
-      with tab:
-        slide_info = st.session_state.slides_data[i]
-        if not isinstance(slide_info, dict):
-          slide_info = {
-              "title": f"Slide {i+1}",
-              "subtitle": "",
-              "image_keyword": "ai",
-              "cards": [],
-          }
-          st.session_state.slides_data[i] = slide_info
-
-        st.session_state.slides_data[i]["title"] = st.text_input(
-            f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}"
-        )
-        st.session_state.slides_data[i]["subtitle"] = st.text_input(
-            f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}"
-        )
-        st.session_state.slides_data[i]["image_keyword"] = st.text_input(
-            f"Image {i+1}",
-            slide_info.get("image_keyword", ""),
-            key=f"img_{i}",
-        )
-
-        cards = slide_info.get("cards", [])
-        if not isinstance(cards, list):
-          cards = [{"heading": "Detail", "text": str(cards)}]
-
-        for j, card in enumerate(cards):
-          st.markdown(f"<div style='font-size: 11px; font-weight: bold; margin-top: 10px; color: #a1a1aa;'>Card {j+1}</div>", unsafe_allow_html=True)
-          if isinstance(card, dict):
-            h_val = st.text_input(
-                f"Heading",
-                card.get("heading", ""),
-                key=f"ch_{i}_{j}",
-                label_visibility="collapsed"
-            )
-            b_val = st.text_area(
-                f"Text", card.get("text", ""), key=f"ct_{i}_{j}", label_visibility="collapsed"
-            )
-            cards[j] = {"heading": h_val, "text": b_val}
-          else:
-            b_val = st.text_input(f"Card {j+1}", str(card), key=f"ct_{i}_{j}", label_visibility="collapsed")
-            cards[j] = {"heading": "Note", "text": b_val}
-        st.session_state.slides_data[i]["cards"] = cards
-
-  if st.button("📥 EXPORT .PPTX", use_container_width=True):
-    with st.spinner("Building slide deck..."):
-      file_path = create_gamma_style_pptx(st.session_state.slides_data)
-      with open(file_path, "rb") as f:
-        st.download_button(
-            label="DOWNLOAD FILE",
-            data=f,
-            file_name="Gamma_Style_Presentation.pptx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            ),
-            use_container_width=True,
-        )
+  st.markdown(f"<div style='font-size: 9px; color: #a1a1aa; font-family: \"JetBrains Mono\"; margin-top: 4px;'>{MODEL_OPTIONS[selected_model]['desc']}</div>", unsafe_allow_html=True)
   st.markdown("</div>", unsafe_allow_html=True)
 
-
-  # --- SECURED WEB SEARCH INDEXER ---
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>🌐 Web Crawler (Tavily)</div>",
-      unsafe_allow_html=True,
-  )
-
-  web_query = st.text_input(
-      "Query:",
-      placeholder="e.g. Current AI news",
-      label_visibility="collapsed",
-  )
-
+  # Web Crawler
+  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
+  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>🌐 Web Crawler (Tavily)</div>", unsafe_allow_html=True)
+  web_query = st.text_input("Query:", placeholder="e.g. Current AI news", label_visibility="collapsed")
   if st.button("FETCH & INDEX", use_container_width=True):
     if not TAVILY_API_KEY or not TAVILY_API_KEY.startswith("tvly-"):
       st.error("No active Tavily API Key found in Streamlit Secrets.")
@@ -1146,30 +1025,22 @@ with col_left:
               "api_key": TAVILY_API_KEY.strip(),
               "query": web_query,
               "search_depth": "advanced",
-              "max_results": 8,
+              "max_results": 4,
           }
           response = requests.post(api_url, json=payload, timeout=25)
           if response.status_code == 200:
             results = response.json().get("results", [])
             web_docs = [
                 Document(
-                    page_content=(
-                        f"Title: {r.get('title')}\nSource:"
-                        f" {r.get('url')}\nContext: {r.get('content')}"
-                    ),
-                    metadata={
-                        "source": r.get("url", ""),
-                        "title": r.get("title", ""),
-                    },
+                    page_content=f"Title: {r.get('title')}\nSource: {r.get('url')}\nContext: {r.get('content')}",
+                    metadata={"source": r.get("url", ""), "title": r.get("title", "")},
                 )
                 for r in results
             ]
             chunks = text_splitter.split_documents(web_docs)
             if chunks:
               if st.session_state.vector_db is None:
-                st.session_state.vector_db = FAISS.from_documents(
-                    chunks, embedder
-                )
+                st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
               else:
                 st.session_state.vector_db.add_documents(chunks)
               st.session_state.node_count += len(chunks)
@@ -1178,18 +1049,11 @@ with col_left:
           st.error(f"Search failed: {str(e)}")
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # --- LOCAL DOCUMENTS INDEXER ---
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>📚 Material Append</div>",
-      unsafe_allow_html=True,
-  )
+  # Local Documents
+  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
+  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>📚 Material Append</div>", unsafe_allow_html=True)
   uploaded_files = st.file_uploader(
-      "Upload course materials...",
-      type=["pdf", "txt"],
-      accept_multiple_files=True,
-      label_visibility="collapsed",
-      key="file_in",
+      "Upload course materials...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in"
   )
   if st.button("+ ADD TO KNOWLEDGE", use_container_width=True):
     if uploaded_files:
@@ -1216,20 +1080,37 @@ with col_left:
           chunks = text_splitter.split_documents(docs)
           if chunks:
             if st.session_state.vector_db is None:
-              st.session_state.vector_db = FAISS.from_documents(
-                  chunks, embedder
-              )
+              st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
             else:
               st.session_state.vector_db.add_documents(chunks)
             st.session_state.node_count += len(chunks)
-            st.success(f"Indexed {len(chunks)} document blocks.")
+            st.success(f"Indexed {len(chunks)} blocks.")
+  st.markdown("</div>", unsafe_allow_html=True)
+
+  # Session Control
+  st.markdown("<div class='glass-panel' style='padding: 12px;'>", unsafe_allow_html=True)
+  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>🛠️ Session Control</div>", unsafe_allow_html=True)
+  if st.button("FLUSH MEMORY", use_container_width=True):
+    st.session_state.chat_history = []
+    st.session_state.vector_db = None
+    st.session_state.node_count = 0
+    st.session_state.response_time = "0.00"
+    st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
+    st.rerun()
+  
+  if st.button("TERMINATE SESSION", use_container_width=True, type="secondary"):
+    st.session_state.authenticated = False
+    cookie_manager.delete("apollo_somaiya_session")
+    st.rerun()
   st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ================= MIDDLE COLUMN: MAIN STUDY CONSOLE =================
-with col_mid:
+# ================= MAIN AREA: CONSOLE & TOOLS =================
+col_chat, col_tools = st.columns([6, 4], gap="large")
+
+# ----------------- MAIN LEFT: CHAT CONSOLE -----------------
+with col_chat:
   
-  # Styled container for the terminal interface header
   st.markdown("""
   <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center;'>
       <div style='display: flex; gap: 8px; align-items: center;'>
@@ -1252,15 +1133,12 @@ with col_mid:
         unsafe_allow_html=True,
     )
 
-  # Use a wrapper for chat to simulate the terminal look
   chat_scroll_pane = st.container(height=650, border=False)
 
-  # Render existing chat history using charts.py for assistant messages
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
       with st.chat_message(msg["role"]):
         if msg["role"] == "assistant":
-          # Output assistant messages with the required styling structure applied generally via CSS
           render_dynamic_chart_from_text(msg["content"])
         else:
           st.markdown(msg["content"])
@@ -1272,7 +1150,6 @@ with col_mid:
     start_time = time.time()
     context_payload = ""
 
-    # Prompt extension to instruct LLM on chart output format
     chart_instruction = (
         "\n\nIf the user asks for a chart, graph, data visualization, or numerical comparison, "
         "append a JSON code block at the very end of your response following this exact structure:\n"
@@ -1289,53 +1166,31 @@ with col_mid:
     )
 
     if st.session_state.vector_db is not None:
-      retriever = st.session_state.vector_db.as_retriever(
-          search_kwargs={"k": 5}
-      )
+      retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
       matched_nodes = retriever.invoke(user_query)
       context_payload = "\n\n".join([
           f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
           for node in matched_nodes
       ])
-      sys_instruction = (
-          "You are APOLLO OMNI AI, an advanced study buddy. Answer using ONLY"
-          f" context below.{chart_instruction}"
-      )
-      clean_ctx = (
-          context_payload.replace("<", "&lt;")
-          .replace(">", "&gt;")
-          .replace("\n", "<br>")
-      )
-      st.session_state.source_reference = (
-          f"<div class='source-box'><strong>Active Context"
-          f" (RAG):</strong><br><br>{clean_ctx}</div>"
-      )
+      sys_instruction = f"You are APOLLO OMNI AI, an advanced study buddy. Answer using ONLY context below.{chart_instruction}"
+      clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+      st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
     else:
-      sys_instruction = (
-          "You are APOLLO OMNI AI, an advanced study buddy. Answer based on"
-          f" general knowledge.{chart_instruction}"
-      )
-      st.session_state.source_reference = (
-          "<div class='source-box font-mono'>No active context. General weights"
-          " used.</div>"
-      )
+      sys_instruction = f"You are APOLLO OMNI AI, an advanced study buddy. Answer based on general knowledge.{chart_instruction}"
+      st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
 
     message_stream = [{"role": "system", "content": sys_instruction}]
     for msg in st.session_state.chat_history[-4:]:
       message_stream.append({"role": msg["role"], "content": msg["content"]})
     message_stream.append({
         "role": "user",
-        "content": (
-            f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}"
-        ),
+        "content": f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}",
     })
 
     with chat_scroll_pane:
       with st.chat_message("assistant"):
         try:
-          stream = generate_llm_stream(
-              message_stream, GROQ_API_KEY, OPENROUTER_API_KEY, selected_model
-          )
+          stream = generate_llm_stream(message_stream, GROQ_API_KEY, OPENROUTER_API_KEY, selected_model)
           collected_tokens = st.write_stream(stream)
           if not collected_tokens or not str(collected_tokens).strip():
             collected_tokens = "⚠️ EMPTY RESPONSE."
@@ -1344,94 +1199,84 @@ with col_mid:
           collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
           st.markdown(collected_tokens)
 
-    st.session_state.chat_history.append(
-        {"role": "assistant", "content": collected_tokens}
-    )
+    st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
     st.session_state.response_time = f"{time.time() - start_time:.2f}"
     st.rerun()
 
 
-# ================= RIGHT COLUMN: PERFORMANCE & TELEMETRY MATRIX =================
-with col_right:
+# ----------------- MAIN RIGHT: PPT STUDIO & CONTEXT -----------------
+with col_tools:
   
-  # Latency Metric Visual Mapping from HTML
+  # --- GAMMA AI PPT STUDIO ---
   st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>📊 Generation Latency</div>",
-      unsafe_allow_html=True,
-  )
-  st.markdown(
-      f"""
-      <div style='display: flex; flex-direction: column; align-items: center; padding: 10px 0;'>
-          <div style='font-size: 48px; font-weight: 900; font-family: "JetBrains Mono"; color: white; line-height: 1;'>
-              {st.session_state.response_time}<span style='font-size: 20px; color: #ff8c00;'>s</span>
-          </div>
-          <p style='font-size: 10px; color: #71717a; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 8px;'>Response Time</p>
-      </div>
-      """,
-      unsafe_allow_html=True,
-  )
+  st.markdown("<div class='panel-header'>🎨 Presentation Studio</div>", unsafe_allow_html=True)
+
+  ppt_topic_input = st.text_input("Presentation Topic:", placeholder="e.g. Types of Artificial Intelligence")
+
+  btn_qwen, btn_gemini = st.columns(2)
+  with btn_qwen:
+    if st.button("🚀 Qwen Gen", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY.")
+      elif ppt_topic_input:
+        with st.spinner("Generating..."):
+          new_slides, status = generate_slides_with_qwen(ppt_topic_input, GROQ_API_KEY)
+          if new_slides:
+            st.session_state.slides_data = new_slides
+            st.success("Deck generated!")
+            st.rerun()
+          else:
+            st.error(f"Failed: {status}")
+
+  with btn_gemini:
+    if st.button("✨ Gemini Gen", use_container_width=True):
+      if not GEMINI_API_KEY:
+        st.error("Missing GEMINI_API_KEY.")
+      elif ppt_topic_input:
+        with st.spinner("Generating..."):
+          new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_API_KEY)
+          if new_slides:
+            st.session_state.slides_data = new_slides
+            st.success("Deck generated!")
+            st.rerun()
+          else:
+            st.error(f"Failed: {err}")
+
+  with st.expander("✏️ Live Slide Editor", expanded=False):
+    if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
+      st.session_state.slides_data = [{"title": "Slide 1", "subtitle": "Overview", "image_keyword": "technology", "cards": [{"heading": "Card 1", "text": "Details"}]}]
+
+    tabs = st.tabs([f"S{i+1}" for i in range(len(st.session_state.slides_data))])
+
+    for i, tab in enumerate(tabs):
+      with tab:
+        slide_info = st.session_state.slides_data[i]
+        st.session_state.slides_data[i]["title"] = st.text_input(f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}")
+        st.session_state.slides_data[i]["subtitle"] = st.text_input(f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}")
+        st.session_state.slides_data[i]["image_keyword"] = st.text_input(f"Image {i+1}", slide_info.get("image_keyword", ""), key=f"img_{i}")
+
+        cards = slide_info.get("cards", [])
+        if not isinstance(cards, list):
+          cards = [{"heading": "Detail", "text": str(cards)}]
+
+        for j, card in enumerate(cards):
+          st.markdown(f"<div style='font-size: 11px; font-weight: bold; margin-top: 10px; color: #a1a1aa;'>Card {j+1}</div>", unsafe_allow_html=True)
+          if isinstance(card, dict):
+            cards[j]["heading"] = st.text_input(f"Heading", card.get("heading", ""), key=f"ch_{i}_{j}", label_visibility="collapsed")
+            cards[j]["text"] = st.text_area(f"Text", card.get("text", ""), key=f"ct_{i}_{j}", label_visibility="collapsed")
+          else:
+            cards[j] = {"heading": "Note", "text": st.text_input(f"Card {j+1}", str(card), key=f"ct_{i}_{j}", label_visibility="collapsed")}
+        st.session_state.slides_data[i]["cards"] = cards
+
+  if st.button("📥 EXPORT .PPTX", use_container_width=True):
+    with st.spinner("Building slide deck..."):
+      file_path = create_gamma_style_pptx(st.session_state.slides_data)
+      with open(file_path, "rb") as f:
+        st.download_button(label="DOWNLOAD FILE", data=f, file_name="Apollo_Presentation.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation", use_container_width=True)
   st.markdown("</div>", unsafe_allow_html=True)
 
+  # --- ACTIVE CONTEXT VIEWER ---
   st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>📑 Database Vectors</div>",
-      unsafe_allow_html=True,
-  )
-  st.markdown(
-      f"""
-      <div style='display: flex; flex-direction: column; align-items: center; padding: 10px 0;'>
-          <div style='font-size: 32px; font-weight: 900; font-family: "JetBrains Mono"; color: white; line-height: 1;'>
-              {st.session_state.node_count}
-          </div>
-          <p style='font-size: 10px; color: #71717a; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 8px;'>Indexed Chunks</p>
-      </div>
-      """,
-      unsafe_allow_html=True,
-  )
-  st.markdown("</div>", unsafe_allow_html=True)
-
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>📑 Active Context View</div>",
-      unsafe_allow_html=True,
-  )
+  st.markdown("<div class='panel-header'>📑 Active Context View</div>", unsafe_allow_html=True)
   st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
-  st.markdown("</div>", unsafe_allow_html=True)
-
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>🛠️ Session Control</div>",
-      unsafe_allow_html=True,
-  )
-  c1, c2 = st.columns(2)
-  with c1:
-    if st.button("FLUSH LOGS", use_container_width=True):
-      st.session_state.chat_history = []
-      st.session_state.vector_db = None
-      st.session_state.node_count = 0
-      st.session_state.response_time = "0.00"
-      st.session_state.source_reference = (
-          "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
-      )
-      st.rerun()
-  with c2:
-    chat_log = "\n".join([
-        f"{msg['role'].upper()}: {msg['content']}"
-        for msg in st.session_state.chat_history
-    ])
-    st.download_button(
-        "EXPORT",
-        data=chat_log,
-        file_name="apollo_session_export.txt",
-        mime="text/plain",
-        use_container_width=True,
-    )
-
-  st.markdown("<br>", unsafe_allow_html=True)
-  if st.button("TERMINATE SESSION", use_container_width=True, type="secondary"):
-    st.session_state.authenticated = False
-    cookie_manager.delete("apollo_somaiya_session")
-    st.rerun()
-
   st.markdown("</div>", unsafe_allow_html=True)
