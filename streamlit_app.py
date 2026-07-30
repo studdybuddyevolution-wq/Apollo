@@ -118,117 +118,20 @@ if "user_email" not in st.session_state:
 if "slides_data" not in st.session_state:
   st.session_state.slides_data = [
       {
-          "title": "Artificial Intelligence: Foundational Overview",
-          "subtitle": (
-              "Understanding Cognitive Architecture and Modern Computing"
-          ),
-          "image_keyword": (
-              "futuristic artificial intelligence neural network dark blue glow"
-          ),
+          "title": "New Presentation Outline",
+          "subtitle": "Awaiting Generation",
+          "image_keyword": "minimalist abstract technology background",
           "cards": [
               {
-                  "heading": "Core Definition",
+                  "heading": "Ready to Generate",
                   "text": (
-                      "Artificial Intelligence (AI) refers to the simulation of"
-                      " human intelligence in machines programmed to think,"
-                      " learn, reason, and make autonomous decisions."
+                      "Enter a topic in the Presentation Studio below and click "
+                      "'Qwen Gen' or 'Gemini Gen' to build your slides."
                   ),
-              },
-              {
-                  "heading": "Historical Evolution",
-                  "text": (
-                      "Evolved from symbolic logic and rule-based expert systems"
-                      " in the 1950s to modern statistical learning, deep"
-                      " neural networks, and generative models."
-                  ),
-              },
-              {
-                  "heading": "Primary Paradigm Shift",
-                  "text": (
-                      "Shifting from explicit hard-coded software engineering to"
-                      " data-driven pattern recognition and self-improving"
-                      " cognitive algorithms."
-                  ),
-              },
+              }
           ],
-      },
-      {
-          "title": "Types of AI by Capability",
-          "subtitle": (
-              "Classification Based on Performance & Autonomy Levels"
-          ),
-          "image_keyword": (
-              "futuristic robot brain technology cybernetic interface"
-          ),
-          "cards": [
-              {
-                  "heading": "Narrow AI (ANI)",
-                  "text": (
-                      "Specialized AI designed to perform dedicated tasks with"
-                      " high proficiency (e.g., Siri, facial recognition, search"
-                      " engines). Cannot operate outside its domain."
-                  ),
-              },
-              {
-                  "heading": "General AI (AGI)",
-                  "text": (
-                      "Hypothetical AI possessing human-level intelligence across"
-                      " diverse domains, capable of transfer learning, abstract"
-                      " reasoning, and adaptability."
-                  ),
-              },
-              {
-                  "heading": "Super AI (ASI)",
-                  "text": (
-                      "Theoretical future state where artificial systems"
-                      " surpass human intelligence in all creative,"
-                      " scientific, emotional, and strategic domains."
-                  ),
-              },
-          ],
-      },
-      {
-          "title": "Primary Domains of Artificial Intelligence",
-          "subtitle": "Core Technical Branches and Specialized Fields",
-          "image_keyword": (
-              "machine learning deep learning data visual science concept"
-          ),
-          "cards": [
-              {
-                  "heading": "Machine & Deep Learning",
-                  "text": (
-                      "Statistical foundation allowing algorithms to parse"
-                      " massive datasets, optimize parameters, and construct"
-                      " predictive neural models."
-                  ),
-              },
-              {
-                  "heading": "Natural Language Processing (NLP)",
-                  "text": (
-                      "Enables machines to comprehend, interpret, generate, and"
-                      " translate human languages via transformer architectures"
-                      " and semantic analysis."
-                  ),
-              },
-              {
-                  "heading": "Computer Vision & Visual AI",
-                  "text": (
-                      "Enables software to extract structured context from"
-                      " digital images and video streams for object tracking and"
-                      " visual diagnostics."
-                  ),
-              },
-              {
-                  "heading": "Robotics & Autonomous Systems",
-                  "text": (
-                      "Integrates physical actuators, sensor fusion, and spatial"
-                      " navigation algorithms for hardware operational autonomy."
-                  ),
-              },
-          ],
-      },
+      }
   ]
-
 # 6. Multi-Provider Model Matrix
 MODEL_OPTIONS = {
     "Qwen 3.6 27B (Groq LPU)": {
