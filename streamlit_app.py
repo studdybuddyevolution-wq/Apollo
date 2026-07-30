@@ -27,6 +27,9 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 import streamlit as st
 
+# Import Modular Voice Handler
+from voice_handler import render_voice_input
+
 # Import interactive Plotly chart engine
 try:
   from charts import render_dynamic_chart_from_text
@@ -1127,7 +1130,7 @@ with col_chat:
         unsafe_allow_html=True,
     )
 
-  chat_scroll_pane = st.container(height=480, border=False)
+  chat_scroll_pane = st.container(height=440, border=False)
 
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
@@ -1137,11 +1140,16 @@ with col_chat:
         else:
           st.markdown(msg["content"])
 
+  # --- VOICE & TEXT INPUT MATRIX ---
+  voice_prompt = render_voice_input(GROQ_API_KEY, key_suffix="chat_main")
   user_query = st.chat_input("AWAITING COMMAND...")
 
-  if user_query:
+  # Consolidate voice transcription or text input
+  final_query = voice_prompt or user_query
+
+  if final_query:
     st.session_state.chat_history.append(
-        {"role": "user", "content": user_query}
+        {"role": "user", "content": final_query}
     )
     start_time = time.time()
     context_payload = ""
@@ -1159,7 +1167,7 @@ with col_chat:
       retriever = st.session_state.vector_db.as_retriever(
           search_kwargs={"k": 5}
       )
-      matched_nodes = retriever.invoke(user_query)
+      matched_nodes = retriever.invoke(final_query)
       context_payload = "\n\n".join([
           f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
           for node in matched_nodes
@@ -1192,7 +1200,7 @@ with col_chat:
       message_stream.append({"role": msg["role"], "content": msg["content"]})
     message_stream.append({
         "role": "user",
-        "content": f"Context Matrix:\n{context_payload}\n\nQuery: {user_query}",
+        "content": f"Context Matrix:\n{context_payload}\n\nQuery: {final_query}",
     })
 
     with chat_scroll_pane:
