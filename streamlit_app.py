@@ -1125,7 +1125,7 @@ with col_chat:
   if not st.session_state.chat_history:
     st.markdown(
         """
-        <div style='margin-top: 100px; margin-bottom: 30px; text-align: center;'>
+        <div style='margin-top: 50px; margin-bottom: 20px; text-align: center;'>
             <h2 style='color: #ff8c00; font-family: "Inter", sans-serif; font-weight: 700; font-size: 24px; letter-spacing: 0.1em;'>CONSOLE INITIALIZED</h2>
             <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 12px; margin-top: 10px;'>Awaiting input parameters in the command line below.</p>
         </div>
@@ -1133,7 +1133,7 @@ with col_chat:
         unsafe_allow_html=True,
     )
 
-  chat_scroll_pane = st.container(height=650, border=False)
+  chat_scroll_pane = st.container(height=480, border=False)
 
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
