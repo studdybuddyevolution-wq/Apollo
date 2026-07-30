@@ -27,8 +27,14 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 import streamlit as st
 
-# Import the interactive Plotly chart engine
-from charts import render_dynamic_chart_from_text
+# Import interactive Plotly chart engine
+try:
+  from charts import render_dynamic_chart_from_text
+except ImportError:
+
+  def render_dynamic_chart_from_text(text):
+    pass
+
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
@@ -114,52 +120,74 @@ if "generated_otp" not in st.session_state:
 if "user_email" not in st.session_state:
   st.session_state.user_email = ""
 
-# Gamma AI Style Initial Slides State
+# INITIAL SLIDES DEFAULT STATE (BOEING OVERVIEW)
 if "slides_data" not in st.session_state:
   st.session_state.slides_data = [
       {
-          "title": "New Presentation Outline",
-          "subtitle": "Awaiting Generation",
-          "image_keyword": "minimalist abstract technology background",
+          "title": "Boeing Commercial Aircraft: Fleet & Engineering",
+          "subtitle": (
+              "Exploring Modern Commercial Aviation, Jet Families, and Aerospace"
+              " Innovation"
+          ),
+          "image_keyword": "boeing commercial passenger jet airplane flying sky",
           "cards": [
               {
-                  "heading": "Ready to Generate",
+                  "heading": "Company & History",
                   "text": (
-                      "Enter a topic in the Presentation Studio below and click "
-                      "'Qwen Gen' or 'Gemini Gen' to build your slides."
+                      "Boeing is one of the world's leading aerospace"
+                      " manufacturers, designing and producing commercial"
+                      " jetliners, defense aircraft, and space systems."
                   ),
-              }
+              },
+              {
+                  "heading": "Commercial Lineup",
+                  "text": (
+                      "Core aircraft families include the single-aisle 737"
+                      " MAX, the wide-body 777X, and the composite-intensive"
+                      " 787 Dreamliner."
+                  ),
+              },
+              {
+                  "heading": "Aero Innovation",
+                  "text": (
+                      "Pioneering high-bypass turbofan engine integration,"
+                      " carbon-fiber composite fuselages, and advanced fuel"
+                      " efficiency."
+                  ),
+              },
           ],
       }
   ]
-# 6. Multi-Provider Model Matrix
+
+# 6. Multi-Provider Model Matrix (Groq Llama 3.3 70B Default)
 MODEL_OPTIONS = {
-    "Qwen 3.6 27B (Groq LPU)": {
-        "provider": "groq",
-        "model_id": "qwen/qwen3.6-27b",
-        "desc": "Alibaba Qwen 3.6 running at ultra-fast inference speed via Groq.",
-    },
     "Meta Llama 3.3 70B (Groq)": {
         "provider": "groq",
         "model_id": "llama-3.3-70b-versatile",
-        "desc": "Massive 70B model running with exceptional speed on Groq.",
+        "desc": "Massive 70B model running at blazing speed on Groq LPUs.",
     },
-    "Google Gemma 4 26B (OpenRouter)": {
+    "Meta Llama 3.1 8B (Groq)": {
+        "provider": "groq",
+        "model_id": "llama-3.1-8b-instant",
+        "desc": "Ultra-fast inference speed on Groq LPU.",
+    },
+    "Google Gemma 2 9B (OpenRouter)": {
         "provider": "openrouter",
-        "model_id": "google/gemma-4-26b-a4b-it:free",
-        "desc": "Google's efficient model via OpenRouter gateway.",
+        "model_id": "google/gemma-2-9b-it:free",
+        "desc": "Google's lightweight model via OpenRouter free tier.",
     },
 }
 
-# 7. Image Engine
+
+# 7. Image Engine via Pollinations
 def fetch_image_by_keyword(keyword):
   if not keyword:
-    keyword = "artificial intelligence neural technology"
+    keyword = "boeing airplane commercial aircraft sky"
 
   clean_kw = re.sub(r"[^\w\s]", "", keyword).strip()
   prompt_encoded = urllib.parse.quote(
-      f"sleek modern technological visual representation of {clean_kw}, high"
-      " resolution, 8k, dark aesthetic, minimalist design"
+      f"high resolution modern photograph of {clean_kw}, clear detailed sky,"
+      " 8k wallpaper"
   )
 
   pollinations_url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
@@ -185,7 +213,7 @@ def fetch_image_by_keyword(keyword):
   return None
 
 
-# 8. Gamma AI PPTX Builder Engine
+# 8. PPTX Builder Engine (Gamma AI Style)
 def create_gamma_style_pptx(slides_data):
   prs = Presentation()
   prs.slide_width = Inches(13.333)
@@ -330,7 +358,7 @@ def create_gamma_style_pptx(slides_data):
 def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   provider = model_cfg.get("provider", "groq")
-  model_id = model_cfg.get("model_id", "")
+  model_id = model_cfg.get("model_id", "llama-3.3-70b-versatile")
 
   if provider == "groq":
     if not groq_key or not groq_key.startswith("gsk_"):
@@ -405,17 +433,15 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
       yield f"❌ Network Failure: {str(e)}"
 
 
-# 10. ROBUST SLIDE GENERATOR (COT SUPPRESSION + STRICT PARSER)
+# 10. Robust JSON Parser & Slide Generator for Groq
 def parse_robust_json(raw_text):
   if not raw_text:
     return None
 
-  # Clean out thinking blocks if present
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
   if "</think>" in clean_text:
     clean_text = clean_text.split("</think>")[-1]
 
-  # Slice directly from first '{' to last '}'
   start = clean_text.find("{")
   end = clean_text.rfind("}")
 
@@ -437,7 +463,7 @@ def parse_robust_json(raw_text):
   return None
 
 
-def generate_slides_with_qwen(topic, groq_key=""):
+def generate_slides_with_groq(topic, groq_key=""):
   groq_key = groq_key.strip() if groq_key else ""
 
   if not groq_key or not groq_key.startswith("gsk_"):
@@ -446,10 +472,9 @@ def generate_slides_with_qwen(topic, groq_key=""):
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  prompt = f"""Create a detailed presentation on: '{topic}'.
+  prompt = f"""Create an in-depth 4 to 5 slide presentation outline on the topic: '{topic}'.
 
-DO NOT output <think> tags, chain of thought reasoning, or introductory conversational filler.
-OUTPUT raw JSON ONLY. Start directly with '{{' and end with '}}'.
+OUTPUT RAW JSON ONLY. Do NOT use markdown backticks or explanations. Start with '{{' and end with '}}'.
 
 SCHEMA REQUIRED:
 {{
@@ -457,19 +482,15 @@ SCHEMA REQUIRED:
     {{
       "title": "Slide Title",
       "subtitle": "Informative Subtitle",
-      "image_keyword": "descriptive technology topic image prompt",
+      "image_keyword": "descriptive picture keyword",
       "cards": [
         {{
-          "heading": "Core Subtopic Heading",
-          "text": "Detailed, multi-sentence contextual explanation with deep insights."
+          "heading": "Subtopic Heading",
+          "text": "Detailed multi-sentence content regarding {topic}."
         }},
         {{
           "heading": "Technical Mechanics",
-          "text": "Detailed multi-sentence explanation of principles, applications, or mechanisms."
-        }},
-        {{
-          "heading": "Domain Relevance",
-          "text": "Detailed multi-sentence explanation of real-world implementation."
+          "text": "Comprehensive analysis of modern engineering and performance."
         }}
       ]
     }}
@@ -477,9 +498,7 @@ SCHEMA REQUIRED:
 }}"""
 
   client = Groq(api_key=groq_key)
-
-  # Model attempt priority: Qwen 3.6 -> Fallback to Llama 3.3 70B
-  models_to_try = ["qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+  models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
   for model_id in models_to_try:
     try:
@@ -489,8 +508,8 @@ SCHEMA REQUIRED:
               {
                   "role": "system",
                   "content": (
-                      "You are a presentation JSON generator. You output ONLY"
-                      " raw JSON without thinking tags or commentary."
+                      "You are a slide deck generator. You output ONLY valid"
+                      " raw JSON."
                   ),
               },
               {"role": "user", "content": prompt},
@@ -510,30 +529,28 @@ SCHEMA REQUIRED:
 
   return (
       None,
-      "Failed to parse JSON across available models. Please try clicking Gemini"
-      " Gamma or retry.",
+      "Failed to parse slides JSON. Try clicking 'Gemini Gen' as a backup.",
   )
 
 
-# 11. Legacy Gemini Slide Generator
+# 11. Gemini Slide Generator (Backup Endpoint)
 def generate_slides_with_gemini(topic, gemini_key):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
   url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
-  prompt = f"""Create an in-depth academic presentation outline about '{topic}'.
-Return ONLY a valid JSON object with key 'slides' containing 5-6 detailed slide objects.
-Do NOT include commentary outside JSON.
+  prompt = f"""Create an in-depth presentation outline about '{topic}'.
+Return ONLY a valid JSON object with key 'slides' containing 4-5 detailed slide objects.
 Schema:
 {{
   "slides": [
     {{
       "title": "Title",
       "subtitle": "Subtitle",
-      "image_keyword": "descriptive technology prompt",
+      "image_keyword": "descriptive topic prompt",
       "cards": [
-        {{"heading": "Heading", "text": "Comprehensive multi-sentence explanation text."}}
+        {{"heading": "Heading", "text": "Comprehensive explanation text."}}
       ]
     }}
   ]
@@ -560,7 +577,7 @@ Schema:
     return None, str(e)
 
 
-# 12. Email Dispatcher Function
+# 12. Email Dispatcher Function for Auth
 def send_otp_email(target_email, otp_code):
   try:
     sender_email = st.secrets.get("EMAIL_SENDER", "")
@@ -586,7 +603,7 @@ def send_otp_email(target_email, otp_code):
     return False, str(e)
 
 
-# 13. CSS Styling & Custom UI Layer (NEW OMNI UI DESIGN)
+# 13. CSS Styling & Custom UI Layer
 st.markdown(
     """
 <style>
@@ -600,7 +617,6 @@ st.markdown(
       --text-color: #e5e2e1;
     }
 
-    /* Core Application Reset */
     .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
         background-color: var(--surface-black) !important;
         color: var(--text-color) !important;
@@ -608,11 +624,9 @@ st.markdown(
     }
     [data-testid="stHeader"] { background: transparent !important; border-bottom: none !important; }
     
-    /* Typography Global Overrides */
     h1, h2, h3, h4, h5, h6, p, span, label, li, small, div { color: var(--text-color); }
     .font-mono { font-family: 'JetBrains Mono', monospace !important; }
 
-    /* UI Glass Panels (Replacing old cyber-cards) */
     .glass-panel {
       background: var(--glass-bg) !important;
       backdrop-filter: blur(12px) !important;
@@ -648,7 +662,6 @@ st.markdown(
       background-color: var(--primary-orange);
     }
 
-    /* Input Styling */
     div[data-testid="stChatInput"] textarea, div[data-testid="stChatInput"] { 
         background-color: rgba(0,0,0,0.8) !important; 
         border-color: rgba(255, 255, 255, 0.1) !important; 
@@ -664,7 +677,6 @@ st.markdown(
         background-color: transparent !important;
     }
 
-    /* Button Styling */
     .stButton button {
         background: var(--primary-orange) !important;
         color: #000 !important;
@@ -686,8 +698,7 @@ st.markdown(
         color: #a1a1aa !important;
         border: 1px solid rgba(255,255,255,0.1) !important;
     }
-    
-    /* Terminal / Chat Interface */
+
     div[data-testid="stChatMessage"] {
         font-family: 'JetBrains Mono', monospace !important;
         font-size: 13px !important;
@@ -707,7 +718,6 @@ st.markdown(
         background: rgba(255, 140, 0, 0.05) !important;
     }
 
-    /* Source Box Overrides */
     .source-box {
         background: rgba(0,0,0,0.6) !important;
         border: 1px solid rgba(255,255,255,0.05) !important;
@@ -720,7 +730,6 @@ st.markdown(
         max-height: 350px;
     }
 
-    /* Status Pulse & Animations */
     @keyframes pulse-ring {
       0% { transform: scale(.33); opacity: 1; }
       80%, 100% { opacity: 0; }
@@ -736,7 +745,6 @@ st.markdown(
     }
     .status-dot { width: 8px; height: 8px; background-color: #22c55e; border-radius: 100%; display: inline-block; }
 
-    /* Custom Header HTML mapping */
     .omni-header {
         display: flex;
         align-items: center;
@@ -765,7 +773,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Custom Header (HTML Design mapped to Streamlit)
+# Custom Header
 st.markdown(
     """
     <div class="omni-header">
@@ -789,24 +797,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- INJECT LAYOUT AND SPACING ADJUSTMENTS ---
-st.markdown("""
+# Spacing Adjustments
+st.markdown(
+    """
 <style>
-    /* Pull the UI up and expand width slightly */
     .block-container {
         padding-top: 2rem !important;
         padding-bottom: 1rem !important;
         max-width: 96% !important;
     }
-    /* Adjust header to fit the new tighter padding */
     .omni-header { margin-top: -10px !important; margin-bottom: 20px !important; }
-    /* Style the sidebar to match the Omni theme */
     [data-testid="stSidebar"] {
         background-color: #0a0a0c !important;
         border-right: 1px solid rgba(255, 140, 0, 0.15) !important;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ================= AUTHENTICATION GATEKEEPER =================
@@ -875,19 +883,32 @@ if not st.session_state.authenticated:
 
 # ================= SIDEBAR: SETTINGS & TOOLS =================
 with st.sidebar:
-  st.markdown("<h2 class='omni-brand' style='font-size: 16px; margin-bottom: 20px;'>APOLLO <span>OMNI</span><br><span style='font-size: 9px; color: #71717a; font-family: \"JetBrains Mono\";'>SYSTEM CONTROL PANEL</span></h2>", unsafe_allow_html=True)
-  
+  st.markdown(
+      "<h2 class='omni-brand' style='font-size: 16px; margin-bottom: 20px;'>APOLLO <span>OMNI</span><br><span style='font-size: 9px; color: #71717a; font-family: \"JetBrains Mono\";'>SYSTEM CONTROL PANEL</span></h2>",
+      unsafe_allow_html=True,
+  )
+
   # Telemetry Row
-  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
+      unsafe_allow_html=True,
+  )
   c_lat, c_vec = st.columns(2)
   with c_lat:
-      st.markdown(f"<div style='text-align:center;'><div style='font-size:20px; font-weight:900; color:white; font-family: \"JetBrains Mono\";'>{st.session_state.response_time}<span style='font-size:12px;color:#ff8c00;'>s</span></div><div style='font-size:9px; color:#a1a1aa; text-transform:uppercase;'>Latency</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='text-align:center;'><div style='font-size:20px; font-weight:900; color:white; font-family: \"JetBrains Mono\";'>{st.session_state.response_time}<span style='font-size:12px;color:#ff8c00;'>s</span></div><div style='font-size:9px; color:#a1a1aa; text-transform:uppercase;'>Latency</div></div>",
+        unsafe_allow_html=True,
+    )
   with c_vec:
-      st.markdown(f"<div style='text-align:center;'><div style='font-size:20px; font-weight:900; color:white; font-family: \"JetBrains Mono\";'>{st.session_state.node_count}</div><div style='font-size:9px; color:#a1a1aa; text-transform:uppercase;'>Vectors</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='text-align:center;'><div style='font-size:20px; font-weight:900; color:white; font-family: \"JetBrains Mono\";'>{st.session_state.node_count}</div><div style='font-size:9px; color:#a1a1aa; text-transform:uppercase;'>Vectors</div></div>",
+        unsafe_allow_html=True,
+    )
   st.markdown("</div>", unsafe_allow_html=True)
 
   # RAG Visual
-  st.markdown("""
+  st.markdown(
+      """
   <div class='glass-panel' style='padding: 0; overflow: hidden; margin-bottom: 16px;'>
       <div style='padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;'>
           <h2 style='font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: #a1a1aa; text-transform: uppercase; margin: 0;'>RAG_ENGINE_VISUAL</h2>
@@ -902,34 +923,62 @@ with st.sidebar:
       </div>
   </div>
   <style>@keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }</style>
-  """, unsafe_allow_html=True)
+  """,
+      unsafe_allow_html=True,
+  )
 
-  # Inference Engine
-  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
-  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>⚙️ Inference Engine</div>", unsafe_allow_html=True)
-  
+  # Inference Engine Selection
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
+      unsafe_allow_html=True,
+  )
+  st.markdown(
+      "<div class='panel-header' style='margin-bottom: 8px; padding-bottom:"
+      " 8px;'>⚙️ Inference Engine</div>",
+      unsafe_allow_html=True,
+  )
+
   if "user_prefs" not in st.session_state:
-      st.session_state.user_prefs = {
-          "default_model": "Qwen 3.6 27B (Groq LPU)"
-      }
-      
+    st.session_state.user_prefs = {
+        "default_model": "Meta Llama 3.3 70B (Groq)"
+    }
+
   model_list = list(MODEL_OPTIONS.keys())
-  saved_model = st.session_state.user_prefs.get("default_model", "Qwen 3.6 27B (Groq LPU)")
-  default_index = model_list.index(saved_model) if saved_model in model_list else 0
+  saved_model = st.session_state.user_prefs.get(
+      "default_model", "Meta Llama 3.3 70B (Groq)"
+  )
+  default_index = (
+      model_list.index(saved_model) if saved_model in model_list else 0
+  )
 
   selected_model = st.selectbox(
-      "API Gateway Endpoint:", 
-      options=model_list, 
-      index=default_index, 
-      label_visibility="collapsed"
+      "API Gateway Endpoint:",
+      options=model_list,
+      index=default_index,
+      label_visibility="collapsed",
   )
-  st.markdown(f"<div style='font-size: 9px; color: #a1a1aa; font-family: \"JetBrains Mono\"; margin-top: 4px;'>{MODEL_OPTIONS[selected_model]['desc']}</div>", unsafe_allow_html=True)
+  st.markdown(
+      f"<div style='font-size: 9px; color: #a1a1aa; font-family: \"JetBrains"
+      f" Mono\"; margin-top: 4px;'>{MODEL_OPTIONS[selected_model]['desc']}</div>",
+      unsafe_allow_html=True,
+  )
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # Web Crawler
-  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
-  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>🌐 Web Crawler (Tavily)</div>", unsafe_allow_html=True)
-  web_query = st.text_input("Query:", placeholder="e.g. Current AI news", label_visibility="collapsed")
+  # Web Crawler (Tavily)
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
+      unsafe_allow_html=True,
+  )
+  st.markdown(
+      "<div class='panel-header' style='margin-bottom: 8px; padding-bottom:"
+      " 8px;'>🌐 Web Crawler (Tavily)</div>",
+      unsafe_allow_html=True,
+  )
+  web_query = st.text_input(
+      "Query:",
+      placeholder="e.g. Boeing commercial fleet news",
+      label_visibility="collapsed",
+  )
   if st.button("FETCH & INDEX", use_container_width=True):
     if not TAVILY_API_KEY or not TAVILY_API_KEY.startswith("tvly-"):
       st.error("No active Tavily API Key found in Streamlit Secrets.")
@@ -949,14 +998,19 @@ with st.sidebar:
             web_docs = [
                 Document(
                     page_content=f"Title: {r.get('title')}\nSource: {r.get('url')}\nContext: {r.get('content')}",
-                    metadata={"source": r.get("url", ""), "title": r.get("title", "")},
+                    metadata={
+                        "source": r.get("url", ""),
+                        "title": r.get("title", ""),
+                    },
                 )
                 for r in results
             ]
             chunks = text_splitter.split_documents(web_docs)
             if chunks:
               if st.session_state.vector_db is None:
-                st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+                st.session_state.vector_db = FAISS.from_documents(
+                    chunks, embedder
+                )
               else:
                 st.session_state.vector_db.add_documents(chunks)
               st.session_state.node_count += len(chunks)
@@ -965,11 +1019,22 @@ with st.sidebar:
           st.error(f"Search failed: {str(e)}")
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # Local Documents
-  st.markdown("<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>", unsafe_allow_html=True)
-  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>📚 Material Append</div>", unsafe_allow_html=True)
+  # Local Documents Upload
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
+      unsafe_allow_html=True,
+  )
+  st.markdown(
+      "<div class='panel-header' style='margin-bottom: 8px; padding-bottom:"
+      " 8px;'>📚 Material Append</div>",
+      unsafe_allow_html=True,
+  )
   uploaded_files = st.file_uploader(
-      "Upload course materials...", type=["pdf", "txt"], accept_multiple_files=True, label_visibility="collapsed", key="file_in"
+      "Upload course materials...",
+      type=["pdf", "txt"],
+      accept_multiple_files=True,
+      label_visibility="collapsed",
+      key="file_in",
   )
   if st.button("+ ADD TO KNOWLEDGE", use_container_width=True):
     if uploaded_files:
@@ -996,7 +1061,9 @@ with st.sidebar:
           chunks = text_splitter.split_documents(docs)
           if chunks:
             if st.session_state.vector_db is None:
-              st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+              st.session_state.vector_db = FAISS.from_documents(
+                  chunks, embedder
+              )
             else:
               st.session_state.vector_db.add_documents(chunks)
             st.session_state.node_count += len(chunks)
@@ -1004,16 +1071,24 @@ with st.sidebar:
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Session Control
-  st.markdown("<div class='glass-panel' style='padding: 12px;'>", unsafe_allow_html=True)
-  st.markdown("<div class='panel-header' style='margin-bottom: 8px; padding-bottom: 8px;'>🛠️ Session Control</div>", unsafe_allow_html=True)
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px;'>", unsafe_allow_html=True
+  )
+  st.markdown(
+      "<div class='panel-header' style='margin-bottom: 8px; padding-bottom:"
+      " 8px;'>🛠️ Session Control</div>",
+      unsafe_allow_html=True,
+  )
   if st.button("FLUSH MEMORY", use_container_width=True):
     st.session_state.chat_history = []
     st.session_state.vector_db = None
     st.session_state.node_count = 0
     st.session_state.response_time = "0.00"
-    st.session_state.source_reference = "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
+    st.session_state.source_reference = (
+        "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
+    )
     st.rerun()
-  
+
   if st.button("TERMINATE SESSION", use_container_width=True, type="secondary"):
     st.session_state.authenticated = False
     cookie_manager.delete("apollo_somaiya_session")
@@ -1026,8 +1101,9 @@ col_chat, col_tools = st.columns([6, 4], gap="large")
 
 # ----------------- MAIN LEFT: CHAT CONSOLE -----------------
 with col_chat:
-  
-  st.markdown("""
+
+  st.markdown(
+      """
   <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center;'>
       <div style='display: flex; gap: 8px; align-items: center;'>
           <div style='width: 8px; height: 8px; background: #ef4444; border-radius: 50%; opacity: 0.8;'></div>
@@ -1036,7 +1112,9 @@ with col_chat:
           <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE</span>
       </div>
   </div>
-  """, unsafe_allow_html=True)
+  """,
+      unsafe_allow_html=True,
+  )
 
   if not st.session_state.chat_history:
     st.markdown(
@@ -1062,38 +1140,52 @@ with col_chat:
   user_query = st.chat_input("AWAITING COMMAND...")
 
   if user_query:
-    st.session_state.chat_history.append({"role": "user", "content": user_query})
+    st.session_state.chat_history.append(
+        {"role": "user", "content": user_query}
+    )
     start_time = time.time()
     context_payload = ""
 
     chart_instruction = (
-        "\n\nIf the user asks for a chart, graph, data visualization, or numerical comparison, "
-        "append a JSON code block at the very end of your response following this exact structure:\n"
-        "```json\n"
-        "{\n"
-        '  "type": "bar",  // options: "bar", "line", or "pie"\n'
-        '  "title": "Chart Title",\n'
-        '  "x_label": "X Axis Label",\n'
-        '  "y_label": "Y Axis Label",\n'
-        '  "x": ["Category A", "Category B"],\n'
-        '  "y": [10, 20]\n'
-        "}\n"
-        "```"
+        "\n\nIf the user asks for a chart, graph, data visualization, or"
+        " numerical comparison, append a JSON code block at the very end of"
+        ' your response following this exact structure:\n```json\n{\n  "type":'
+        ' "bar",  // options: "bar", "line", or "pie"\n  "title": "Chart'
+        ' Title",\n  "x_label": "X Axis Label",\n  "y_label": "Y Axis'
+        ' Label",\n  "x": ["Category A", "Category B"],\n  "y": [10, 20]\n}\n```'
     )
 
     if st.session_state.vector_db is not None:
-      retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5})
+      retriever = st.session_state.vector_db.as_retriever(
+          search_kwargs={"k": 5}
+      )
       matched_nodes = retriever.invoke(user_query)
       context_payload = "\n\n".join([
           f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
           for node in matched_nodes
       ])
-      sys_instruction = f"You are APOLLO OMNI AI, an advanced study buddy. Answer using ONLY context below.{chart_instruction}"
-      clean_ctx = context_payload.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-      st.session_state.source_reference = f"<div class='source-box'><strong>Active Context (RAG):</strong><br><br>{clean_ctx}</div>"
+      sys_instruction = (
+          "You are APOLLO OMNI AI, an advanced study assistant powered by"
+          f" Llama 3.3 70B. Answer using ONLY context below.{chart_instruction}"
+      )
+      clean_ctx = (
+          context_payload.replace("<", "&lt;")
+          .replace(">", "&gt;")
+          .replace("\n", "<br>")
+      )
+      st.session_state.source_reference = (
+          "<div class='source-box'><strong>Active Context"
+          f" (RAG):</strong><br><br>{clean_ctx}</div>"
+      )
     else:
-      sys_instruction = f"You are APOLLO OMNI AI, an advanced study buddy. Answer based on general knowledge.{chart_instruction}"
-      st.session_state.source_reference = "<div class='source-box font-mono'>No active context. General weights used.</div>"
+      sys_instruction = (
+          "You are APOLLO OMNI AI, an advanced study assistant powered by"
+          f" Llama 3.3 70B. Answer based on general knowledge.{chart_instruction}"
+      )
+      st.session_state.source_reference = (
+          "<div class='source-box font-mono'>No active context. General weights"
+          " used.</div>"
+      )
 
     message_stream = [{"role": "system", "content": sys_instruction}]
     for msg in st.session_state.chat_history[-4:]:
@@ -1106,7 +1198,12 @@ with col_chat:
     with chat_scroll_pane:
       with st.chat_message("assistant"):
         try:
-          stream = generate_llm_stream(message_stream, GROQ_API_KEY, OPENROUTER_API_KEY, selected_model)
+          stream = generate_llm_stream(
+              message_stream,
+              GROQ_API_KEY,
+              OPENROUTER_API_KEY,
+              selected_model,
+          )
           collected_tokens = st.write_stream(stream)
           if not collected_tokens or not str(collected_tokens).strip():
             collected_tokens = "⚠️ EMPTY RESPONSE."
@@ -1115,84 +1212,145 @@ with col_chat:
           collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
           st.markdown(collected_tokens)
 
-    st.session_state.chat_history.append({"role": "assistant", "content": collected_tokens})
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": collected_tokens}
+    )
     st.session_state.response_time = f"{time.time() - start_time:.2f}"
     st.rerun()
 
 
 # ----------------- MAIN RIGHT: PPT STUDIO & CONTEXT -----------------
 with col_tools:
-  
-  # --- GAMMA AI PPT STUDIO ---
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown("<div class='panel-header'>🎨 Presentation Studio</div>", unsafe_allow_html=True)
 
-  ppt_topic_input = st.text_input("Presentation Topic:", placeholder="e.g. Types of Artificial Intelligence")
+  # --- PRESENTATION STUDIO ---
+  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
+  st.markdown(
+      "<div class='panel-header'>🎨 Presentation Studio</div>",
+      unsafe_allow_html=True,
+  )
+
+  ppt_topic_input = st.text_input(
+      "Presentation Topic:",
+      placeholder="e.g. Boeing Commercial Planes",
+      key="ppt_topic_in",
+  )
 
   btn_qwen, btn_gemini = st.columns(2)
   with btn_qwen:
-    if st.button("🚀 Qwen Gen", use_container_width=True):
+    if st.button("🚀 Groq Gen", use_container_width=True):
       if not GROQ_API_KEY:
-        st.error("Missing GROQ_API_KEY.")
+        st.error("Missing GROQ_API_KEY in Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating..."):
-          new_slides, status = generate_slides_with_qwen(ppt_topic_input, GROQ_API_KEY)
+        with st.spinner("Generating slide structure via Groq Llama 3.3 70B..."):
+          new_slides, status = generate_slides_with_groq(
+              ppt_topic_input, GROQ_API_KEY
+          )
           if new_slides:
             st.session_state.slides_data = new_slides
-            st.success("Deck generated!")
+            st.success("New slide deck generated!")
             st.rerun()
           else:
-            st.error(f"Failed: {status}")
+            st.error(f"Generation Error: {status}")
 
   with btn_gemini:
     if st.button("✨ Gemini Gen", use_container_width=True):
       if not GEMINI_API_KEY:
-        st.error("Missing GEMINI_API_KEY.")
+        st.error("Missing GEMINI_API_KEY in Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating..."):
-          new_slides, err = generate_slides_with_gemini(ppt_topic_input, GEMINI_API_KEY)
+        with st.spinner("Generating slide structure via Gemini..."):
+          new_slides, err = generate_slides_with_gemini(
+              ppt_topic_input, GEMINI_API_KEY
+          )
           if new_slides:
             st.session_state.slides_data = new_slides
-            st.success("Deck generated!")
+            st.success("New slide deck generated!")
             st.rerun()
           else:
-            st.error(f"Failed: {err}")
+            st.error(f"Generation Error: {err}")
 
-  with st.expander("✏️ Live Slide Editor", expanded=False):
-    if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
-      st.session_state.slides_data = [{"title": "Slide 1", "subtitle": "Overview", "image_keyword": "technology", "cards": [{"heading": "Card 1", "text": "Details"}]}]
+  with st.expander("✏️ Live Slide Editor", expanded=True):
+    if not st.session_state.slides_data or not isinstance(
+        st.session_state.slides_data, list
+    ):
+      st.session_state.slides_data = [{
+          "title": "Slide 1",
+          "subtitle": "Overview",
+          "image_keyword": "technology",
+          "cards": [{"heading": "Card 1", "text": "Details"}],
+      }]
 
-    tabs = st.tabs([f"S{i+1}" for i in range(len(st.session_state.slides_data))])
+    tabs = st.tabs(
+        [f"S{i+1}" for i in range(len(st.session_state.slides_data))]
+    )
 
     for i, tab in enumerate(tabs):
       with tab:
         slide_info = st.session_state.slides_data[i]
-        st.session_state.slides_data[i]["title"] = st.text_input(f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}")
-        st.session_state.slides_data[i]["subtitle"] = st.text_input(f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}")
-        st.session_state.slides_data[i]["image_keyword"] = st.text_input(f"Image {i+1}", slide_info.get("image_keyword", ""), key=f"img_{i}")
+        st.session_state.slides_data[i]["title"] = st.text_input(
+            f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}"
+        )
+        st.session_state.slides_data[i]["subtitle"] = st.text_input(
+            f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}"
+        )
+        st.session_state.slides_data[i]["image_keyword"] = st.text_input(
+            f"Image {i+1}", slide_info.get("image_keyword", ""), key=f"img_{i}"
+        )
 
         cards = slide_info.get("cards", [])
         if not isinstance(cards, list):
           cards = [{"heading": "Detail", "text": str(cards)}]
 
         for j, card in enumerate(cards):
-          st.markdown(f"<div style='font-size: 11px; font-weight: bold; margin-top: 10px; color: #a1a1aa;'>Card {j+1}</div>", unsafe_allow_html=True)
+          st.markdown(
+              f"<div style='font-size: 11px; font-weight: bold; margin-top:"
+              f" 10px; color: #a1a1aa;'>Card {j+1}</div>",
+              unsafe_allow_html=True,
+          )
           if isinstance(card, dict):
-            cards[j]["heading"] = st.text_input(f"Heading", card.get("heading", ""), key=f"ch_{i}_{j}", label_visibility="collapsed")
-            cards[j]["text"] = st.text_area(f"Text", card.get("text", ""), key=f"ct_{i}_{j}", label_visibility="collapsed")
+            cards[j]["heading"] = st.text_input(
+                f"Heading",
+                card.get("heading", ""),
+                key=f"ch_{i}_{j}",
+                label_visibility="collapsed",
+            )
+            cards[j]["text"] = st.text_area(
+                f"Text",
+                card.get("text", ""),
+                key=f"ct_{i}_{j}",
+                label_visibility="collapsed",
+            )
           else:
-            cards[j] = {"heading": "Note", "text": st.text_input(f"Card {j+1}", str(card), key=f"ct_{i}_{j}", label_visibility="collapsed")}
+            cards[j] = {
+                "heading": "Note",
+                "text": st.text_input(
+                    f"Card {j+1}",
+                    str(card),
+                    key=f"ct_{i}_{j}",
+                    label_visibility="collapsed",
+                ),
+            }
         st.session_state.slides_data[i]["cards"] = cards
 
   if st.button("📥 EXPORT .PPTX", use_container_width=True):
-    with st.spinner("Building slide deck..."):
+    with st.spinner("Building PowerPoint file..."):
       file_path = create_gamma_style_pptx(st.session_state.slides_data)
       with open(file_path, "rb") as f:
-        st.download_button(label="DOWNLOAD FILE", data=f, file_name="Apollo_Presentation.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation", use_container_width=True)
+        st.download_button(
+            label="DOWNLOAD FILE",
+            data=f,
+            file_name="Apollo_Presentation.pptx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
+            use_container_width=True,
+        )
   st.markdown("</div>", unsafe_allow_html=True)
 
   # --- ACTIVE CONTEXT VIEWER ---
   st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown("<div class='panel-header'>📑 Active Context View</div>", unsafe_allow_html=True)
+  st.markdown(
+      "<div class='panel-header'>📑 Active Context View</div>",
+      unsafe_allow_html=True,
+  )
   st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
   st.markdown("</div>", unsafe_allow_html=True)
