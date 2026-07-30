@@ -1,64 +1,58 @@
-import os
-import tempfile
+import io
 import streamlit as st
+from audio_recorder_streamlit import audio_recorder
 from groq import Groq
 
-def transcribe_audio_bytes(audio_bytes: bytes, groq_api_key: str) -> tuple[str | None, str | None]:
+def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
     """
-    Sends raw audio bytes to Groq Whisper API for transcription.
-    Returns (transcribed_text, error_message).
+    Renders a audio mic recorder button, sends recorded audio to 
+    Groq Whisper API, and returns transcribed text.
     """
-    if not groq_api_key or not groq_api_key.startswith("gsk_"):
-        return None, "Invalid or missing GROQ_API_KEY."
+    st.markdown("<div style='margin-bottom: 8px;'>", unsafe_allow_html=True)
+    
+    # Render Audio Microphone Button
+    audio_bytes = audio_recorder(
+        text="Click to Speak",
+        recording_color="#ff8c00",
+        neutral_color="#a1a1aa",
+        icon_name="microphone",
+        icon_size="1x",
+        key=f"audio_recorder_{key_suffix}"
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    try:
-        client = Groq(api_key=groq_api_key)
+    if audio_bytes:
+        if not api_key or not api_key.startswith("gsk_"):
+            st.error("Invalid or missing GROQ_API_KEY for Speech-to-Text.")
+            return None
+
+        # Session state key to avoid duplicate processing of the same audio input
+        audio_key = f"last_processed_audio_{key_suffix}"
         
-        # Write bytes to a temporary file required by the Groq SDK
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-            tmp_file.write(audio_bytes)
-            tmp_path = tmp_file.name
+        if st.session_state.get(audio_key) != audio_bytes:
+            with st.spinner("Transcribing voice command..."):
+                try:
+                    client = Groq(api_key=api_key.strip())
+                    
+                    # Convert raw audio bytes into an in-memory file stream
+                    audio_file = io.BytesIO(audio_bytes)
+                    audio_file.name = "speech_input.wav"
 
-        with open(tmp_path, "rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                file=(tmp_path, audio_file.read()),
-                model="whisper-large-v3-turbo",
-                response_format="json",
-                temperature=0.0
-            )
+                    # Request transcription using Groq's Whisper model
+                    transcription = client.audio.transcriptions.create(
+                        file=(audio_file.name, audio_file.read()),
+                        model="whisper-large-v3",
+                        response_format="text"
+                    )
+                    
+                    # Save state to prevent infinite rerun loops
+                    st.session_state[audio_key] = audio_bytes
+                    
+                    if transcription and str(transcription).strip():
+                        return str(transcription).strip()
 
-        # Cleanup temporary audio file
-        os.unlink(tmp_path)
-        return transcription.text, None
-
-    except Exception as e:
-        return None, str(e)
-
-
-def render_voice_input(groq_api_key: str, key_suffix: str = "main") -> str | None:
-    """
-    Renders the UI microphone component and returns the transcribed text string
-    if new audio was recorded, otherwise returns None.
-    """
-    st.markdown("##### 🎙️ Voice Command")
-    audio_data = st.audio_input("Record voice input", key=f"mic_{key_suffix}")
-
-    if "last_processed_audio_hash" not in st.session_state:
-        st.session_state.last_processed_audio_hash = None
-
-    if audio_data:
-        audio_bytes = audio_data.getvalue()
-        current_hash = hash(audio_bytes)
-
-        # Avoid re-processing the same recording on Streamlit re-renders
-        if st.session_state.last_processed_audio_hash != current_hash:
-            with st.spinner("Transcribing voice via Groq Whisper..."):
-                text, err = transcribe_audio_bytes(audio_bytes, groq_api_key)
-                if text:
-                    st.session_state.last_processed_audio_hash = current_hash
-                    st.success(f"Transcribed: \"{text}\"")
-                    return text
-                else:
-                    st.error(f"Voice Transcription Error: {err}")
+                except Exception as e:
+                    st.error(f"Voice Transcription Error: {str(e)}")
+                    return None
 
     return None
