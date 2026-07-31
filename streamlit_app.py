@@ -1265,22 +1265,20 @@ with col_tools:
   )
 
   # Check if indexed vector DB context is available
+# Check if indexed vector DB context is available
   has_rag = st.session_state.vector_db is not None
   if has_rag:
     st.markdown(
-        f"<div style='font-size: 10px; color: #22c55e; font-family: \"JetBrains"
-        f' Mono"; margin-bottom: 10px;'>⚡ KNOWLEDGE BASE CONNECTED: Using'
-        f" {st.session_state.node_count} indexed vector blocks</div>",
+        f"<div style='font-size: 10px; color: #22c55e; font-family: \"JetBrains Mono\"; margin-bottom: 10px;'>"
+        f"⚡ KNOWLEDGE BASE CONNECTED: Using {st.session_state.node_count} indexed vector blocks</div>",
         unsafe_allow_html=True,
     )
   else:
     st.markdown(
-        "<div style='font-size: 10px; color: #a1a1aa; font-family: \"JetBrains"
-        " Mono\"; margin-bottom: 10px;'>ℹ️ No indexed blocks found. Crawl the"
-        " web or upload documents to anchor slides in specific context.</div>",
+        "<div style='font-size: 10px; color: #a1a1aa; font-family: \"JetBrains Mono\"; margin-bottom: 10px;'>"
+        "ℹ️ No indexed blocks found. Crawl the web or upload documents to anchor slides in specific context.</div>",
         unsafe_allow_html=True,
     )
-
   btn_qwen, btn_gemini = st.columns(2)
 
   with btn_qwen:
