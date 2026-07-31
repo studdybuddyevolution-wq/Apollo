@@ -16,3 +16,4 @@ groq
 pillow
 plotly
 audio-recorder-streamlit
+perchance
