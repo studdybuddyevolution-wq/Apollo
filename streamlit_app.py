@@ -123,44 +123,38 @@ if "generated_otp" not in st.session_state:
 if "user_email" not in st.session_state:
   st.session_state.user_email = ""
 
-# INITIAL SLIDES DEFAULT STATE (BOEING OVERVIEW)
+# INITIAL SLIDES DEFAULT STATE (UNIVERSAL WELCOME PAGE)
 if "slides_data" not in st.session_state:
-  st.session_state.slides_data = [
-      {
-          "title": "Boeing Commercial Aircraft: Fleet & Engineering",
-          "subtitle": (
-              "Exploring Modern Commercial Aviation, Jet Families, and Aerospace"
-              " Innovation"
-          ),
-          "image_keyword": "boeing commercial passenger jet airplane flying sky",
-          "cards": [
-              {
-                  "heading": "Company & History",
-                  "text": (
-                      "Boeing is one of the world's leading aerospace"
-                      " manufacturers, designing and producing commercial"
-                      " jetliners, defense aircraft, and space systems."
-                  ),
-              },
-              {
-                  "heading": "Commercial Lineup",
-                  "text": (
-                      "Core aircraft families include the single-aisle 737"
-                      " MAX, the wide-body 777X, and the composite-intensive"
-                      " 787 Dreamliner."
-                  ),
-              },
-              {
-                  "heading": "Aero Innovation",
-                  "text": (
-                      "Pioneering high-bypass turbofan engine integration,"
-                      " carbon-fiber composite fuselages, and advanced fuel"
-                      " efficiency."
-                  ),
-              },
-          ],
-      }
-  ]
+  st.session_state.slides_data = [{
+      "title": "Welcome to Apollo Omni AI",
+      "subtitle": "Cognitive Presentation & RAG Studio",
+      "image_keyword": (
+          "abstract futuristic orange technology grid network minimalist"
+      ),
+      "cards": [
+          {
+              "heading": "Step 1: Index Knowledge",
+              "text": (
+                  "Use the sidebar to crawl the web with Tavily or upload"
+                  " PDFs/TXT files into the vector database."
+              ),
+          },
+          {
+              "heading": "Step 2: Define Presentation",
+              "text": (
+                  "Type any topic and specific instructions into the"
+                  " Presentation Studio controls on the right."
+              ),
+          },
+          {
+              "heading": "Step 3: Export & Present",
+              "text": (
+                  "Generate slides backed by real-time RAG context and export"
+                  " directly to a Gamma-style .pptx deck."
+              ),
+          },
+      ],
+  }]
 
 # 6. Multi-Provider Model Matrix (Groq Llama 3.3 70B Default)
 MODEL_OPTIONS = {
@@ -185,11 +179,11 @@ MODEL_OPTIONS = {
 # 7. Image Engine via Pollinations
 def fetch_image_by_keyword(keyword):
   if not keyword:
-    keyword = "boeing airplane commercial aircraft sky"
+    keyword = "abstract orange dark digital technology background"
 
   clean_kw = re.sub(r"[^\w\s]", "", keyword).strip()
   prompt_encoded = urllib.parse.quote(
-      f"high resolution modern photograph of {clean_kw}, clear detailed sky,"
+      f"high resolution modern photograph of {clean_kw}, detailed,"
       " 8k wallpaper"
   )
 
@@ -436,7 +430,7 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
       yield f"❌ Network Failure: {str(e)}"
 
 
-# 10. Robust JSON Parser & Slide Generator for Groq
+# 10. Robust JSON Parser & Slide Generator for Groq (RAG-Enabled)
 def parse_robust_json(raw_text):
   if not raw_text:
     return None
@@ -466,9 +460,10 @@ def parse_robust_json(raw_text):
   return None
 
 
-def generate_slides_with_groq(topic, groq_key=""):
+def generate_slides_with_groq(
+    topic, custom_instructions="", context="", groq_key=""
+):
   groq_key = groq_key.strip() if groq_key else ""
-
   if not groq_key or not groq_key.startswith("gsk_"):
     return (
         None,
@@ -476,6 +471,12 @@ def generate_slides_with_groq(topic, groq_key=""):
     )
 
   prompt = f"""Create an in-depth 4 to 5 slide presentation outline on the topic: '{topic}'.
+
+SPECIFIC USER INSTRUCTIONS / FOCUS POINTS:
+{custom_instructions if custom_instructions else "None provided."}
+
+INDEXED KNOWLEDGE BASE CONTEXT:
+{context if context else "No extra context provided. Use general knowledge."}
 
 OUTPUT RAW JSON ONLY. Do NOT use markdown backticks or explanations. Start with '{{' and end with '}}'.
 
@@ -489,11 +490,11 @@ SCHEMA REQUIRED:
       "cards": [
         {{
           "heading": "Subtopic Heading",
-          "text": "Detailed multi-sentence content regarding {topic}."
+          "text": "Detailed multi-sentence content accurately based on the topic and context provided."
         }},
         {{
-          "heading": "Technical Mechanics",
-          "text": "Comprehensive analysis of modern engineering and performance."
+          "heading": "Key Insight / Mechanic",
+          "text": "Comprehensive analysis of facts or concepts mentioned in the context."
         }}
       ]
     }}
@@ -511,8 +512,9 @@ SCHEMA REQUIRED:
               {
                   "role": "system",
                   "content": (
-                      "You are a slide deck generator. You output ONLY valid"
-                      " raw JSON."
+                      "You are an expert slide deck generator. You output ONLY"
+                      " valid raw JSON strictly derived from the given context"
+                      " and user instructions."
                   ),
               },
               {"role": "user", "content": prompt},
@@ -536,14 +538,23 @@ SCHEMA REQUIRED:
   )
 
 
-# 11. Gemini Slide Generator (Backup Endpoint)
-def generate_slides_with_gemini(topic, gemini_key):
+# 11. Gemini Slide Generator (RAG-Enabled Backup Endpoint)
+def generate_slides_with_gemini(
+    topic, custom_instructions="", context="", gemini_key=""
+):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
   url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
   prompt = f"""Create an in-depth presentation outline about '{topic}'.
+
+SPECIFIC USER INSTRUCTIONS / FOCUS POINTS:
+{custom_instructions if custom_instructions else "None provided."}
+
+INDEXED KNOWLEDGE BASE CONTEXT:
+{context if context else "No extra context provided. Use general knowledge."}
+
 Return ONLY a valid JSON object with key 'slides' containing 4-5 detailed slide objects.
 Schema:
 {{
@@ -553,7 +564,7 @@ Schema:
       "subtitle": "Subtitle",
       "image_keyword": "descriptive topic prompt",
       "cards": [
-        {{"heading": "Heading", "text": "Comprehensive explanation text."}}
+        {{"heading": "Heading", "text": "Comprehensive explanation text using the context provided."}}
       ]
     }}
   ]
@@ -671,11 +682,11 @@ st.markdown(
         color: white !important; 
         font-family: 'JetBrains Mono', monospace !important;
     }
-    div[data-baseweb="input"] > div, div[data-baseweb="select"] > div {
+    div[data-baseweb="input"] > div, div[data-baseweb="select"] > div, div[data-baseweb="textarea"] > div {
         background-color: rgba(0,0,0,0.8) !important;
         border: 1px solid var(--glass-border) !important;
     }
-    div[data-baseweb="input"] input {
+    div[data-baseweb="input"] input, div[data-baseweb="textarea"] textarea {
         color: white !important;
         background-color: transparent !important;
     }
@@ -979,7 +990,7 @@ with st.sidebar:
   )
   web_query = st.text_input(
       "Query:",
-      placeholder="e.g. Boeing commercial fleet news",
+      placeholder="e.g. Artificial Intelligence trends 2026",
       label_visibility="collapsed",
   )
   if st.button("FETCH & INDEX", use_container_width=True):
@@ -1145,7 +1156,7 @@ with col_chat:
   user_query = st.chat_input("AWAITING COMMAND...")
 
   # Consolidate voice transcription or text input
-  final_query = voice_prompt or user_query
+  final_query = voice_prompt if voice_prompt else user_query
 
   if final_query:
     st.session_state.chat_history.append(
@@ -1239,23 +1250,69 @@ with col_tools:
 
   ppt_topic_input = st.text_input(
       "Presentation Topic:",
-      placeholder="e.g. Boeing Commercial Planes",
+      placeholder="e.g. Quantum Computing or Boeing Planes",
       key="ppt_topic_in",
   )
 
+  custom_prompt_input = st.text_area(
+      "Custom Prompt / Specific Points (Optional):",
+      placeholder=(
+          "e.g. Focus on financial metrics, key breakthroughs, or specific"
+          " architectural comparisons."
+      ),
+      key="ppt_custom_prompt_in",
+      height=80,
+  )
+
+  # Check if indexed vector DB context is available
+  has_rag = st.session_state.vector_db is not None
+  if has_rag:
+    st.markdown(
+        f"<div style='font-size: 10px; color: #22c55e; font-family: \"JetBrains"
+        f' Mono"; margin-bottom: 10px;'>⚡ KNOWLEDGE BASE CONNECTED: Using'
+        f" {st.session_state.node_count} indexed vector blocks</div>",
+        unsafe_allow_html=True,
+    )
+  else:
+    st.markdown(
+        "<div style='font-size: 10px; color: #a1a1aa; font-family: \"JetBrains"
+        " Mono\"; margin-bottom: 10px;'>ℹ️ No indexed blocks found. Crawl the"
+        " web or upload documents to anchor slides in specific context.</div>",
+        unsafe_allow_html=True,
+    )
+
   btn_qwen, btn_gemini = st.columns(2)
+
   with btn_qwen:
     if st.button("🚀 Groq Gen", use_container_width=True):
       if not GROQ_API_KEY:
         st.error("Missing GROQ_API_KEY in Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Groq Llama 3.3 70B..."):
+        with st.spinner(
+            "Retrieving indexed blocks & generating presentation via Groq..."
+        ):
+          # Retrieve context from vector store if available
+          ppt_context = ""
+          if st.session_state.vector_db is not None:
+            query = f"{ppt_topic_input} {custom_prompt_input}".strip()
+            retriever = st.session_state.vector_db.as_retriever(
+                search_kwargs={"k": 6}
+            )
+            matched_nodes = retriever.invoke(query)
+            ppt_context = "\n\n".join([
+                f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
+                for node in matched_nodes
+            ])
+
           new_slides, status = generate_slides_with_groq(
-              ppt_topic_input, GROQ_API_KEY
+              topic=ppt_topic_input,
+              custom_instructions=custom_prompt_input,
+              context=ppt_context,
+              groq_key=GROQ_API_KEY,
           )
           if new_slides:
             st.session_state.slides_data = new_slides
-            st.success("New slide deck generated!")
+            st.success("New slide deck generated using indexed blocks!")
             st.rerun()
           else:
             st.error(f"Generation Error: {status}")
@@ -1265,13 +1322,31 @@ with col_tools:
       if not GEMINI_API_KEY:
         st.error("Missing GEMINI_API_KEY in Streamlit secrets.")
       elif ppt_topic_input:
-        with st.spinner("Generating slide structure via Gemini..."):
+        with st.spinner(
+            "Retrieving indexed blocks & generating presentation via Gemini..."
+        ):
+          # Retrieve context from vector store if available
+          ppt_context = ""
+          if st.session_state.vector_db is not None:
+            query = f"{ppt_topic_input} {custom_prompt_input}".strip()
+            retriever = st.session_state.vector_db.as_retriever(
+                search_kwargs={"k": 6}
+            )
+            matched_nodes = retriever.invoke(query)
+            ppt_context = "\n\n".join([
+                f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
+                for node in matched_nodes
+            ])
+
           new_slides, err = generate_slides_with_gemini(
-              ppt_topic_input, GEMINI_API_KEY
+              topic=ppt_topic_input,
+              custom_instructions=custom_prompt_input,
+              context=ppt_context,
+              gemini_key=GEMINI_API_KEY,
           )
           if new_slides:
             st.session_state.slides_data = new_slides
-            st.success("New slide deck generated!")
+            st.success("New slide deck generated using indexed blocks!")
             st.rerun()
           else:
             st.error(f"Generation Error: {err}")
@@ -1281,10 +1356,16 @@ with col_tools:
         st.session_state.slides_data, list
     ):
       st.session_state.slides_data = [{
-          "title": "Slide 1",
-          "subtitle": "Overview",
-          "image_keyword": "technology",
-          "cards": [{"heading": "Card 1", "text": "Details"}],
+          "title": "Welcome to Apollo Omni AI",
+          "subtitle": "Awaiting Presentation Prompt",
+          "image_keyword": "abstract technology minimalist",
+          "cards": [{
+              "heading": "Getting Started",
+              "text": (
+                  "Enter a topic above to generate a new presentation deck"
+                  " using your indexed knowledge base."
+              ),
+          }],
       }]
 
     tabs = st.tabs(
