@@ -28,7 +28,10 @@ from pptx.util import Inches, Pt
 import streamlit as st
 
 # Import Modular Voice Handler
-from voice_handler import render_voice_input
+from voice_handler import render_voice_input, run_tts_synthesis
+
+# Import RAG-powered Video Generator module
+from video_generator import render_video_generator_ui
 
 # Import interactive Plotly chart engine
 try:
@@ -122,6 +125,31 @@ if "generated_otp" not in st.session_state:
   st.session_state.generated_otp = None
 if "user_email" not in st.session_state:
   st.session_state.user_email = ""
+
+# ── Auto-load persisted user profile ──────────────────────────────────────
+_PROFILE_DEFAULTS = {
+    "full_name": "",
+    "university": "Somaiya University",
+    "major": "",
+    "learning_style": "Visual & Interactive",
+    "detail_level": "Intermediate",
+    "default_model": "Meta Llama 3.3 70B (Groq)",
+}
+if "user_prefs" not in st.session_state:
+  _profile_path = "apollo_user_profile.json"
+  if os.path.exists(_profile_path):
+    try:
+      with open(_profile_path, "r", encoding="utf-8") as _pf:
+        _loaded_prefs = json.load(_pf)
+      st.session_state.user_prefs = {**_PROFILE_DEFAULTS, **_loaded_prefs}
+    except Exception:
+      st.session_state.user_prefs = dict(_PROFILE_DEFAULTS)
+  else:
+    st.session_state.user_prefs = dict(_PROFILE_DEFAULTS)
+
+# Voice TTS output toggle (persisted across reruns)
+if "voice_output_enabled" not in st.session_state:
+  st.session_state.voice_output_enabled = False
 
 # INITIAL SLIDES DEFAULT STATE (UNIVERSAL WELCOME PAGE)
 if "slides_data" not in st.session_state:
@@ -461,7 +489,7 @@ def parse_robust_json(raw_text):
 
 
 def generate_slides_with_groq(
-    topic, custom_instructions="", context="", groq_key=""
+    topic, custom_instructions="", context="", groq_key="", user_prefs=None
 ):
   groq_key = groq_key.strip() if groq_key else ""
   if not groq_key or not groq_key.startswith("gsk_"):
@@ -470,7 +498,13 @@ def generate_slides_with_groq(
         "Missing active GROQ_API_KEY starting with 'gsk_' in Streamlit Secrets.",
     )
 
-  prompt = f"""Create an in-depth 4 to 5 slide presentation outline on the topic: '{topic}'.
+  _prefs = user_prefs or {}
+  prefs_line = (
+      f"Adapt slides for: learning style = '{_prefs.get('learning_style','General')}', "
+      f"depth = '{_prefs.get('detail_level','Intermediate')}'.\n\n"
+  )
+
+  prompt = f"""{prefs_line}Create an in-depth 4 to 5 slide presentation outline on the topic: '{topic}'.
 
 SPECIFIC USER INSTRUCTIONS / FOCUS POINTS:
 {custom_instructions if custom_instructions else "None provided."}
@@ -540,14 +574,20 @@ SCHEMA REQUIRED:
 
 # 11. Gemini Slide Generator (RAG-Enabled Backup Endpoint)
 def generate_slides_with_gemini(
-    topic, custom_instructions="", context="", gemini_key=""
+    topic, custom_instructions="", context="", gemini_key="", user_prefs=None
 ):
   if not gemini_key:
     return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
   url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
   headers = {"Content-Type": "application/json"}
 
-  prompt = f"""Create an in-depth presentation outline about '{topic}'.
+  _prefs = user_prefs or {}
+  prefs_line = (
+      f"Adapt slides for: learning style = '{_prefs.get('learning_style','General')}', "
+      f"depth = '{_prefs.get('detail_level','Intermediate')}'.\n\n"
+  )
+
+  prompt = f"""{prefs_line}Create an in-depth presentation outline about '{topic}'.
 
 SPECIFIC USER INSTRUCTIONS / FOCUS POINTS:
 {custom_instructions if custom_instructions else "None provided."}
@@ -952,10 +992,7 @@ with st.sidebar:
       unsafe_allow_html=True,
   )
 
-  if "user_prefs" not in st.session_state:
-    st.session_state.user_prefs = {
-        "default_model": "Meta Llama 3.3 70B (Groq)"
-    }
+  # user_prefs already loaded at startup — no re-init needed here
 
   model_list = list(MODEL_OPTIONS.keys())
   saved_model = st.session_state.user_prefs.get(
@@ -1103,6 +1140,13 @@ with st.sidebar:
     )
     st.rerun()
 
+  # ── Voice TTS output toggle ──────────────────────────────────────
+  st.session_state.voice_output_enabled = st.checkbox(
+      "🔊 Voice Output (TTS)",
+      value=st.session_state.get("voice_output_enabled", False),
+      help="Speak assistant responses aloud using Microsoft Edge TTS.",
+  )
+
   if st.button("TERMINATE SESSION", use_container_width=True, type="secondary"):
     st.session_state.authenticated = False
     cookie_manager.delete("apollo_somaiya_session")
@@ -1174,6 +1218,18 @@ with col_chat:
         ' Label",\n  "x": ["Category A", "Category B"],\n  "y": [10, 20]\n}\n```'
     )
 
+    # ── Build user-preference context preamble ───────────────────────────
+    _prefs = st.session_state.get("user_prefs", {})
+    _style = _prefs.get("learning_style", "General")
+    _depth = _prefs.get("detail_level", "Intermediate")
+    _name  = _prefs.get("full_name", "").strip()
+    prefs_preamble = (
+        f"Student profile: learning style = '{_style}', "
+        f"detail level = '{_depth}'."
+        + (f" Address the student as {_name}." if _name else "")
+        + " Tailor all responses accordingly.\n\n"
+    )
+
     if st.session_state.vector_db is not None:
       retriever = st.session_state.vector_db.as_retriever(
           search_kwargs={"k": 5}
@@ -1184,7 +1240,7 @@ with col_chat:
           for node in matched_nodes
       ])
       sys_instruction = (
-          "You are APOLLO OMNI AI, an advanced study assistant powered by"
+          f"{prefs_preamble}You are APOLLO OMNI AI, an advanced study assistant powered by"
           f" Llama 3.3 70B. Answer using ONLY context below.{chart_instruction}"
       )
       clean_ctx = (
@@ -1198,7 +1254,7 @@ with col_chat:
       )
     else:
       sys_instruction = (
-          "You are APOLLO OMNI AI, an advanced study assistant powered by"
+          f"{prefs_preamble}You are APOLLO OMNI AI, an advanced study assistant powered by"
           f" Llama 3.3 70B. Answer based on general knowledge.{chart_instruction}"
       )
       st.session_state.source_reference = (
@@ -1230,6 +1286,15 @@ with col_chat:
         except Exception as ex:
           collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
           st.markdown(collected_tokens)
+
+        # ── TTS audio player (renders only when toggle is ON) ──────────────
+        if st.session_state.get("voice_output_enabled", False):
+          _tts_text = str(collected_tokens).strip()
+          if _tts_text and not _tts_text.startswith("❌"):
+            with st.spinner("🎶 Synthesizing voice..."):
+              _audio_bytes = run_tts_synthesis(_tts_text)
+            if _audio_bytes:
+              st.audio(_audio_bytes, format="audio/mp3")
 
     st.session_state.chat_history.append(
         {"role": "assistant", "content": collected_tokens}
@@ -1307,6 +1372,7 @@ with col_tools:
               custom_instructions=custom_prompt_input,
               context=ppt_context,
               groq_key=GROQ_API_KEY,
+              user_prefs=st.session_state.get("user_prefs"),
           )
           if new_slides:
             st.session_state.slides_data = new_slides
@@ -1341,6 +1407,7 @@ with col_tools:
               custom_instructions=custom_prompt_input,
               context=ppt_context,
               gemini_key=GEMINI_API_KEY,
+              user_prefs=st.session_state.get("user_prefs"),
           )
           if new_slides:
             st.session_state.slides_data = new_slides
@@ -1432,6 +1499,14 @@ with col_tools:
             use_container_width=True,
         )
   st.markdown("</div>", unsafe_allow_html=True)
+
+  # --- VIDEO GENERATOR (standalone module) ---
+  render_video_generator_ui(
+      gemini_key=GEMINI_API_KEY,
+      vector_db=st.session_state.vector_db,
+      embedder=embedder,
+      user_prefs=st.session_state.get("user_prefs"),
+  )
 
   # --- ACTIVE CONTEXT VIEWER ---
   st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
