@@ -2,7 +2,7 @@
 video_generator.py — Apollo Omni AI
 ────────────────────────────────────
 Standalone RAG-powered Educational Video Generator module supporting:
-  1. Veo 3 Lite Video Generation (Google Gemini API via GEMINI_API_KEY)
+  1. Veo Video Generation (Google Gemini / Vertex AI via GEMINI_API_KEY)
   2. MoviePy Narrated Video (Scene-by-scene script + Pollinations visuals + edge-tts narration)
   3. Kling AI Video Generation (Direct Kling AI text-to-video via KLING_API_KEY)
 """
@@ -144,23 +144,23 @@ def generate_video_script_groq(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. GEMINI VEO 3 LITE VIDEO GENERATION ENGINE
+# 2. GEMINI VEO VIDEO GENERATION ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_veo_video(
     prompt: str,
     gemini_key: str = "",
-    model_name: str = "veo-3-lite",
+    model_name: str = "veo-2.0-generate-001",
     duration: int = 5,
 ) -> tuple[str | None, str]:
-    """Generates video using Google Gemini API Key and Veo 3 Lite model."""
+    """Generates video using Google GenAI SDK or REST API with standard Veo endpoint."""
     clean_key = (gemini_key or os.getenv("GEMINI_API_KEY", "")).strip()
     if not clean_key:
-        return None, "Missing GEMINI_API_KEY. Configure it in environment or Streamlit secrets."
+        return None, "Missing GEMINI_API_KEY. Configure it in secrets or environment."
 
     clean_prompt = prompt.strip()[:1000]
 
-    # 1. Try Google GenAI SDK First
+    # 1. Primary Method: Google GenAI SDK
     try:
         from google import genai
         from google.genai import types
@@ -175,7 +175,7 @@ def generate_veo_video(
             ),
         )
 
-        # Poll operation status correctly
+        # Explicit operation status refresh loop
         while not operation.done:
             time.sleep(5)
             operation = client.operations.get(operation)
@@ -197,7 +197,7 @@ def generate_veo_video(
     except Exception as sdk_ex:
         sdk_err = str(sdk_ex)
 
-    # 2. Fallback to Google Generative Language REST API
+    # 2. Fallback Method: REST API v1beta
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:predict?key={clean_key}"
         payload = {
@@ -235,7 +235,12 @@ def generate_veo_video(
     except Exception as rest_ex:
         rest_err = str(rest_ex)
 
-    return None, f"Veo 3 Lite video generation failed. SDK Error: {locals().get('sdk_err', 'N/A')}. REST Error: {locals().get('rest_err', 'N/A')}"
+    return (
+        None,
+        f"Veo video model access failed. Standard API keys often require Google Cloud Vertex AI access for Veo endpoints. "
+        f"Try using 'Narrated Scene Video' mode instead.\n\n"
+        f"SDK Log: {locals().get('sdk_err', 'N/A')}\nREST Log: {locals().get('rest_err', 'N/A')}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,7 +319,7 @@ def generate_kling_video(prompt: str, kling_key: str = "", duration: int = 5) ->
         except Exception:
             continue
 
-    return None, "Kling AI generation request failed."
+    return None, "Kling AI generation request failed or API key was invalid."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,7 +356,7 @@ def assemble_video_moviepy(
     try:
         from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
     except ImportError:
-        st.error("❌ `moviepy` is not installed.")
+        st.error("❌ `moviepy` (v1.x) is not installed correctly.")
         return None
 
     audio_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
@@ -417,12 +422,11 @@ def render_video_generator_ui(
 
         st.markdown(
             "<p style='font-size:11px; color:#a1a1aa; font-family:\"JetBrains Mono\",monospace; margin-bottom:8px;'>"
-            "Generate AI videos using Google Gemini Veo 3 Lite, Groq + MoviePy narration, or Kling AI."
+            "Generate AI videos using Google Veo, Groq + MoviePy narration, or Kling AI."
             "</p>",
             unsafe_allow_html=True,
         )
 
-        # Fallback to os.environ if keys passed as empty string
         gemini_key = (gemini_key or os.getenv("GEMINI_API_KEY", "")).strip()
         groq_key = (groq_key or os.getenv("GROQ_API_KEY", "")).strip()
         kling_key = (kling_key or os.getenv("KLING_API_KEY", "")).strip()
@@ -446,8 +450,8 @@ def render_video_generator_ui(
         vid_mode = st.radio(
             "Video Mode:",
             options=[
-                "✨ Veo 3 Lite Video (Gemini API)",
-                "🎬 Narrated Scene Video (MoviePy + Groq + TTS)",
+                "🎬 Narrated Scene Video (MoviePy + Groq + TTS) [RECOMMENDED]",
+                "✨ Google Veo 2.0 Video (Gemini API)",
                 "🎥 Direct Kling AI Video",
             ],
             key="vid_mode_radio",
@@ -455,33 +459,14 @@ def render_video_generator_ui(
 
         vid_topic = st.text_input(
             "Video Topic / Prompt:",
-            placeholder="e.g. A glowing beaker with acids and bases in a futuristic chem lab",
+            placeholder="e.g. Acids, bases and salts summary with laboratory examples",
             key="vid_topic_input",
         )
 
-        if "Veo 3 Lite" in vid_mode:
-            if st.button("🚀 GENERATE VEO 3 LITE VIDEO", use_container_width=True, key="vid_gen_veo"):
-                if not gemini_key:
-                    st.error("❌ GEMINI_API_KEY is missing. Add it to `.streamlit/secrets.toml` or set environment variable.")
-                    return
-                if not vid_topic.strip():
-                    st.warning("Please enter a video prompt first.")
-                    return
-
-                with st.spinner("⚡ Rendering video with Gemini Veo 3 Lite..."):
-                    vid_path, status_msg = generate_veo_video(vid_topic, gemini_key=gemini_key, model_name="veo-3-lite")
-                    if vid_path and os.path.exists(vid_path):
-                        st.success(f"✅ Video generated! ({status_msg})")
-                        st.video(vid_path)
-                        with open(vid_path, "rb") as vf:
-                            st.download_button("📥 DOWNLOAD MP4", vf, file_name="apollo_veo3_lite.mp4", mime="video/mp4", use_container_width=True)
-                    else:
-                        st.error(status_msg)
-
-        elif "Narrated" in vid_mode:
+        if "Narrated Scene Video" in vid_mode:
             vid_instructions = st.text_area(
                 "Additional Focus Points (optional):",
-                placeholder="e.g. Focus on practical applications",
+                placeholder="e.g. Focus on pH scale and litmus tests",
                 key="vid_instructions_input",
                 height=60,
             )
@@ -509,7 +494,7 @@ def render_video_generator_ui(
                     except Exception:
                         pass
 
-                with st.status("✍️ Assembling video pipeline...", expanded=True) as status_box:
+                with st.status("✍️ Assembling narrated video pipeline...", expanded=True) as status_box:
                     script_data, script_status = generate_video_script_groq(
                         topic=vid_topic,
                         instructions=vid_instructions,
@@ -550,12 +535,31 @@ def render_video_generator_ui(
                     with open(mp4_path, "rb") as vf:
                         st.download_button("📥 DOWNLOAD MP4", vf, file_name=f"apollo_{vid_topic[:20]}.mp4", mime="video/mp4", use_container_width=True)
 
+        elif "Veo 2.0 Video" in vid_mode:
+            if st.button("🚀 GENERATE VEO VIDEO", use_container_width=True, key="vid_gen_veo"):
+                if not gemini_key:
+                    st.error("❌ GEMINI_API_KEY is missing. Add it to `.streamlit/secrets.toml` or environment.")
+                    return
+                if not vid_topic.strip():
+                    st.warning("Please enter a visual video prompt first.")
+                    return
+
+                with st.spinner("⚡ Rendering video with Google Veo..."):
+                    vid_path, status_msg = generate_veo_video(vid_topic, gemini_key=gemini_key, model_name="veo-2.0-generate-001")
+                    if vid_path and os.path.exists(vid_path):
+                        st.success(f"✅ Video generated! ({status_msg})")
+                        st.video(vid_path)
+                        with open(vid_path, "rb") as vf:
+                            st.download_button("📥 DOWNLOAD MP4", vf, file_name="apollo_veo.mp4", mime="video/mp4", use_container_width=True)
+                    else:
+                        st.error(status_msg)
+
         else:
             if st.button("✨ GENERATE KLING AI VIDEO", use_container_width=True, key="vid_gen_kling"):
                 if not kling_key:
-                    st.error("❌ KLING_API_KEY is not set.")
+                    st.error("❌ KLING_API_KEY is missing.")
                     return
-                with st.spinner("✨ Requesting video from Kling AI API..."):
+                with st.spinner("✨ Requesting video from Kling AI..."):
                     video_res, status_msg = generate_kling_video(vid_topic, kling_key=kling_key)
                     if video_res:
                         st.success(f"✅ Kling AI Video Generated! ({status_msg})")
