@@ -37,51 +37,65 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None, str]:
-    """Calls active Hugging Face Cloud GPU Spaces via API."""
+    """Calls active Hugging Face Cloud GPU Spaces via API without requiring hardcoded route names."""
     if Client is None:
         return None, "Missing `gradio_client`. Add `gradio_client` to your `requirements.txt`."
 
     clean_prompt = prompt.strip()[:500]
     token_val = hf_token or os.getenv("HF_TOKEN", "") or None
 
-    # Valid Hugging Face Space Repositories (NOT Model Repositories)
+    # Public active spaces hosting text-to-video models
     spaces_to_try = [
-        ("Lightricks/ltx-video-distilled", "/generate_video"),
-        ("Wan-AI/Wan2.1", "/generate"),
+        "Lightricks/ltx-video-distilled",
+        "Wan-AI/Wan2.1",
     ]
 
     last_error = "No available public space found."
 
-    for space_id, api_endpoint in spaces_to_try:
+    for space_id in spaces_to_try:
         try:
-            # Initialize client supporting both new (token) and legacy (hf_token) arguments
+            # Dual fallback for gradio_client parameter compatibility
             try:
                 client = Client(space_id, token=token_val)
             except TypeError:
                 client = Client(space_id, hf_token=token_val)
 
-            # Route call based on target space endpoint schema
-            if "ltx-video" in space_id:
-                result = client.predict(
-                    prompt=clean_prompt,
-                    negative_prompt="low quality, blurry, distorted, watermark",
-                    frame_rate=25,
-                    guidance_scale=3.0,
-                    seed=42,
-                    api_name=api_endpoint,
-                )
-            else:
-                result = client.predict(
-                    prompt=clean_prompt,
-                    api_name=api_endpoint,
-                )
+            result = None
+
+            # Attempt 1: Call using explicit arguments for LTX-Video
+            if "ltx-video" in space_id.lower():
+                try:
+                    result = client.predict(
+                        prompt=clean_prompt,
+                        negative_prompt="low quality, blurry, distorted, watermark",
+                        input_image_filepath=None,
+                        input_video_filepath=None,
+                        height_ui=512,
+                        width_ui=704,
+                        mode="text-to-video",
+                        duration_ui=2.0,
+                        ui_frames_to_use=9,
+                        seed_ui=42,
+                        randomize_seed=True,
+                        ui_guidance_scale=3.0,
+                        improve_texture_flag=True,
+                    )
+                except Exception:
+                    pass
+
+            # Attempt 2: Fallback to primary function index (fn_index=0) if named endpoints fail
+            if result is None:
+                try:
+                    result = client.predict(clean_prompt, fn_index=0)
+                except Exception:
+                    result = client.predict(clean_prompt)
 
             # Handle result tuple, list, or filepath string returned by Gradio
             video_path = result[0] if isinstance(result, (list, tuple)) else result
 
             if video_path and os.path.exists(str(video_path)):
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                with open(video_path, "rb") as src:
+                with open(str(video_path), "rb") as src:
                     tmp.write(src.read())
                 tmp.close()
                 return tmp.name, f"Success ({space_id})"
