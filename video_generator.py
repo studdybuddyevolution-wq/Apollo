@@ -1,10 +1,9 @@
 """
 video_generator.py — Apollo Omni AI
 ────────────────────────────────────
-Standalone RAG-powered Educational Video Generator module supporting:
-  1. Veo Video Generation (Google Gemini / Vertex AI via GEMINI_API_KEY)
-  2. MoviePy Narrated Video (Scene-by-scene script + Pollinations visuals + edge-tts narration)
-  3. Kling AI Video Generation (Direct Kling AI text-to-video via KLING_API_KEY)
+Zero-cost cloud video generation module:
+  1. Free Hugging Face AI Video API (Cloud GPU execution via Gradio API)
+  2. Narrated Lesson Video (Groq + Pollinations + TTS + MoviePy)
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import json
 import os
 import re
 import tempfile
-import time
 import urllib.parse
 from typing import Optional
 
@@ -21,20 +19,78 @@ import requests
 import streamlit as st
 from groq import Groq
 
+# Optional import for Gradio Client (HF API)
 try:
-    import jwt
+    from gradio_client import Client
 except ImportError:
-    jwt = None
+    Client = None
 
 # Re-export TTS from voice_handler
 try:
-    from voice_handler import run_tts_synthesis  # noqa: F401
+    from voice_handler import run_tts_synthesis
 except ImportError:
     run_tts_synthesis = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. GROQ SCRIPT GENERATOR
+# 1. HUGGING FACE FREE CLOUD API VIDEO ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None, str]:
+    """Calls Hugging Face Cloud GPU Spaces via API (no local hardware needed)."""
+    if Client is None:
+        return None, "Missing `gradio_client`. Add `gradio_client` to your `requirements.txt`."
+
+    clean_prompt = prompt.strip()[:500]
+    token = hf_token or os.getenv("HF_TOKEN", "") or None
+
+    # List of public HF Spaces hosting text-to-video endpoints
+    spaces_to_try = [
+        ("Lightricks/LTX-Video-Playground", "/generate_video"),
+        ("Wan-Video/Wan2.1-T2V-1.3B", "/generate"),
+    ]
+
+    last_error = "Unknown error"
+
+    for space_id, api_endpoint in spaces_to_try:
+        try:
+            client = Client(space_id, hf_token=token)
+
+            if "LTX-Video" in space_id:
+                result = client.predict(
+                    prompt=clean_prompt,
+                    negative_prompt="low quality, blurry, distorted, watermark",
+                    frame_rate=25,
+                    guidance_scale=3.0,
+                    seed=42,
+                    api_name=api_endpoint,
+                )
+            else:
+                result = client.predict(
+                    prompt=clean_prompt,
+                    api_name=api_endpoint,
+                )
+
+            # Handle result tuple or single filepath string returned by Gradio
+            video_path = result[0] if isinstance(result, (list, tuple)) else result
+
+            if video_path and os.path.exists(str(video_path)):
+                # Copy to temporary file for Streamlit serving
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                with open(video_path, "rb") as src:
+                    tmp.write(src.read())
+                tmp.close()
+                return tmp.name, f"Success ({space_id} Cloud API)"
+
+        except Exception as ex:
+            last_error = str(ex)
+            continue
+
+    return None, f"Hugging Face Cloud API Error: {last_error}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. GROQ SCRIPT GENERATOR
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_video_prompt(
@@ -48,7 +104,7 @@ def _build_video_prompt(
         prefs_ctx = (
             f"Adapt content for a student with:\n"
             f"  • Learning Style : {user_prefs.get('learning_style', 'General')}\n"
-            f"  • Expertise Level: {user_prefs.get('detail_level', 'Intermediate')}\n\n"
+            f"  • Detail Level   : {user_prefs.get('detail_level', 'Intermediate')}\n\n"
         )
 
     return f"""{prefs_ctx}Create an educational video script about: "{topic}"
@@ -56,50 +112,23 @@ def _build_video_prompt(
 SPECIFIC INSTRUCTIONS:
 {instructions if instructions else "None provided."}
 
-KNOWLEDGE BASE CONTEXT:
-{context if context else "No extra context. Use general knowledge."}
+CONTEXT:
+{context if context else "Use general knowledge."}
 
 OUTPUT RULES:
-- Return ONLY a valid raw JSON object. No markdown, no backticks, no explanation.
-- Start with {{ and end with }}.
-- Include 4-6 scenes. Each duration must be an integer (4-10 seconds).
-- image_keyword must be a short (5-8 word) descriptive visual prompt.
-- narrative_script must be cohesive 120-200 word prose narrating all scenes.
+- Return ONLY a valid raw JSON object. No markdown or backticks.
+- Include 4-6 scenes with duration integers (4-8 seconds).
+- image_keyword: 5-8 descriptive words for scene visuals.
+- narrative_script: 120-180 word voiceover narrative.
 
 EXACT SCHEMA:
 {{
-  "narrative_script": "Full engaging voiceover narration here.",
+  "narrative_script": "Full voiceover narration here.",
   "scenes": [
-    {{"duration": 6, "image_keyword": "concise visual description"}},
-    {{"duration": 5, "image_keyword": "another scene visual"}},
-    {{"duration": 6, "image_keyword": "another scene visual"}},
-    {{"duration": 5, "image_keyword": "final scene visual"}}
+    {{"duration": 5, "image_keyword": "descriptive visual prompt"}},
+    {{"duration": 5, "image_keyword": "another scene visual"}}
   ]
 }}"""
-
-
-def _parse_script_json(raw: str) -> tuple[dict | None, str]:
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-    raw = re.sub(r"```json\s*", "", raw)
-    raw = re.sub(r"```\s*", "", raw)
-
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None, "No JSON object found in model response."
-
-    candidate = raw[start : end + 1]
-    try:
-        data = json.loads(candidate)
-    except json.JSONDecodeError as je:
-        return None, f"JSON parse error: {je}"
-
-    if "narrative_script" not in data or "scenes" not in data:
-        return None, "JSON missing 'narrative_script' or 'scenes' keys."
-    if not isinstance(data.get("scenes"), list) or len(data["scenes"]) == 0:
-        return None, "JSON 'scenes' array is empty."
-
-    return data, "OK"
 
 
 def generate_video_script_groq(
@@ -109,235 +138,44 @@ def generate_video_script_groq(
     groq_key: str = "",
     user_prefs: Optional[dict] = None,
 ) -> tuple[dict | None, str]:
-    groq_key = groq_key or os.getenv("GROQ_API_KEY", "")
-    if not groq_key or not groq_key.strip().startswith("gsk_"):
-        return None, "Missing or invalid GROQ_API_KEY in configuration."
+    clean_key = (groq_key or os.getenv("GROQ_API_KEY", "")).strip()
+    if not clean_key or not clean_key.startswith("gsk_"):
+        return None, "Missing or invalid GROQ_API_KEY."
 
     prompt = _build_video_prompt(topic, instructions, context, user_prefs)
-    client = Groq(api_key=groq_key.strip())
-    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    client = Groq(api_key=clean_key)
 
-    last_err = "Unknown error"
-    for model_id in models_to_try:
-        try:
-            completion = client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert educational video scriptwriter. Output ONLY valid raw JSON.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.4,
-                max_tokens=1500,
-            )
-            raw = completion.choices[0].message.content or ""
-            data, status = _parse_script_json(raw)
-            if data:
-                return data, f"OK (Groq / {model_id})"
-        except Exception as ex:
-            last_err = str(ex)
-            continue
-
-    return None, f"Groq script generation error: {last_err}"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. GEMINI VEO VIDEO GENERATION ENGINE
-# ─────────────────────────────────────────────────────────────────────────────
-
-def generate_veo_video(
-    prompt: str,
-    gemini_key: str = "",
-    model_name: str = "veo-2.0-generate-001",
-    duration: int = 5,
-) -> tuple[str | None, str]:
-    """Generates video using Google GenAI SDK or REST API with standard Veo endpoint."""
-    clean_key = (gemini_key or os.getenv("GEMINI_API_KEY", "")).strip()
-    if not clean_key:
-        return None, "Missing GEMINI_API_KEY. Configure it in secrets or environment."
-
-    clean_prompt = prompt.strip()[:1000]
-
-    # 1. Primary Method: Google GenAI SDK
     try:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=clean_key)
-        operation = client.models.generate_videos(
-            model=model_name,
-            prompt=clean_prompt,
-            config=types.GenerateVideosConfig(
-                aspect_ratio="16:9",
-                duration_seconds=duration,
-            ),
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You output ONLY raw JSON objects."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
+            max_tokens=1200,
         )
-
-        # Explicit operation status refresh loop
-        while not operation.done:
-            time.sleep(5)
-            operation = client.operations.get(operation)
-
-        if hasattr(operation, "result") and operation.result and getattr(operation.result, "generated_videos", None):
-            gen_video = operation.result.generated_videos[0]
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            
-            if hasattr(gen_video, "video_bytes"):
-                tmp.write(gen_video.video_bytes)
-            elif hasattr(gen_video, "video") and hasattr(gen_video.video, "video_bytes"):
-                tmp.write(gen_video.video.video_bytes)
-            else:
-                downloaded_bytes = client.files.download(file=getattr(gen_video, "video", gen_video))
-                tmp.write(downloaded_bytes)
-
-            tmp.close()
-            return tmp.name, f"Success ({model_name} via GenAI SDK)"
-    except Exception as sdk_ex:
-        sdk_err = str(sdk_ex)
-
-    # 2. Fallback Method: REST API v1beta
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:predict?key={clean_key}"
-        payload = {
-            "instances": [{"prompt": clean_prompt}],
-            "parameters": {
-                "aspectRatio": "16:9",
-                "sampleCount": 1,
-                "durationSeconds": duration,
-            },
-        }
-        resp = requests.post(url, json=payload, timeout=30)
-        if resp.status_code == 200:
-            res_data = resp.json()
-            if "name" in res_data:
-                op_url = f"https://generativelanguage.googleapis.com/v1beta/{res_data['name']}?key={clean_key}"
-                for _ in range(30):
-                    time.sleep(5)
-                    poll_resp = requests.get(op_url, timeout=15)
-                    if poll_resp.status_code == 200:
-                        p_data = poll_resp.json()
-                        if p_data.get("done"):
-                            response_obj = p_data.get("response", {})
-                            videos = response_obj.get("generatedVideos", [])
-                            if videos:
-                                video_uri = videos[0].get("video", {}).get("uri")
-                                if video_uri:
-                                    v_bytes = requests.get(f"{video_uri}?key={clean_key}", timeout=30).content
-                                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                                    tmp.write(v_bytes)
-                                    tmp.close()
-                                    return tmp.name, f"Success ({model_name} REST API)"
-                            break
-        else:
-            rest_err = resp.text[:150]
-    except Exception as rest_ex:
-        rest_err = str(rest_ex)
-
-    return (
-        None,
-        f"Veo video model access failed. Standard API keys often require Google Cloud Vertex AI access for Veo endpoints. "
-        f"Try using 'Narrated Scene Video' mode instead.\n\n"
-        f"SDK Log: {locals().get('sdk_err', 'N/A')}\nREST Log: {locals().get('rest_err', 'N/A')}"
-    )
+        raw = completion.choices[0].message.content or ""
+        raw = re.sub(r"```json\s*|```\s*", "", raw).strip()
+        data = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
+        return data, "OK"
+    except Exception as ex:
+        return None, f"Groq script error: {ex}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. KLING AI DIRECT VIDEO GENERATION ENGINE
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _parse_kling_credentials(kling_key: str) -> tuple[str | None, str | None, str]:
-    s = kling_key.strip()
-    if s.lower().startswith("bearer "):
-        s = s[7:].strip()
-
-    ak_match = re.search(r"(?:access_?key|ak)\s*[:=]\s*([^\s,;]+)", s, re.I)
-    sk_match = re.search(r"(?:secret_?key|sk)\s*[:=]\s*([^\s,;]+)", s, re.I)
-    if ak_match and sk_match:
-        return ak_match.group(1).strip(), sk_match.group(1).strip(), s
-
-    for delim in [":", "|", ","]:
-        if delim in s and not s.startswith("http"):
-            parts = s.split(delim, 1)
-            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-                return parts[0].strip(), parts[1].strip(), s
-
-    parts = s.split()
-    if len(parts) == 2 and not s.startswith("eyJ"):
-        return parts[0].strip(), parts[1].strip(), s
-
-    return None, None, s
-
-
-def _get_kling_auth_token(kling_key: str) -> str:
-    ak, sk, raw_token = _parse_kling_credentials(kling_key)
-    if ak and sk and jwt:
-        now = int(time.time())
-        headers = {"alg": "HS256", "typ": "JWT"}
-        payload = {"iss": ak, "exp": now + 1800, "nbf": now - 5}
-        try:
-            return jwt.encode(payload, sk, algorithm="HS256", headers=headers)
-        except Exception:
-            pass
-    return raw_token
-
-
-def generate_kling_video(prompt: str, kling_key: str = "", duration: int = 5) -> tuple[str | None, str]:
-    raw_key = (kling_key or os.getenv("KLING_API_KEY", "")).strip()
-    if not raw_key:
-        return None, "Missing KLING_API_KEY in configuration."
-
-    clean_prompt = prompt.strip()[:1000]
-    ak, sk, _ = _parse_kling_credentials(raw_key)
-    jwt_token = _get_kling_auth_token(raw_key)
-
-    endpoints = []
-    if ak and sk:
-        endpoints.append({
-            "name": "Kling Open Platform (Signed JWT)",
-            "url": "https://api.klingai.com/v1/videos/text2video",
-            "headers": {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"},
-            "payload": {"model_name": "kling-v1", "prompt": clean_prompt, "duration": str(duration), "aspect_ratio": "16:9"},
-        })
-    elif raw_key.startswith("fal-") or raw_key.startswith("fal_"):
-        endpoints.append({
-            "name": "Fal.ai Kling Gateway",
-            "url": "https://queue.fal.run/fal-ai/kling-video/v1.5/standard/text-to-video",
-            "headers": {"Authorization": f"Key {raw_key}", "Content-Type": "application/json"},
-            "payload": {"prompt": clean_prompt, "duration": str(duration)},
-        })
-
-    for ep in endpoints:
-        try:
-            resp = requests.post(ep["url"], headers=ep["headers"], json=ep["payload"], timeout=30)
-            if resp.status_code in (200, 201, 202):
-                res_data = resp.json()
-                video_url = res_data.get("video_url") or res_data.get("data", {}).get("video_url")
-                if video_url:
-                    return video_url, f"Success ({ep['name']})"
-        except Exception:
-            continue
-
-    return None, "Kling AI generation request failed or API key was invalid."
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. IMAGE FETCHER & MOVIEPY ASSEMBLY
+# 3. MOVIEPY LIGHTWEIGHT ASSEMBLY
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_image_for_scene(keyword: str) -> str | None:
-    if not keyword:
-        keyword = "abstract digital technology education"
-
-    clean = re.sub(r"[^\w\s]", "", keyword).strip()
-    encoded = urllib.parse.quote(f"high resolution modern educational illustration of {clean}, detailed, 8k wallpaper")
+    clean = re.sub(r"[^\w\s]", "", keyword).strip() or "educational graphic"
+    encoded = urllib.parse.quote(f"high resolution educational illustration of {clean}, 8k")
     seed = abs(hash(clean)) % 100000
     url = f"https://image.pollinations.ai/prompt/{encoded}?width=1280&height=720&seed={seed}&nologo=true"
 
     try:
-        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200 and len(resp.content) > 5000:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200 and len(resp.content) > 3000:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
             tmp.write(resp.content)
             tmp.close()
@@ -351,62 +189,54 @@ def assemble_video_moviepy(
     scene_image_paths: list[str],
     durations: list[int],
     audio_bytes: bytes,
-    output_path: str | None = None,
 ) -> str | None:
     try:
-        from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
+        from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
     except ImportError:
-        st.error("❌ `moviepy` (v1.x) is not installed correctly.")
+        st.error("Please install MoviePy: `pip install 'moviepy>=1.0.3,<2.0.0'`")
         return None
 
     audio_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
     audio_tmp.write(audio_bytes)
     audio_tmp.close()
 
-    if output_path is None:
-        out_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        output_path = out_tmp.name
-        out_tmp.close()
+    out_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    output_path = out_tmp.name
+    out_tmp.close()
 
     clips = []
     try:
         for img_path, dur in zip(scene_image_paths, durations):
             if img_path and os.path.exists(img_path):
-                clips.append(ImageClip(img_path, duration=float(max(dur, 2))).set_fps(24))
+                clips.append(ImageClip(img_path, duration=float(max(dur, 3))).set_fps(24))
 
         if not clips:
             return None
 
         video = concatenate_videoclips(clips, method="compose")
         audio = AudioFileClip(audio_tmp.name)
-        total_dur = video.duration
+        video = video.set_audio(audio.subclip(0, min(audio.duration, video.duration)))
 
-        audio = audio.subclip(0, min(audio.duration, total_dur))
-        video = video.set_audio(audio)
         video.write_videofile(
             output_path,
             fps=24,
             codec="libx264",
             audio_codec="aac",
             preset="ultrafast",
-            ffmpeg_params=["-crf", "28"],
             verbose=False,
             logger=None,
         )
         return output_path
     except Exception as ex:
-        st.error(f"❌ Video assembly error: {ex}")
+        st.error(f"Assembly Error: {ex}")
         return None
     finally:
         if os.path.exists(audio_tmp.name):
-            try:
-                os.unlink(audio_tmp.name)
-            except Exception:
-                pass
+            os.unlink(audio_tmp.name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. STREAMLIT UI PANEL
+# 4. STREAMLIT UI PANEL
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_video_generator_ui(
@@ -418,151 +248,120 @@ def render_video_generator_ui(
     user_prefs: dict | None = None,
 ) -> None:
     """Renders the Video Generator UI panel."""
-    with st.expander("🎥 One-Shot Video Generator", expanded=False):
+    with st.expander("🎥 Free AI Video Generator", expanded=True):
+
+        groq_key = (groq_key or os.getenv("GROQ_API_KEY", "")).strip()
 
         st.markdown(
-            "<p style='font-size:11px; color:#a1a1aa; font-family:\"JetBrains Mono\",monospace; margin-bottom:8px;'>"
-            "Generate AI videos using Google Veo, Groq + MoviePy narration, or Kling AI."
-            "</p>",
+            "<span style='font-size:10px; font-family:monospace; background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:3px 8px; border-radius:3px;'>"
+            "✔ FREE CLOUD GPU ENGINE READY (NO GCP NEEDED)</span>",
             unsafe_allow_html=True,
         )
 
-        gemini_key = (gemini_key or os.getenv("GEMINI_API_KEY", "")).strip()
-        groq_key = (groq_key or os.getenv("GROQ_API_KEY", "")).strip()
-        kling_key = (kling_key or os.getenv("KLING_API_KEY", "")).strip()
-
-        has_gemini = bool(gemini_key)
-        has_groq = bool(groq_key and groq_key.startswith("gsk_"))
-
-        b_gemini = (
-            "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(34,197,94,0.12); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:2px 7px; border-radius:2px;'>"
-            "✔ GEMINI VEO READY</span>" if has_gemini else
-            "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(239,68,68,0.12); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 7px; border-radius:2px;'>"
-            "✘ GEMINI KEY MISSING</span>"
-        )
-        b_groq = (
-            "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(34,197,94,0.12); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:2px 7px; border-radius:2px; margin-left:6px;'>"
-            "✔ GROQ READY</span>" if has_groq else ""
-        )
-
-        st.markdown(f"<div style='margin-bottom:10px;'>{b_gemini}{b_groq}</div>", unsafe_allow_html=True)
-
         vid_mode = st.radio(
-            "Video Mode:",
+            "Select Generator Engine:",
             options=[
-                "🎬 Narrated Scene Video (MoviePy + Groq + TTS) [RECOMMENDED]",
-                "✨ Google Veo 2.0 Video (Gemini API)",
-                "🎥 Direct Kling AI Video",
+                "⚡ Hugging Face Cloud API Video (Direct Text-to-Video)",
+                "🎬 Narrated Scene Video (Groq + Pollinations + TTS)",
             ],
+            index=0,
             key="vid_mode_radio",
         )
 
         vid_topic = st.text_input(
             "Video Topic / Prompt:",
-            placeholder="e.g. Acids, bases and salts summary with laboratory examples",
+            placeholder="e.g., A futuristic hologram showing cellular mitosis process, 8k",
             key="vid_topic_input",
         )
 
-        if "Narrated Scene Video" in vid_mode:
+        if "Hugging Face" in vid_mode:
+            st.caption("Executes on Hugging Face free GPU servers. Requires no local hardware.")
+            hf_token = st.text_input("Optional HF Token (bypasses shared queues):", type="password", key="hf_token_input")
+
+            if st.button("🚀 GENERATE FREE AI VIDEO", use_container_width=True, key="vid_gen_hf"):
+                if not vid_topic.strip():
+                    st.warning("Please enter a video prompt first.")
+                    return
+
+                with st.spinner("⚡ Sending job to Hugging Face Cloud GPU... (this takes 30-90 seconds)"):
+                    vid_path, status_msg = generate_hf_cloud_video(vid_topic, hf_token=hf_token)
+                    if vid_path and os.path.exists(vid_path):
+                        st.success(f"✅ Video generated! ({status_msg})")
+                        st.video(vid_path)
+                        with open(vid_path, "rb") as vf:
+                            st.download_button(
+                                "📥 DOWNLOAD MP4",
+                                vf,
+                                file_name="apollo_hf_video.mp4",
+                                mime="video/mp4",
+                                use_container_width=True,
+                            )
+                    else:
+                        st.error(status_msg)
+
+        else:
             vid_instructions = st.text_area(
-                "Additional Focus Points (optional):",
-                placeholder="e.g. Focus on pH scale and litmus tests",
+                "Focus Points (optional):",
+                placeholder="e.g., Focus on pH scale and lab experiments",
                 key="vid_instructions_input",
-                height=60,
+                height=65,
             )
 
             voice_options = {
                 "Aria (US Female)": "en-US-AriaNeural",
                 "Guy (US Male)": "en-US-GuyNeural",
                 "Jenny (US Female)": "en-US-JennyNeural",
-                "Ryan (UK Male)": "en-GB-RyanNeural",
             }
-            chosen_voice_label = st.selectbox("Narrator Voice:", list(voice_options.keys()), key="vid_voice_select")
-            chosen_voice = voice_options[chosen_voice_label]
+            chosen_voice = voice_options[st.selectbox("Voice:", list(voice_options.keys()), key="vid_voice_select")]
 
             if st.button("🎬 GENERATE NARRATED VIDEO", use_container_width=True, key="vid_gen_narrated"):
                 if not vid_topic.strip():
-                    st.warning("Please enter a video topic first.")
+                    st.warning("Please enter a topic first.")
                     return
 
                 rag_context = ""
                 if vector_db is not None and embedder is not None:
                     try:
-                        retriever = vector_db.as_retriever(search_kwargs={"k": 5})
-                        nodes = retriever.invoke(vid_topic)
-                        rag_context = "\n\n".join(f"[{n.metadata.get('source', 'Source')}]\n{n.page_content}" for n in nodes)
+                        nodes = vector_db.as_retriever(search_kwargs={"k": 3}).invoke(vid_topic)
+                        rag_context = "\n\n".join(n.page_content for n in nodes)
                     except Exception:
                         pass
 
-                with st.status("✍️ Assembling narrated video pipeline...", expanded=True) as status_box:
-                    script_data, script_status = generate_video_script_groq(
+                with st.status("🎬 Assembling narrated video...", expanded=True) as status_box:
+                    script, err = generate_video_script_groq(
                         topic=vid_topic,
                         instructions=vid_instructions,
                         context=rag_context,
                         groq_key=groq_key,
                         user_prefs=user_prefs,
                     )
-                    if not script_data:
-                        status_box.update(label="❌ Script generation failed.", state="error")
-                        st.error(f"Reason: {script_status}")
+                    if not script:
+                        status_box.update(label="❌ Script Generation Failed", state="error")
+                        st.error(err)
                         return
 
-                    narrative = script_data["narrative_script"]
-                    scenes = script_data["scenes"]
-
-                    image_paths, durations = [], []
-                    for scene in scenes:
-                        kw = scene.get("image_keyword", vid_topic)
-                        durations.append(int(scene.get("duration", 6)))
-                        image_paths.append(_fetch_image_for_scene(kw))
-
-                    valid_pairs = [(p, d) for p, d in zip(image_paths, durations) if p]
-                    if not valid_pairs:
-                        status_box.update(label="❌ Scene images failed.", state="error")
-                        return
+                    images = [_fetch_image_for_scene(s.get("image_keyword", vid_topic)) for s in script["scenes"]]
+                    durations = [int(s.get("duration", 5)) for s in script["scenes"]]
 
                     if run_tts_synthesis is None:
-                        st.error("`voice_handler.py` module is missing or cannot be imported.")
+                        st.error("`voice_handler.py` module is missing.")
                         return
 
-                    audio_bytes = run_tts_synthesis(narrative, voice=chosen_voice)
-                    mp4_path = assemble_video_moviepy([x[0] for x in valid_pairs], [x[1] for x in valid_pairs], audio_bytes)
-
-                    status_box.update(label="✅ Video compilation complete!", state="complete", expanded=False)
+                    audio_bytes = run_tts_synthesis(script["narrative_script"], voice=chosen_voice)
+                    mp4_path = assemble_video_moviepy(
+                        [img for img in images if img],
+                        [d for img, d in zip(images, durations) if img],
+                        audio_bytes,
+                    )
+                    status_box.update(label="✅ Complete!", state="complete", expanded=False)
 
                 if mp4_path:
                     st.video(mp4_path)
                     with open(mp4_path, "rb") as vf:
-                        st.download_button("📥 DOWNLOAD MP4", vf, file_name=f"apollo_{vid_topic[:20]}.mp4", mime="video/mp4", use_container_width=True)
-
-        elif "Veo 2.0 Video" in vid_mode:
-            if st.button("🚀 GENERATE VEO VIDEO", use_container_width=True, key="vid_gen_veo"):
-                if not gemini_key:
-                    st.error("❌ GEMINI_API_KEY is missing. Add it to `.streamlit/secrets.toml` or environment.")
-                    return
-                if not vid_topic.strip():
-                    st.warning("Please enter a visual video prompt first.")
-                    return
-
-                with st.spinner("⚡ Rendering video with Google Veo..."):
-                    vid_path, status_msg = generate_veo_video(vid_topic, gemini_key=gemini_key, model_name="veo-2.0-generate-001")
-                    if vid_path and os.path.exists(vid_path):
-                        st.success(f"✅ Video generated! ({status_msg})")
-                        st.video(vid_path)
-                        with open(vid_path, "rb") as vf:
-                            st.download_button("📥 DOWNLOAD MP4", vf, file_name="apollo_veo.mp4", mime="video/mp4", use_container_width=True)
-                    else:
-                        st.error(status_msg)
-
-        else:
-            if st.button("✨ GENERATE KLING AI VIDEO", use_container_width=True, key="vid_gen_kling"):
-                if not kling_key:
-                    st.error("❌ KLING_API_KEY is missing.")
-                    return
-                with st.spinner("✨ Requesting video from Kling AI..."):
-                    video_res, status_msg = generate_kling_video(vid_topic, kling_key=kling_key)
-                    if video_res:
-                        st.success(f"✅ Kling AI Video Generated! ({status_msg})")
-                        st.video(video_res)
-                    else:
-                        st.error(status_msg)
+                        st.download_button(
+                            "📥 DOWNLOAD MP4",
+                            vf,
+                            file_name=f"{vid_topic[:15]}.mp4",
+                            mime="video/mp4",
+                            use_container_width=True,
+                        )
