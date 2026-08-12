@@ -3,7 +3,7 @@ video_generator.py — Apollo Omni AI
 ────────────────────────────────────
 Zero-cost cloud video generation module:
   1. Free Hugging Face AI Video API (Cloud GPU execution via Gradio API)
-  2. Narrated Lesson Video (Groq + Pollinations + TTS + MoviePy)
+  2. Narrated Lesson Video (Groq + Pollinations + Edge-TTS + MoviePy)
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import requests
 import streamlit as st
 from groq import Groq
 
-# Optional import for Gradio Client (HF API)
+# Optional import for Gradio Client (HF Cloud API)
 try:
     from gradio_client import Client
 except ImportError:
@@ -37,12 +37,12 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None, str]:
-    """Calls Hugging Face Cloud GPU Spaces via API (no local hardware needed)."""
+    """Calls Hugging Face Cloud GPU Spaces via API (no local GPU required)."""
     if Client is None:
         return None, "Missing `gradio_client`. Add `gradio_client` to your `requirements.txt`."
 
     clean_prompt = prompt.strip()[:500]
-    token = hf_token or os.getenv("HF_TOKEN", "") or None
+    token_val = hf_token or os.getenv("HF_TOKEN", "") or None
 
     # List of public HF Spaces hosting text-to-video endpoints
     spaces_to_try = [
@@ -54,7 +54,11 @@ def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None
 
     for space_id, api_endpoint in spaces_to_try:
         try:
-            client = Client(space_id, hf_token=token)
+            # Dual fallback for gradio_client versions: 'token' (new) vs 'hf_token' (legacy)
+            try:
+                client = Client(space_id, token=token_val)
+            except TypeError:
+                client = Client(space_id, hf_token=token_val)
 
             if "LTX-Video" in space_id:
                 result = client.predict(
@@ -71,11 +75,10 @@ def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None
                     api_name=api_endpoint,
                 )
 
-            # Handle result tuple or single filepath string returned by Gradio
+            # Handle result tuple, list, or filepath string returned by Gradio
             video_path = result[0] if isinstance(result, (list, tuple)) else result
 
             if video_path and os.path.exists(str(video_path)):
-                # Copy to temporary file for Streamlit serving
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 with open(video_path, "rb") as src:
                     tmp.write(src.read())
@@ -116,7 +119,7 @@ CONTEXT:
 {context if context else "Use general knowledge."}
 
 OUTPUT RULES:
-- Return ONLY a valid raw JSON object. No markdown or backticks.
+- Return ONLY a valid raw JSON object. No markdown, no backticks.
 - Include 4-6 scenes with duration integers (4-8 seconds).
 - image_keyword: 5-8 descriptive words for scene visuals.
 - narrative_script: 120-180 word voiceover narrative.
@@ -164,7 +167,7 @@ def generate_video_script_groq(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. MOVIEPY LIGHTWEIGHT ASSEMBLY
+# 3. MOVIEPY LIGHTWEIGHT ASSEMBLY ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_image_for_scene(keyword: str) -> str | None:
@@ -270,7 +273,7 @@ def render_video_generator_ui(
 
         vid_topic = st.text_input(
             "Video Topic / Prompt:",
-            placeholder="e.g., A futuristic hologram showing cellular mitosis process, 8k",
+            placeholder="e.g., A cinematic animation of DNA double helix replicating, 8k",
             key="vid_topic_input",
         )
 
@@ -283,7 +286,7 @@ def render_video_generator_ui(
                     st.warning("Please enter a video prompt first.")
                     return
 
-                with st.spinner("⚡ Sending job to Hugging Face Cloud GPU... (this takes 30-90 seconds)"):
+                with st.spinner("⚡ Sending job to Hugging Face Cloud GPU... (takes ~30-90 seconds)"):
                     vid_path, status_msg = generate_hf_cloud_video(vid_topic, hf_token=hf_token)
                     if vid_path and os.path.exists(vid_path):
                         st.success(f"✅ Video generated! ({status_msg})")
