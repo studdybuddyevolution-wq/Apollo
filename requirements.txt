@@ -18,3 +18,4 @@ audio-recorder-streamlit
 perchance
 moviepy>=1.0.3
 edge-tts>=6.1.9
+pyjwt>=2.8.0
