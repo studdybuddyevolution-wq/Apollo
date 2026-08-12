@@ -2,7 +2,7 @@
 video_generator.py — Apollo Omni AI
 ────────────────────────────────────
 Zero-cost cloud video generation module:
-  1. Free Hugging Face AI Video API (Cloud GPU execution via Gradio API)
+  1. Hugging Face Inference API (Cloud GPU via `huggingface_hub.InferenceClient`)
   2. Narrated Lesson Video (Groq + Pollinations + Edge-TTS + MoviePy)
 """
 
@@ -19,11 +19,11 @@ import requests
 import streamlit as st
 from groq import Groq
 
-# Optional import for Gradio Client (HF Cloud API)
+# Import Hugging Face Hub Inference Client
 try:
-    from gradio_client import Client
+    from huggingface_hub import InferenceClient
 except ImportError:
-    Client = None
+    InferenceClient = None
 
 # Re-export TTS from voice_handler
 try:
@@ -33,91 +33,49 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. HUGGING FACE FREE CLOUD API VIDEO ENGINE
+# 1. HUGGING FACE CLOUD API VIDEO ENGINE (VIA INFERENCE CLIENT)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None, str]:
-    """Calls active Hugging Face Cloud GPU Spaces via API safely specifying fn_index/api_name."""
-    if Client is None:
-        return None, "Missing `gradio_client`. Add `gradio_client` to your `requirements.txt`."
+    """Calls serverless video generation models via Hugging Face InferenceClient."""
+    if InferenceClient is None:
+        return None, "Missing `huggingface_hub`. Add `huggingface_hub>=0.25.0` to your `requirements.txt`."
 
     clean_prompt = prompt.strip()[:500]
     token_val = hf_token or os.getenv("HF_TOKEN", "") or None
 
-    # Public active spaces hosting text-to-video models
-    spaces_to_try = [
-        "Lightricks/ltx-video-distilled",
-        "Wan-AI/Wan2.1",
+    if not token_val:
+        return None, "A Hugging Face token is required for Inference API video generation. Please enter your token."
+
+    # Models known to support robust text-to-video inference pipelines
+    models_to_try = [
+        ("Lightricks/LTX-Video-0.9.8-13B-distilled", "fal-ai"),
+        ("tencent/HunyuanVideo", "fal-ai"),
     ]
 
-    last_error = "No available public space found."
+    last_error = "No available inference model responded."
 
-    for space_id in spaces_to_try:
+    for model_id, provider in models_to_try:
         try:
-            # Dual fallback for gradio_client parameter compatibility
-            try:
-                client = Client(space_id, token=token_val)
-            except TypeError:
-                client = Client(space_id, hf_token=token_val)
+            client = InferenceClient(provider=provider, api_key=token_val)
+            
+            # Request video generation bytes from the cloud provider
+            video_bytes = client.text_to_video(
+                prompt=clean_prompt,
+                model=model_id,
+            )
 
-            result = None
-
-            # Attempt 1: Call using explicit arguments for LTX-Video
-            if "ltx-video" in space_id.lower():
-                try:
-                    result = client.predict(
-                        prompt=clean_prompt,
-                        negative_prompt="low quality, blurry, distorted, watermark",
-                        input_image_filepath=None,
-                        input_video_filepath=None,
-                        height_ui=512,
-                        width_ui=704,
-                        mode="text-to-video",
-                        duration_ui=2.0,
-                        ui_frames_to_use=9,
-                        seed_ui=42,
-                        randomize_seed=True,
-                        ui_guidance_scale=3.0,
-                        improve_texture_flag=True,
-                        api_name="/generate_video",
-                    )
-                except Exception:
-                    pass
-
-            # Attempt 2: Try explicit endpoint names commonly used in Gradio Spaces
-            if result is None:
-                for target_api in ["/predict", "/generate", "/generate_video", "/run"]:
-                    try:
-                        result = client.predict(clean_prompt, api_name=target_api)
-                        break
-                    except Exception:
-                        continue
-
-            # Attempt 3: Try explicit function indices (fn_index) to resolve multi-endpoint Spaces
-            if result is None:
-                for fn_i in [0, 1, 2]:
-                    try:
-                        result = client.predict(clean_prompt, fn_index=fn_i)
-                        break
-                    except Exception:
-                        continue
-
-            # Handle result tuple, list, or filepath string returned by Gradio
-            if result is not None:
-                video_path = result[0] if isinstance(result, (list, tuple)) else result
-
-                if video_path and os.path.exists(str(video_path)):
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                    with open(str(video_path), "rb") as src:
-                        tmp.write(src.read())
-                    tmp.close()
-                    return tmp.name, f"Success ({space_id})"
+            if video_bytes and len(video_bytes) > 1000:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                tmp.write(video_bytes)
+                tmp.close()
+                return tmp.name, f"Success ({model_id})"
 
         except Exception as ex:
-            last_error = f"{space_id}: {str(ex)}"
+            last_error = f"{model_id}: {str(ex)}"
             continue
 
-    return None, f"Hugging Face Cloud API Error: {last_error}"
+    return None, f"Hugging Face Inference Error: {last_error}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,14 +243,14 @@ def render_video_generator_ui(
 
         st.markdown(
             "<span style='font-size:10px; font-family:monospace; background:rgba(34,197,94,0.15); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:3px 8px; border-radius:3px;'>"
-            "✔ FREE CLOUD GPU ENGINE READY (NO GCP NEEDED)</span>",
+            "✔ HF INFERENCE API ENGINE READY</span>",
             unsafe_allow_html=True,
         )
 
         vid_mode = st.radio(
             "Select Generator Engine:",
             options=[
-                "⚡ Hugging Face Cloud API Video (Direct Text-to-Video)",
+                "⚡ Hugging Face Inference API Video (Direct Text-to-Video)",
                 "🎬 Narrated Scene Video (Groq + Pollinations + TTS)",
             ],
             index=0,
@@ -306,15 +264,18 @@ def render_video_generator_ui(
         )
 
         if "Hugging Face" in vid_mode:
-            st.caption("Executes on Hugging Face free GPU servers. Requires no local hardware.")
-            hf_token = st.text_input("Optional HF Token (bypasses shared queues):", type="password", key="hf_token_input")
+            st.caption("Executes text-to-video via Hugging Face managed serverless inference.")
+            hf_token = st.text_input("Hugging Face Access Token (Required):", type="password", key="hf_token_input")
 
-            if st.button("🚀 GENERATE FREE AI VIDEO", use_container_width=True, key="vid_gen_hf"):
+            if st.button("🚀 GENERATE CLOUD VIDEO", use_container_width=True, key="vid_gen_hf"):
                 if not vid_topic.strip():
                     st.warning("Please enter a video prompt first.")
                     return
+                if not hf_token.strip() and not os.getenv("HF_TOKEN"):
+                    st.warning("Please provide a Hugging Face Token.")
+                    return
 
-                with st.spinner("⚡ Sending job to Hugging Face Cloud GPU... (takes ~30-90 seconds)"):
+                with st.spinner("⚡ Rendering video via HF Cloud Inference... (takes ~30-60 seconds)"):
                     vid_path, status_msg = generate_hf_cloud_video(vid_topic, hf_token=hf_token)
                     if vid_path and os.path.exists(vid_path):
                         st.success(f"✅ Video generated! ({status_msg})")
@@ -323,7 +284,7 @@ def render_video_generator_ui(
                             st.download_button(
                                 "📥 DOWNLOAD MP4",
                                 vf,
-                                file_name="apollo_hf_video.mp4",
+                                file_name="apollo_hf_inference_video.mp4",
                                 mime="video/mp4",
                                 use_container_width=True,
                             )
