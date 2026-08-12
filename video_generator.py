@@ -1,15 +1,10 @@
 """
 video_generator.py — Apollo Omni AI
 ────────────────────────────────────
-Standalone RAG-powered Educational Video Generator module.
-
-Script Engine : Groq LPU (llama-3.3-70b-versatile) — fast & free
-Video Engines : 
-  1. MoviePy Narrated Video (Scene-by-scene script + Pollinations visuals + edge-tts narration)
-  2. Kling AI Video Generation (Direct Kling AI text-to-video via KLING_API_KEY with JWT encoding support)
-
-Dependencies:
-    moviepy>=1.0.3   edge-tts>=6.1.9   groq   requests   pyjwt
+Standalone RAG-powered Educational Video Generator module supporting:
+  1. Veo 3 Lite Video Generation (Google Gemini API via GEMINI_API_KEY)
+  2. MoviePy Narrated Video (Scene-by-scene script + Pollinations visuals + edge-tts narration)
+  3. Kling AI Video Generation (Direct Kling AI text-to-video via KLING_API_KEY)
 """
 
 from __future__ import annotations
@@ -113,9 +108,7 @@ def generate_video_script_groq(
     groq_key: str = "",
     user_prefs: Optional[dict] = None,
 ) -> tuple[dict | None, str]:
-    """
-    Uses Groq LPU (llama-3.3-70b-versatile) to generate a structured video script JSON.
-    """
+    """Uses Groq LPU (llama-3.3-70b-versatile) to generate structured video script JSON."""
     if not groq_key or not groq_key.strip().startswith("gsk_"):
         return None, "Missing or invalid GROQ_API_KEY in Streamlit secrets."
 
@@ -130,10 +123,7 @@ def generate_video_script_groq(
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are an expert educational video scriptwriter. "
-                            "Output ONLY valid raw JSON — no markdown, no explanations."
-                        ),
+                        "content": "You are an expert educational video scriptwriter. Output ONLY valid raw JSON.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -152,175 +142,195 @@ def generate_video_script_groq(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. KLING AI DIRECT VIDEO GENERATION ENGINE (WITH JWT SIGNING)
+# 2. GEMINI VEO 3 LITE VIDEO GENERATION ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_kling_auth_token(kling_key: str) -> str:
-    """
-    Resolves KLING_API_KEY into a valid JWT token string.
-    
-    Kling AI authentication formats:
-      1. AK:SK format -> "AccessKey:SecretKey" (generates signed JWT using PyJWT)
-      2. Direct JWT token -> "eyJ..." or pre-signed Bearer string
-    """
-    key_str = kling_key.strip()
-    if key_str.lower().startswith("bearer "):
-        key_str = key_str[7:].strip()
-
-    # If key contains AK:SK format (colon separated), encode with PyJWT algorithm HS256
-    if ":" in key_str and not key_str.startswith("http"):
-        parts = key_str.split(":", 1)
-        ak = parts[0].strip()
-        sk = parts[1].strip()
-        if jwt:
-            now = int(time.time())
-            headers = {"alg": "HS256", "typ": "JWT"}
-            payload = {
-                "iss": ak,
-                "exp": now + 1800,  # 30 mins expiration
-                "nbf": now - 5,
-            }
-            try:
-                token = jwt.encode(payload, sk, algorithm="HS256", headers=headers)
-                return token
-            except Exception:
-                pass
-
-    return key_str
-
-
-def generate_kling_video(
+def generate_veo_video(
     prompt: str,
-    kling_key: str,
+    gemini_key: str,
+    model_name: str = "veo-3-lite",
     duration: int = 5,
 ) -> tuple[str | None, str]:
     """
-    Dispatches a video generation task to Kling AI API using KLING_API_KEY.
-    Supports official Kling AI API with automatic JWT signing (AK:SK),
-    AIMLAPI gateway, and Fal.ai provider endpoints.
-
-    Returns (video_url_or_file_path, status_message)
+    Generates video using Google Gemini API Key and Veo 3 Lite model.
     """
+    if not gemini_key or not gemini_key.strip():
+        return None, "Missing GEMINI_API_KEY in Streamlit secrets."
+
+    clean_key = gemini_key.strip()
+    clean_prompt = prompt.strip()[:1000]
+
+    # Try Google GenAI SDK first
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=clean_key)
+        operation = client.models.generate_videos(
+            model=model_name,
+            prompt=clean_prompt,
+            config=types.GenerateVideosConfig(
+                aspect_ratio="16:9",
+                duration_seconds=duration,
+            ),
+        )
+
+        while not operation.done:
+            time.sleep(5)
+            operation = client.operations.get(operation)
+
+        if hasattr(operation, "result") and operation.result and operation.result.generated_videos:
+            gen_video = operation.result.generated_videos[0]
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            
+            if hasattr(gen_video, "video_bytes"):
+                tmp.write(gen_video.video_bytes)
+            elif hasattr(gen_video, "video") and hasattr(gen_video.video, "video_bytes"):
+                tmp.write(gen_video.video.video_bytes)
+            else:
+                downloaded_bytes = client.files.download(file=getattr(gen_video, "video", gen_video))
+                tmp.write(downloaded_bytes)
+
+            tmp.close()
+            return tmp.name, f"Success ({model_name} via GenAI SDK)"
+    except Exception as sdk_ex:
+        sdk_err = str(sdk_ex)
+
+    # Fallback to Google Generative Language REST API endpoint
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:predict?key={clean_key}"
+        payload = {
+            "instances": [{"prompt": clean_prompt}],
+            "parameters": {
+                "aspectRatio": "16:9",
+                "sampleCount": 1,
+                "durationSeconds": duration,
+            },
+        }
+        resp = requests.post(url, json=payload, timeout=30)
+        if resp.status_code == 200:
+            res_data = resp.json()
+            if "name" in res_data:
+                op_url = f"https://generativelanguage.googleapis.com/v1beta/{res_data['name']}?key={clean_key}"
+                for _ in range(30):
+                    time.sleep(5)
+                    poll_resp = requests.get(op_url, timeout=15)
+                    if poll_resp.status_code == 200:
+                        p_data = poll_resp.json()
+                        if p_data.get("done"):
+                            response_obj = p_data.get("response", {})
+                            videos = response_obj.get("generatedVideos", [])
+                            if videos:
+                                video_uri = videos[0].get("video", {}).get("uri")
+                                if video_uri:
+                                    v_bytes = requests.get(f"{video_uri}?key={clean_key}", timeout=30).content
+                                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                                    tmp.write(v_bytes)
+                                    tmp.close()
+                                    return tmp.name, f"Success ({model_name} REST API)"
+                            break
+        else:
+            rest_err = resp.text[:150]
+    except Exception as rest_ex:
+        rest_err = str(rest_ex)
+
+    return None, f"Veo 3 Lite video generation failed. SDK Error: {locals().get('sdk_err', 'N/A')}. REST Error: {locals().get('rest_err', 'N/A')}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. KLING AI DIRECT VIDEO GENERATION ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_kling_credentials(kling_key: str) -> tuple[str | None, str | None, str]:
+    s = kling_key.strip()
+    if s.lower().startswith("bearer "):
+        s = s[7:].strip()
+
+    ak_match = re.search(r"(?:access_?key|ak)\s*[:=]\s*([^\s,;]+)", s, re.I)
+    sk_match = re.search(r"(?:secret_?key|sk)\s*[:=]\s*([^\s,;]+)", s, re.I)
+    if ak_match and sk_match:
+        return ak_match.group(1).strip(), sk_match.group(1).strip(), s
+
+    for delim in [":", "|", ","]:
+        if delim in s and not s.startswith("http"):
+            parts = s.split(delim, 1)
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                return parts[0].strip(), parts[1].strip(), s
+
+    parts = s.split()
+    if len(parts) == 2 and not s.startswith("eyJ"):
+        return parts[0].strip(), parts[1].strip(), s
+
+    return None, None, s
+
+
+def _get_kling_auth_token(kling_key: str) -> str:
+    ak, sk, raw_token = _parse_kling_credentials(kling_key)
+    if ak and sk and jwt:
+        now = int(time.time())
+        headers = {"alg": "HS256", "typ": "JWT"}
+        payload = {"iss": ak, "exp": now + 1800, "nbf": now - 5}
+        try:
+            return jwt.encode(payload, sk, algorithm="HS256", headers=headers)
+        except Exception:
+            pass
+    return raw_token
+
+
+def generate_kling_video(prompt: str, kling_key: str, duration: int = 5) -> tuple[str | None, str]:
     if not kling_key or not kling_key.strip():
         return None, "Missing KLING_API_KEY in Streamlit Secrets."
 
     clean_prompt = prompt.strip()[:1000]
-    jwt_token = _get_kling_auth_token(kling_key)
+    raw_key = kling_key.strip()
+    ak, sk, _ = _parse_kling_credentials(raw_key)
+    jwt_token = _get_kling_auth_token(raw_key)
 
-    headers = {
-        "Authorization": f"Bearer {jwt_token}",
-        "Content-Type": "application/json",
-    }
-
-    endpoints = [
-        {
-            "name": "Kling Open Platform API",
+    endpoints = []
+    if ak and sk:
+        endpoints.append({
+            "name": "Kling Open Platform (Signed JWT)",
             "url": "https://api.klingai.com/v1/videos/text2video",
-            "payload": {
-                "model_name": "kling-v1",
-                "prompt": clean_prompt,
-                "duration": str(duration),
-                "aspect_ratio": "16:9",
-            },
-        },
-        {
-            "name": "AIMLAPI Kling Gateway",
-            "url": "https://api.aimlapi.com/v2/video/generations",
-            "payload": {
-                "model": "kling-video/v1/standard/text-to-video",
-                "prompt": clean_prompt,
-                "duration": duration,
-            },
-        },
-        {
-            "name": "Fal.ai Kling Service",
+            "headers": {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"},
+            "payload": {"model_name": "kling-v1", "prompt": clean_prompt, "duration": str(duration), "aspect_ratio": "16:9"},
+        })
+    elif raw_key.startswith("fal-") or raw_key.startswith("fal_"):
+        endpoints.append({
+            "name": "Fal.ai Kling Gateway",
             "url": "https://queue.fal.run/fal-ai/kling-video/v1.5/standard/text-to-video",
-            "payload": {
-                "prompt": clean_prompt,
-                "duration": str(duration),
-            },
-        },
-    ]
+            "headers": {"Authorization": f"Key {raw_key}", "Content-Type": "application/json"},
+            "payload": {"prompt": clean_prompt, "duration": str(duration)},
+        })
 
-    last_error = ""
     for ep in endpoints:
         try:
-            resp = requests.post(ep["url"], headers=headers, json=ep["payload"], timeout=30)
+            resp = requests.post(ep["url"], headers=ep["headers"], json=ep["payload"], timeout=30)
             if resp.status_code in (200, 201, 202):
                 res_data = resp.json()
-                video_url = (
-                    res_data.get("video_url")
-                    or res_data.get("data", {}).get("video_url")
-                    or res_data.get("output", {}).get("video_url")
-                    or res_data.get("video", {}).get("url")
-                )
+                video_url = res_data.get("video_url") or res_data.get("data", {}).get("video_url")
                 if video_url:
                     return video_url, f"Success ({ep['name']})"
-
-                task_id = (
-                    res_data.get("task_id")
-                    or res_data.get("id")
-                    or res_data.get("request_id")
-                    or res_data.get("data", {}).get("task_id")
-                )
-                if task_id:
-                    poll_url = f"{ep['url']}/{task_id}"
-                    for _ in range(12):
-                        time.sleep(5)
-                        poll_resp = requests.get(poll_url, headers=headers, timeout=15)
-                        if poll_resp.status_code == 200:
-                            p_data = poll_resp.json()
-                            status = p_data.get("status") or p_data.get("task_status") or p_data.get("state")
-                            if status in ("succeeded", "completed", "SUCCESS", "COMPLETED"):
-                                out_url = (
-                                    p_data.get("video_url")
-                                    or p_data.get("data", {}).get("video_url")
-                                    or p_data.get("output", {}).get("video_url")
-                                    or p_data.get("video", {}).get("url")
-                                )
-                                if out_url:
-                                    return out_url, f"Success ({ep['name']} Async)"
-                            elif status in ("failed", "ERROR", "FAILED"):
-                                break
-            else:
-                err_text = resp.text[:250]
-                if resp.status_code == 401 and "Invalid JWT token" in err_text:
-                    last_error = (
-                        "HTTP 401 Unauthorized: Invalid JWT Token.\n"
-                        "💡 Tip: If using official Kling AI, enter your KLING_API_KEY as 'AccessKey:SecretKey' "
-                        "or provide your pre-signed Bearer JWT token in Streamlit Secrets."
-                    )
-                else:
-                    last_error = f"{ep['name']} HTTP {resp.status_code}: {err_text}"
         except Exception as e:
-            last_error = str(e)
             continue
 
-    return None, f"Kling AI request failed: {last_error}"
+    return None, "Kling AI generation request failed."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. IMAGE FETCHER & MOVIEPY VIDEO ASSEMBLER
+# 4. IMAGE FETCHER & MOVIEPY ASSEMBLY
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_image_for_scene(keyword: str) -> str | None:
-    """Fetches a scene image from Pollinations AI."""
     if not keyword:
         keyword = "abstract digital technology education"
 
-    clean   = re.sub(r"[^\w\s]", "", keyword).strip()
-    encoded = urllib.parse.quote(
-        f"high resolution modern educational illustration of {clean}, detailed, 8k wallpaper"
-    )
+    clean = re.sub(r"[^\w\s]", "", keyword).strip()
+    encoded = urllib.parse.quote(f"high resolution modern educational illustration of {clean}, detailed, 8k wallpaper")
     seed = abs(hash(clean)) % 100000
-    url  = f"https://image.pollinations.ai/prompt/{encoded}?width=1280&height=720&seed={seed}&nologo=true"
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1280&height=720&seed={seed}&nologo=true"
 
     try:
-        resp = requests.get(
-            url,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-        )
+        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and len(resp.content) > 5000:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
             tmp.write(resp.content)
@@ -337,7 +347,6 @@ def assemble_video_moviepy(
     audio_bytes: bytes,
     output_path: str | None = None,
 ) -> str | None:
-    """Assembles images + audio track into an MP4 file using MoviePy."""
     try:
         from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
     except ImportError:
@@ -349,7 +358,7 @@ def assemble_video_moviepy(
     audio_tmp.close()
 
     if output_path is None:
-        out_tmp     = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        out_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         output_path = out_tmp.name
         out_tmp.close()
 
@@ -357,8 +366,7 @@ def assemble_video_moviepy(
     try:
         for img_path, dur in zip(scene_image_paths, durations):
             if img_path and os.path.exists(img_path):
-                clip = ImageClip(img_path, duration=float(max(dur, 2))).set_fps(24)
-                clips.append(clip)
+                clips.append(ImageClip(img_path, duration=float(max(dur, 2))).set_fps(24))
 
         if not clips:
             return None
@@ -368,9 +376,6 @@ def assemble_video_moviepy(
         total_dur = video.duration
 
         audio = audio.subclip(0, min(audio.duration, total_dur))
-        if audio.duration < total_dur:
-            audio = audio.set_duration(total_dur)
-
         video = video.set_audio(audio)
         video.write_videofile(
             output_path,
@@ -383,7 +388,6 @@ def assemble_video_moviepy(
             logger=None,
         )
         return output_path
-
     except Exception as ex:
         st.error(f"❌ Video assembly error: {ex}")
         return None
@@ -396,59 +400,80 @@ def assemble_video_moviepy(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. STREAMLIT UI PANEL
+# 5. STREAMLIT UI PANEL
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_video_generator_ui(
     groq_key: str = "",
     kling_key: str = "",
+    gemini_key: str = "",
     vector_db=None,
     embedder=None,
     user_prefs: dict | None = None,
 ) -> None:
-    """
-    Renders the 🎥 One-Shot Video Generator expander inside col_tools.
-    """
+    """Renders the Video Generator UI panel."""
     with st.expander("🎥 One-Shot Video Generator", expanded=False):
 
         st.markdown(
             "<p style='font-size:11px; color:#a1a1aa; font-family:\"JetBrains Mono\",monospace; margin-bottom:8px;'>"
-            "Generate narrated educational videos with Groq LPU + MoviePy or direct Kling AI video creation."
+            "Generate AI videos using Google Gemini Veo 3 Lite, Groq + MoviePy narration, or Kling AI."
             "</p>",
             unsafe_allow_html=True,
         )
 
-        has_groq  = bool(groq_key and groq_key.strip().startswith("gsk_"))
+        has_gemini = bool(gemini_key and gemini_key.strip())
+        has_groq = bool(groq_key and groq_key.strip().startswith("gsk_"))
         has_kling = bool(kling_key and kling_key.strip())
 
-        b_groq = (
+        b_gemini = (
             "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(34,197,94,0.12); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:2px 7px; border-radius:2px;'>"
-            "✔ GROQ SCRIPT ACTIVE</span>" if has_groq else
+            "✔ GEMINI VEO READY</span>" if has_gemini else
             "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(239,68,68,0.12); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 7px; border-radius:2px;'>"
-            "✘ GROQ MISSING</span>"
+            "✘ GEMINI KEY MISSING</span>"
         )
-        b_kling = (
+        b_groq = (
             "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(34,197,94,0.12); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:2px 7px; border-radius:2px; margin-left:6px;'>"
-            "✔ KLING AI READY</span>" if has_kling else
-            "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(161,161,170,0.1); color:#71717a; border:1px solid rgba(161,161,170,0.2); padding:2px 7px; border-radius:2px; margin-left:6px;'>"
-            "○ KLING AI KEY OPTIONAL</span>"
+            "✔ GROQ READY</span>" if has_groq else ""
         )
 
-        st.markdown(f"<div style='margin-bottom:10px;'>{b_groq}{b_kling}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='margin-bottom:10px;'>{b_gemini}{b_groq}</div>", unsafe_allow_html=True)
 
         vid_mode = st.radio(
             "Video Mode:",
-            options=["🎬 Narrated Scene Video (MoviePy + Groq + TTS)", "✨ Direct Kling AI Video (KLING_API_KEY)"],
+            options=[
+                "✨ Veo 3 Lite Video (Gemini API)",
+                "🎬 Narrated Scene Video (MoviePy + Groq + TTS)",
+                "🎥 Direct Kling AI Video",
+            ],
             key="vid_mode_radio",
         )
 
         vid_topic = st.text_input(
             "Video Topic / Prompt:",
-            placeholder="e.g. The Krebs Cycle, Quantum Physics",
+            placeholder="e.g. A futuristic quantum computer core glowing in cyan",
             key="vid_topic_input",
         )
 
-        if "Narrated" in vid_mode:
+        if "Veo 3 Lite" in vid_mode:
+            if st.button("🚀 GENERATE VEO 3 LITE VIDEO", use_container_width=True, key="vid_gen_veo"):
+                if not gemini_key:
+                    st.error("❌ GEMINI_API_KEY is missing from Streamlit secrets.")
+                    return
+                if not vid_topic.strip():
+                    st.warning("Please enter a video prompt first.")
+                    return
+
+                with st.spinner("⚡ Rendering video with Gemini Veo 3 Lite..."):
+                    vid_path, status_msg = generate_veo_video(vid_topic, gemini_key, model_name="veo-3-lite")
+                    if vid_path and os.path.exists(vid_path):
+                        st.success(f"✅ Video generated! ({status_msg})")
+                        st.video(vid_path)
+                        with open(vid_path, "rb") as vf:
+                            st.download_button("📥 DOWNLOAD MP4", vf, file_name="apollo_veo3_lite.mp4", mime="video/mp4", use_container_width=True)
+                    else:
+                        st.error(status_msg)
+
+        elif "Narrated" in vid_mode:
             vid_instructions = st.text_area(
                 "Additional Focus Points (optional):",
                 placeholder="e.g. Focus on practical applications",
@@ -493,66 +518,38 @@ def render_video_generator_ui(
                         return
 
                     narrative = script_data["narrative_script"]
-                    scenes    = script_data["scenes"]
-                    status_box.write(f"✅ Script generated via Groq — {len(scenes)} scenes.")
+                    scenes = script_data["scenes"]
 
                     image_paths, durations = [], []
-                    for i, scene in enumerate(scenes):
-                        kw  = scene.get("image_keyword", vid_topic)
-                        dur = int(scene.get("duration", 6))
-                        durations.append(dur)
-                        img_path = _fetch_image_for_scene(kw)
-                        image_paths.append(img_path)
-                        status_box.write(f"  ✔ Scene {i+1}: {kw[:50]}")
+                    for scene in scenes:
+                        kw = scene.get("image_keyword", vid_topic)
+                        durations.append(int(scene.get("duration", 6)))
+                        image_paths.append(_fetch_image_for_scene(kw))
 
                     valid_pairs = [(p, d) for p, d in zip(image_paths, durations) if p]
                     if not valid_pairs:
                         status_box.update(label="❌ Scene images failed.", state="error")
                         return
 
-                    valid_paths = [x[0] for x in valid_pairs]
-                    valid_durs  = [x[1] for x in valid_pairs]
-
-                    status_box.write("🎙️ Synthesizing voice narration...")
                     audio_bytes = run_tts_synthesis(narrative, voice=chosen_voice)
-                    if not audio_bytes:
-                        status_box.update(label="❌ TTS synthesis failed.", state="error")
-                        return
-
-                    status_box.write("🎬 Compiling MP4 video...")
-                    mp4_path = assemble_video_moviepy(valid_paths, valid_durs, audio_bytes)
-                    
-                    for p in valid_paths:
-                        try:
-                            if os.path.exists(p):
-                                os.unlink(p)
-                        except Exception:
-                            pass
-
-                    if not mp4_path:
-                        status_box.update(label="❌ Assembly failed.", state="error")
-                        return
+                    mp4_path = assemble_video_moviepy([x[0] for x in valid_pairs], [x[1] for x in valid_pairs], audio_bytes)
 
                     status_box.update(label="✅ Video compilation complete!", state="complete", expanded=False)
 
-                st.video(mp4_path)
-                with open(mp4_path, "rb") as vf:
-                    st.download_button("📥 DOWNLOAD MP4", vf, file_name=f"apollo_{vid_topic[:20]}.mp4", mime="video/mp4", use_container_width=True)
+                if mp4_path:
+                    st.video(mp4_path)
+                    with open(mp4_path, "rb") as vf:
+                        st.download_button("📥 DOWNLOAD MP4", vf, file_name=f"apollo_{vid_topic[:20]}.mp4", mime="video/mp4", use_container_width=True)
 
         else:
-            # Kling AI Mode
             if st.button("✨ GENERATE KLING AI VIDEO", use_container_width=True, key="vid_gen_kling"):
                 if not kling_key:
                     st.error("❌ KLING_API_KEY is not set in Streamlit Secrets.")
                     return
-                if not vid_topic.strip():
-                    st.warning("Please enter a video prompt first.")
-                    return
-
                 with st.spinner("✨ Requesting video from Kling AI API..."):
                     video_res, status_msg = generate_kling_video(vid_topic, kling_key)
                     if video_res:
                         st.success(f"✅ Kling AI Video Generated! ({status_msg})")
                         st.video(video_res)
                     else:
-                        st.error(f"❌ Kling AI Error: {status_msg}")
+                        st.error(status_msg)
