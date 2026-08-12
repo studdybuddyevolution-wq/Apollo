@@ -37,30 +37,31 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None, str]:
-    """Calls Hugging Face Cloud GPU Spaces via API (no local GPU required)."""
+    """Calls active Hugging Face Cloud GPU Spaces via API."""
     if Client is None:
         return None, "Missing `gradio_client`. Add `gradio_client` to your `requirements.txt`."
 
     clean_prompt = prompt.strip()[:500]
     token_val = hf_token or os.getenv("HF_TOKEN", "") or None
 
-    # List of public HF Spaces hosting text-to-video endpoints
+    # Valid Hugging Face Space Repositories (NOT Model Repositories)
     spaces_to_try = [
-        ("Lightricks/LTX-Video-Playground", "/generate_video"),
-        ("Wan-Video/Wan2.1-T2V-1.3B", "/generate"),
+        ("Lightricks/ltx-video-distilled", "/generate_video"),
+        ("Wan-AI/Wan2.1", "/generate"),
     ]
 
-    last_error = "Unknown error"
+    last_error = "No available public space found."
 
     for space_id, api_endpoint in spaces_to_try:
         try:
-            # Dual fallback for gradio_client versions: 'token' (new) vs 'hf_token' (legacy)
+            # Initialize client supporting both new (token) and legacy (hf_token) arguments
             try:
                 client = Client(space_id, token=token_val)
             except TypeError:
                 client = Client(space_id, hf_token=token_val)
 
-            if "LTX-Video" in space_id:
+            # Route call based on target space endpoint schema
+            if "ltx-video" in space_id:
                 result = client.predict(
                     prompt=clean_prompt,
                     negative_prompt="low quality, blurry, distorted, watermark",
@@ -83,10 +84,10 @@ def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None
                 with open(video_path, "rb") as src:
                     tmp.write(src.read())
                 tmp.close()
-                return tmp.name, f"Success ({space_id} Cloud API)"
+                return tmp.name, f"Success ({space_id})"
 
         except Exception as ex:
-            last_error = str(ex)
+            last_error = f"{space_id}: {str(ex)}"
             continue
 
     return None, f"Hugging Face Cloud API Error: {last_error}"
