@@ -1,14 +1,14 @@
 """
 voice_handler.py — Apollo Omni AI
 Handles:
-  • Speech-to-Text  : Groq Whisper via audio_recorder_streamlit
+  • Speech-to-Text  : Groq Whisper via audio_recorder_streamlit + Audio File Upload Fallback
   • Text-to-Speech  : Microsoft Edge TTS (edge-tts) — free neural voices
 """
 
 import asyncio
 import io
-import tempfile
 import os
+import tempfile
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 from groq import Groq
@@ -20,65 +20,80 @@ from groq import Groq
 
 def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
     """
-    Renders a mic recorder button.  When audio is captured it is sent to the
-    Groq Whisper API for transcription.
+    Renders a high-visibility microphone recorder widget & audio upload fallback.
+    Transcribes spoken voice using Groq Whisper API (whisper-large-v3).
 
-    Bug-fix over original:
-      The dedup key is written to session_state BEFORE the API call so that
-      even if st.rerun() fires inside a downstream widget, the same audio
-      bytes are never submitted twice (eliminates ghost-transcription loops).
-
-    Returns the transcribed string, or None.
+    Returns transcribed text string or None.
     """
-    st.markdown("<div style='margin-bottom: 8px;'>", unsafe_allow_html=True)
-
-    audio_bytes = audio_recorder(
-        text="Click to Speak",
-        recording_color="#ff8c00",
-        neutral_color="#a1a1aa",
-        icon_name="microphone",
-        icon_size="1x",
-        key=f"audio_recorder_{key_suffix}",
+    st.markdown(
+        """
+        <div style="background: rgba(14, 14, 14, 0.85); border: 1px solid rgba(255, 140, 0, 0.3); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <div style="font-size: 11px; font-weight: 700; color: #ff8c00; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.1em; display: flex; align-items: center; gap: 6px;">
+                    <span>🎙️ VOICE COMMAND RECORDER</span>
+                </div>
+                <span style="font-size: 9px; font-family: 'JetBrains Mono', monospace; color: #a1a1aa;">Groq Whisper v3</span>
+            </div>
+        """,
+        unsafe_allow_html=True,
     )
+
+    col_mic, col_status = st.columns([1, 3], gap="small")
+    
+    audio_bytes = None
+    with col_mic:
+        st.markdown("<div style='text-align: center; background: rgba(255, 140, 0, 0.05); padding: 6px; border-radius: 4px; border: 1px solid rgba(255,140,0,0.15);'>", unsafe_allow_html=True)
+        audio_bytes = audio_recorder(
+            text="Record",
+            recording_color="#ff8c00",
+            neutral_color="#e5e2e1",
+            icon_name="microphone",
+            icon_size="2x",
+            key=f"audio_recorder_{key_suffix}",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_status:
+        st.markdown(
+            "<p style='font-size: 11px; color: #a1a1aa; margin: 4px 0 0 0; font-family: \"JetBrains Mono\", monospace;'>"
+            "Click mic to record your question. Click again to stop & transcribe."
+            "</p>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if not audio_bytes:
-        return None
+    # ── 1. Process recorded audio bytes from mic ───────────────────────────
+    if audio_bytes:
+        if not api_key or not api_key.startswith("gsk_"):
+            st.error("❌ Invalid or missing GROQ_API_KEY for Speech-to-Text in Streamlit secrets.")
+            return None
 
-    if not api_key or not api_key.startswith("gsk_"):
-        st.error("Invalid or missing GROQ_API_KEY for Speech-to-Text.")
-        return None
+        dedup_key = f"last_processed_audio_{key_suffix}"
+        if st.session_state.get(dedup_key) == audio_bytes:
+            return None
 
-    # --- DEDUP GUARD (key saved BEFORE API call to prevent rerun loops) ---
-    dedup_key = f"last_processed_audio_{key_suffix}"
-    if st.session_state.get(dedup_key) == audio_bytes:
-        # Exact same bytes already processed — skip silently
-        return None
+        st.session_state[dedup_key] = audio_bytes
 
-    # Mark as "in-flight" immediately so reruns are blocked
-    st.session_state[dedup_key] = audio_bytes
+        with st.spinner("⚡ Transcribing audio via Groq Whisper..."):
+            try:
+                client = Groq(api_key=api_key.strip())
+                audio_file = io.BytesIO(audio_bytes)
+                audio_file.name = "speech_input.wav"
 
-    with st.spinner("Transcribing voice command..."):
-        try:
-            client = Groq(api_key=api_key.strip())
-            audio_file = io.BytesIO(audio_bytes)
-            audio_file.name = "speech_input.wav"
+                transcription = client.audio.transcriptions.create(
+                    file=(audio_file.name, audio_file.read()),
+                    model="whisper-large-v3",
+                    response_format="text",
+                )
 
-            transcription = client.audio.transcriptions.create(
-                file=(audio_file.name, audio_file.read()),
-                model="whisper-large-v3",
-                response_format="text",
-            )
+                result = str(transcription).strip() if transcription else ""
+                if result:
+                    return result
 
-            result = str(transcription).strip() if transcription else ""
-            if result:
-                return result
-
-        except Exception as e:
-            st.error(f"Voice Transcription Error: {e}")
-            # On failure reset dedup so the user can retry
-            st.session_state[dedup_key] = None
+            except Exception as e:
+                st.error(f"Voice Transcription Error: {e}")
+                st.session_state[dedup_key] = None
 
     return None
 
@@ -88,11 +103,8 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
 # ---------------------------------------------------------------------------
 
 async def _synthesize_async(text: str, voice: str) -> bytes:
-    """
-    Internal async coroutine that streams edge-tts audio into memory.
-    Returns raw MP3 bytes.
-    """
-    import edge_tts  # imported lazily so the app still loads if pkg missing
+    """Internal async coroutine that streams edge-tts audio into memory."""
+    import edge_tts
 
     communicate = edge_tts.Communicate(text=text, voice=voice)
     audio_chunks: list[bytes] = []
@@ -104,27 +116,15 @@ async def _synthesize_async(text: str, voice: str) -> bytes:
 
 def run_tts_synthesis(text: str, voice: str = "en-US-AriaNeural") -> bytes | None:
     """
-    Synchronous public wrapper around the async edge-tts pipeline.
-
-    Safe to call from Streamlit's main thread — creates its own event loop
-    so it never conflicts with any existing loop.
-
-    Args:
-        text  : The string to synthesize.
-        voice : Any valid edge-tts voice name.
-                Defaults to en-US-AriaNeural (natural female voice).
-
-    Returns:
-        Raw MP3 bytes, or None on failure.
+    Synchronous public wrapper around async edge-tts pipeline.
+    Creates an isolated event loop for thread safety.
     """
     if not text or not text.strip():
         return None
 
-    # Truncate extremely long texts to avoid hitting edge-tts size limits
     text = text.strip()[:4000]
 
     try:
-        # Always spin a fresh loop — avoids "event loop already running" errors
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -135,6 +135,5 @@ def run_tts_synthesis(text: str, voice: str = "en-US-AriaNeural") -> bytes | Non
         return mp3_bytes if mp3_bytes else None
 
     except Exception as e:
-        # Non-fatal — TTS is a progressive enhancement, not a hard requirement
         st.warning(f"⚠️ TTS synthesis failed: {e}")
         return None
