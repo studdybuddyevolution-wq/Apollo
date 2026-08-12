@@ -30,8 +30,11 @@ import streamlit as st
 # Import Modular Voice Handler
 from voice_handler import render_voice_input, run_tts_synthesis
 
-# Import RAG-powered Video Generator module
+# Import RAG & Kling AI Video Generator module
 from video_generator import render_video_generator_ui
+
+# Import User Settings Page
+from settings_app import render_settings_page
 
 # Import interactive Plotly chart engine
 try:
@@ -72,11 +75,11 @@ except Exception:
   TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 try:
-  GEMINI_API_KEY = st.secrets.get(
-      "GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", "")
+  KLING_API_KEY = st.secrets.get(
+      "KLING_API_KEY", os.getenv("KLING_API_KEY", "")
   )
 except Exception:
-  GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+  KLING_API_KEY = os.getenv("KLING_API_KEY", "")
 
 
 # 4. Resource Caching Pipelines
@@ -572,63 +575,7 @@ SCHEMA REQUIRED:
   )
 
 
-# 11. Gemini Slide Generator (RAG-Enabled Backup Endpoint)
-def generate_slides_with_gemini(
-    topic, custom_instructions="", context="", gemini_key="", user_prefs=None
-):
-  if not gemini_key:
-    return None, "Missing GEMINI_API_KEY in Streamlit Secrets."
-  url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key.strip()}"
-  headers = {"Content-Type": "application/json"}
-
-  _prefs = user_prefs or {}
-  prefs_line = (
-      f"Adapt slides for: learning style = '{_prefs.get('learning_style','General')}', "
-      f"depth = '{_prefs.get('detail_level','Intermediate')}'.\n\n"
-  )
-
-  prompt = f"""{prefs_line}Create an in-depth presentation outline about '{topic}'.
-
-SPECIFIC USER INSTRUCTIONS / FOCUS POINTS:
-{custom_instructions if custom_instructions else "None provided."}
-
-INDEXED KNOWLEDGE BASE CONTEXT:
-{context if context else "No extra context provided. Use general knowledge."}
-
-Return ONLY a valid JSON object with key 'slides' containing 4-5 detailed slide objects.
-Schema:
-{{
-  "slides": [
-    {{
-      "title": "Title",
-      "subtitle": "Subtitle",
-      "image_keyword": "descriptive topic prompt",
-      "cards": [
-        {{"heading": "Heading", "text": "Comprehensive explanation text using the context provided."}}
-      ]
-    }}
-  ]
-}}"""
-
-  payload = {
-      "contents": [{"parts": [{"text": prompt}]}],
-      "generationConfig": {
-          "temperature": 0.3,
-          "responseMimeType": "application/json",
-      },
-  }
-
-  try:
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
-    if response.status_code == 200:
-      data = response.json()
-      text_output = data["candidates"][0]["content"]["parts"][0]["text"]
-      parsed_json = json.loads(text_output)
-      return parsed_json.get("slides", parsed_json), "Success"
-    else:
-      return None, f"Gemini API Error ({response.status_code}): {response.text}"
-  except Exception as e:
-    return None, str(e)
+# Gemini slide generator removed per user request — Groq LPU is the primary engine.
 
 
 # 12. Email Dispatcher Function for Auth
@@ -938,9 +885,17 @@ if not st.session_state.authenticated:
 # ================= SIDEBAR: SETTINGS & TOOLS =================
 with st.sidebar:
   st.markdown(
-      "<h2 class='omni-brand' style='font-size: 16px; margin-bottom: 20px;'>APOLLO <span>OMNI</span><br><span style='font-size: 9px; color: #71717a; font-family: \"JetBrains Mono\";'>SYSTEM CONTROL PANEL</span></h2>",
+      "<h2 class='omni-brand' style='font-size: 16px; margin-bottom: 12px;'>APOLLO <span>OMNI</span><br><span style='font-size: 9px; color: #71717a; font-family: \"JetBrains Mono\";'>SYSTEM CONTROL PANEL</span></h2>",
       unsafe_allow_html=True,
   )
+
+  # Interactive App Navigation Switcher
+  app_mode = st.radio(
+      "NAVIGATION:",
+      options=["⚡ Console & Tools", "⚙️ User Settings & Profile"],
+      key="main_app_navigation",
+  )
+  st.markdown("<hr style='border-color: rgba(255,140,0,0.2); margin: 12px 0;'>", unsafe_allow_html=True)
 
   # Telemetry Row
   st.markdown(
@@ -1155,7 +1110,10 @@ with st.sidebar:
 
 
 # ================= MAIN AREA: CONSOLE & TOOLS =================
-col_chat, col_tools = st.columns([6, 4], gap="large")
+if app_mode == "⚙️ User Settings & Profile":
+  render_settings_page()
+else:
+  col_chat, col_tools = st.columns([6, 4], gap="large")
 
 # ----------------- MAIN LEFT: CHAT CONSOLE -----------------
 with col_chat:
@@ -1344,77 +1302,34 @@ with col_tools:
         "ℹ️ No indexed blocks found. Crawl the web or upload documents to anchor slides in specific context.</div>",
         unsafe_allow_html=True,
     )
-  btn_qwen, btn_gemini = st.columns(2)
+  if st.button("🚀 GENERATE SLIDE DECK (GROQ LPU)", use_container_width=True):
+    if not GROQ_API_KEY:
+      st.error("Missing GROQ_API_KEY in Streamlit secrets.")
+    elif ppt_topic_input:
+      with st.spinner("Retrieving indexed blocks & generating presentation via Groq..."):
+        ppt_context = ""
+        if st.session_state.vector_db is not None:
+          query = f"{ppt_topic_input} {custom_prompt_input}".strip()
+          retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 6})
+          matched_nodes = retriever.invoke(query)
+          ppt_context = "\n\n".join([
+              f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
+              for node in matched_nodes
+          ])
 
-  with btn_qwen:
-    if st.button("🚀 Groq Gen", use_container_width=True):
-      if not GROQ_API_KEY:
-        st.error("Missing GROQ_API_KEY in Streamlit secrets.")
-      elif ppt_topic_input:
-        with st.spinner(
-            "Retrieving indexed blocks & generating presentation via Groq..."
-        ):
-          # Retrieve context from vector store if available
-          ppt_context = ""
-          if st.session_state.vector_db is not None:
-            query = f"{ppt_topic_input} {custom_prompt_input}".strip()
-            retriever = st.session_state.vector_db.as_retriever(
-                search_kwargs={"k": 6}
-            )
-            matched_nodes = retriever.invoke(query)
-            ppt_context = "\n\n".join([
-                f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
-                for node in matched_nodes
-            ])
-
-          new_slides, status = generate_slides_with_groq(
-              topic=ppt_topic_input,
-              custom_instructions=custom_prompt_input,
-              context=ppt_context,
-              groq_key=GROQ_API_KEY,
-              user_prefs=st.session_state.get("user_prefs"),
-          )
-          if new_slides:
-            st.session_state.slides_data = new_slides
-            st.success("New slide deck generated using indexed blocks!")
-            st.rerun()
-          else:
-            st.error(f"Generation Error: {status}")
-
-  with btn_gemini:
-    if st.button("✨ Gemini Gen", use_container_width=True):
-      if not GEMINI_API_KEY:
-        st.error("Missing GEMINI_API_KEY in Streamlit secrets.")
-      elif ppt_topic_input:
-        with st.spinner(
-            "Retrieving indexed blocks & generating presentation via Gemini..."
-        ):
-          # Retrieve context from vector store if available
-          ppt_context = ""
-          if st.session_state.vector_db is not None:
-            query = f"{ppt_topic_input} {custom_prompt_input}".strip()
-            retriever = st.session_state.vector_db.as_retriever(
-                search_kwargs={"k": 6}
-            )
-            matched_nodes = retriever.invoke(query)
-            ppt_context = "\n\n".join([
-                f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
-                for node in matched_nodes
-            ])
-
-          new_slides, err = generate_slides_with_gemini(
-              topic=ppt_topic_input,
-              custom_instructions=custom_prompt_input,
-              context=ppt_context,
-              gemini_key=GEMINI_API_KEY,
-              user_prefs=st.session_state.get("user_prefs"),
-          )
-          if new_slides:
-            st.session_state.slides_data = new_slides
-            st.success("New slide deck generated using indexed blocks!")
-            st.rerun()
-          else:
-            st.error(f"Generation Error: {err}")
+        new_slides, status = generate_slides_with_groq(
+            topic=ppt_topic_input,
+            custom_instructions=custom_prompt_input,
+            context=ppt_context,
+            groq_key=GROQ_API_KEY,
+            user_prefs=st.session_state.get("user_prefs"),
+        )
+        if new_slides:
+          st.session_state.slides_data = new_slides
+          st.success("New slide deck generated using indexed blocks!")
+          st.rerun()
+        else:
+          st.error(f"Generation Error: {status}")
 
   with st.expander("✏️ Live Slide Editor", expanded=True):
     if not st.session_state.slides_data or not isinstance(
@@ -1502,7 +1417,8 @@ with col_tools:
 
   # --- VIDEO GENERATOR (standalone module) ---
   render_video_generator_ui(
-      gemini_key=GEMINI_API_KEY,
+      groq_key=GROQ_API_KEY,
+      kling_key=KLING_API_KEY,
       vector_db=st.session_state.vector_db,
       embedder=embedder,
       user_prefs=st.session_state.get("user_prefs"),
