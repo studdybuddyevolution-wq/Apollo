@@ -37,7 +37,7 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None, str]:
-    """Calls active Hugging Face Cloud GPU Spaces via API without requiring hardcoded route names."""
+    """Calls active Hugging Face Cloud GPU Spaces via API safely specifying fn_index/api_name."""
     if Client is None:
         return None, "Missing `gradio_client`. Add `gradio_client` to your `requirements.txt`."
 
@@ -79,26 +79,39 @@ def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None
                         randomize_seed=True,
                         ui_guidance_scale=3.0,
                         improve_texture_flag=True,
+                        api_name="/generate_video",
                     )
                 except Exception:
                     pass
 
-            # Attempt 2: Fallback to primary function index (fn_index=0) if named endpoints fail
+            # Attempt 2: Try explicit endpoint names commonly used in Gradio Spaces
             if result is None:
-                try:
-                    result = client.predict(clean_prompt, fn_index=0)
-                except Exception:
-                    result = client.predict(clean_prompt)
+                for target_api in ["/predict", "/generate", "/generate_video", "/run"]:
+                    try:
+                        result = client.predict(clean_prompt, api_name=target_api)
+                        break
+                    except Exception:
+                        continue
+
+            # Attempt 3: Try explicit function indices (fn_index) to resolve multi-endpoint Spaces
+            if result is None:
+                for fn_i in [0, 1, 2]:
+                    try:
+                        result = client.predict(clean_prompt, fn_index=fn_i)
+                        break
+                    except Exception:
+                        continue
 
             # Handle result tuple, list, or filepath string returned by Gradio
-            video_path = result[0] if isinstance(result, (list, tuple)) else result
+            if result is not None:
+                video_path = result[0] if isinstance(result, (list, tuple)) else result
 
-            if video_path and os.path.exists(str(video_path)):
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                with open(str(video_path), "rb") as src:
-                    tmp.write(src.read())
-                tmp.close()
-                return tmp.name, f"Success ({space_id})"
+                if video_path and os.path.exists(str(video_path)):
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                    with open(str(video_path), "rb") as src:
+                        tmp.write(src.read())
+                    tmp.close()
+                    return tmp.name, f"Success ({space_id})"
 
         except Exception as ex:
             last_error = f"{space_id}: {str(ex)}"
