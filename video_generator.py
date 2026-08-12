@@ -27,7 +27,10 @@ except ImportError:
     jwt = None
 
 # Re-export TTS from voice_handler
-from voice_handler import run_tts_synthesis  # noqa: F401
+try:
+    from voice_handler import run_tts_synthesis  # noqa: F401
+except ImportError:
+    run_tts_synthesis = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +43,6 @@ def _build_video_prompt(
     context: str,
     user_prefs: Optional[dict],
 ) -> str:
-    """Builds the structured JSON prompt for video script generation."""
     prefs_ctx = ""
     if user_prefs:
         prefs_ctx = (
@@ -77,13 +79,12 @@ EXACT SCHEMA:
 
 
 def _parse_script_json(raw: str) -> tuple[dict | None, str]:
-    """Strips markdown fences and parses the JSON safely."""
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     raw = re.sub(r"```json\s*", "", raw)
     raw = re.sub(r"```\s*", "", raw)
 
     start = raw.find("{")
-    end   = raw.rfind("}")
+    end = raw.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None, "No JSON object found in model response."
 
@@ -95,7 +96,7 @@ def _parse_script_json(raw: str) -> tuple[dict | None, str]:
 
     if "narrative_script" not in data or "scenes" not in data:
         return None, "JSON missing 'narrative_script' or 'scenes' keys."
-    if not isinstance(data["scenes"], list) or len(data["scenes"]) == 0:
+    if not isinstance(data.get("scenes"), list) or len(data["scenes"]) == 0:
         return None, "JSON 'scenes' array is empty."
 
     return data, "OK"
@@ -108,14 +109,15 @@ def generate_video_script_groq(
     groq_key: str = "",
     user_prefs: Optional[dict] = None,
 ) -> tuple[dict | None, str]:
-    """Uses Groq LPU (llama-3.3-70b-versatile) to generate structured video script JSON."""
+    groq_key = groq_key or os.getenv("GROQ_API_KEY", "")
     if not groq_key or not groq_key.strip().startswith("gsk_"):
-        return None, "Missing or invalid GROQ_API_KEY in Streamlit secrets."
+        return None, "Missing or invalid GROQ_API_KEY in configuration."
 
     prompt = _build_video_prompt(topic, instructions, context, user_prefs)
     client = Groq(api_key=groq_key.strip())
     models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
+    last_err = "Unknown error"
     for model_id in models_to_try:
         try:
             completion = client.chat.completions.create(
@@ -138,7 +140,7 @@ def generate_video_script_groq(
             last_err = str(ex)
             continue
 
-    return None, f"Groq script generation error: {locals().get('last_err', 'unknown')}"
+    return None, f"Groq script generation error: {last_err}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,20 +149,18 @@ def generate_video_script_groq(
 
 def generate_veo_video(
     prompt: str,
-    gemini_key: str,
+    gemini_key: str = "",
     model_name: str = "veo-3-lite",
     duration: int = 5,
 ) -> tuple[str | None, str]:
-    """
-    Generates video using Google Gemini API Key and Veo 3 Lite model.
-    """
-    if not gemini_key or not gemini_key.strip():
-        return None, "Missing GEMINI_API_KEY in Streamlit secrets."
+    """Generates video using Google Gemini API Key and Veo 3 Lite model."""
+    clean_key = (gemini_key or os.getenv("GEMINI_API_KEY", "")).strip()
+    if not clean_key:
+        return None, "Missing GEMINI_API_KEY. Configure it in environment or Streamlit secrets."
 
-    clean_key = gemini_key.strip()
     clean_prompt = prompt.strip()[:1000]
 
-    # Try Google GenAI SDK first
+    # 1. Try Google GenAI SDK First
     try:
         from google import genai
         from google.genai import types
@@ -175,11 +175,12 @@ def generate_veo_video(
             ),
         )
 
+        # Poll operation status correctly
         while not operation.done:
             time.sleep(5)
             operation = client.operations.get(operation)
 
-        if hasattr(operation, "result") and operation.result and operation.result.generated_videos:
+        if hasattr(operation, "result") and operation.result and getattr(operation.result, "generated_videos", None):
             gen_video = operation.result.generated_videos[0]
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
             
@@ -196,7 +197,7 @@ def generate_veo_video(
     except Exception as sdk_ex:
         sdk_err = str(sdk_ex)
 
-    # Fallback to Google Generative Language REST API endpoint
+    # 2. Fallback to Google Generative Language REST API
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:predict?key={clean_key}"
         payload = {
@@ -277,12 +278,12 @@ def _get_kling_auth_token(kling_key: str) -> str:
     return raw_token
 
 
-def generate_kling_video(prompt: str, kling_key: str, duration: int = 5) -> tuple[str | None, str]:
-    if not kling_key or not kling_key.strip():
-        return None, "Missing KLING_API_KEY in Streamlit Secrets."
+def generate_kling_video(prompt: str, kling_key: str = "", duration: int = 5) -> tuple[str | None, str]:
+    raw_key = (kling_key or os.getenv("KLING_API_KEY", "")).strip()
+    if not raw_key:
+        return None, "Missing KLING_API_KEY in configuration."
 
     clean_prompt = prompt.strip()[:1000]
-    raw_key = kling_key.strip()
     ak, sk, _ = _parse_kling_credentials(raw_key)
     jwt_token = _get_kling_auth_token(raw_key)
 
@@ -310,7 +311,7 @@ def generate_kling_video(prompt: str, kling_key: str, duration: int = 5) -> tupl
                 video_url = res_data.get("video_url") or res_data.get("data", {}).get("video_url")
                 if video_url:
                     return video_url, f"Success ({ep['name']})"
-        except Exception as e:
+        except Exception:
             continue
 
     return None, "Kling AI generation request failed."
@@ -421,9 +422,13 @@ def render_video_generator_ui(
             unsafe_allow_html=True,
         )
 
-        has_gemini = bool(gemini_key and gemini_key.strip())
-        has_groq = bool(groq_key and groq_key.strip().startswith("gsk_"))
-        has_kling = bool(kling_key and kling_key.strip())
+        # Fallback to os.environ if keys passed as empty string
+        gemini_key = (gemini_key or os.getenv("GEMINI_API_KEY", "")).strip()
+        groq_key = (groq_key or os.getenv("GROQ_API_KEY", "")).strip()
+        kling_key = (kling_key or os.getenv("KLING_API_KEY", "")).strip()
+
+        has_gemini = bool(gemini_key)
+        has_groq = bool(groq_key and groq_key.startswith("gsk_"))
 
         b_gemini = (
             "<span style='font-size:9px; font-family:\"JetBrains Mono\"; background:rgba(34,197,94,0.12); color:#4ade80; border:1px solid rgba(34,197,94,0.3); padding:2px 7px; border-radius:2px;'>"
@@ -450,21 +455,21 @@ def render_video_generator_ui(
 
         vid_topic = st.text_input(
             "Video Topic / Prompt:",
-            placeholder="e.g. A futuristic quantum computer core glowing in cyan",
+            placeholder="e.g. A glowing beaker with acids and bases in a futuristic chem lab",
             key="vid_topic_input",
         )
 
         if "Veo 3 Lite" in vid_mode:
             if st.button("🚀 GENERATE VEO 3 LITE VIDEO", use_container_width=True, key="vid_gen_veo"):
                 if not gemini_key:
-                    st.error("❌ GEMINI_API_KEY is missing from Streamlit secrets.")
+                    st.error("❌ GEMINI_API_KEY is missing. Add it to `.streamlit/secrets.toml` or set environment variable.")
                     return
                 if not vid_topic.strip():
                     st.warning("Please enter a video prompt first.")
                     return
 
                 with st.spinner("⚡ Rendering video with Gemini Veo 3 Lite..."):
-                    vid_path, status_msg = generate_veo_video(vid_topic, gemini_key, model_name="veo-3-lite")
+                    vid_path, status_msg = generate_veo_video(vid_topic, gemini_key=gemini_key, model_name="veo-3-lite")
                     if vid_path and os.path.exists(vid_path):
                         st.success(f"✅ Video generated! ({status_msg})")
                         st.video(vid_path)
@@ -531,6 +536,10 @@ def render_video_generator_ui(
                         status_box.update(label="❌ Scene images failed.", state="error")
                         return
 
+                    if run_tts_synthesis is None:
+                        st.error("`voice_handler.py` module is missing or cannot be imported.")
+                        return
+
                     audio_bytes = run_tts_synthesis(narrative, voice=chosen_voice)
                     mp4_path = assemble_video_moviepy([x[0] for x in valid_pairs], [x[1] for x in valid_pairs], audio_bytes)
 
@@ -544,10 +553,10 @@ def render_video_generator_ui(
         else:
             if st.button("✨ GENERATE KLING AI VIDEO", use_container_width=True, key="vid_gen_kling"):
                 if not kling_key:
-                    st.error("❌ KLING_API_KEY is not set in Streamlit Secrets.")
+                    st.error("❌ KLING_API_KEY is not set.")
                     return
                 with st.spinner("✨ Requesting video from Kling AI API..."):
-                    video_res, status_msg = generate_kling_video(vid_topic, kling_key)
+                    video_res, status_msg = generate_kling_video(vid_topic, kling_key=kling_key)
                     if video_res:
                         st.success(f"✅ Kling AI Video Generated! ({status_msg})")
                         st.video(video_res)
