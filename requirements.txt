@@ -1,5 +1,4 @@
 streamlit>=1.50.0
-huggingface_hub
 langchain
 langchain-core
 langchain-community
@@ -17,3 +16,5 @@ pillow
 plotly
 audio-recorder-streamlit
 perchance
+moviepy>=1.0.3
+edge-tts>=6.1.9
