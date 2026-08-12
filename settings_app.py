@@ -127,15 +127,28 @@ st.markdown(
 
 import json
 
+PROFILE_PATH = "apollo_user_profile.json"
+
+_DEFAULTS = {
+    "full_name": "",
+    "university": "Somaiya University",
+    "major": "",
+    "learning_style": "Visual & Interactive",
+    "detail_level": "Intermediate",
+    "default_model": "Meta Llama 3.3 70B (Groq)"
+}
+
 if "user_prefs" not in st.session_state:
-    st.session_state.user_prefs = {
-        "full_name": "",
-        "university": "Somaiya University",
-        "major": "",
-        "learning_style": "Visual & Interactive",
-        "detail_level": "Intermediate",
-        "default_model": "Qwen 3.6 27B (Groq LPU)"
-    }
+    if os.path.exists(PROFILE_PATH):
+        try:
+            with open(PROFILE_PATH, "r", encoding="utf-8") as _f:
+                _loaded = json.load(_f)
+            # Merge loaded values over defaults so new keys are safe
+            st.session_state.user_prefs = {**_DEFAULTS, **_loaded}
+        except Exception:
+            st.session_state.user_prefs = dict(_DEFAULTS)
+    else:
+        st.session_state.user_prefs = dict(_DEFAULTS)
 
 def generate_profile_json(config):
     return json.dumps(config, indent=4)
@@ -199,7 +212,14 @@ col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
 with col_btn2:
     if st.button("SAVE PREFERENCES", use_container_width=True):
         json_content = generate_profile_json(st.session_state.user_prefs)
-        st.success("Profile Updated Successfully!")
+        # Write locally so app.py auto-loads it on next session
+        try:
+            with open(PROFILE_PATH, "w", encoding="utf-8") as _wf:
+                _wf.write(json_content)
+            st.success("✅ Profile saved locally & applied globally!")
+        except Exception as _we:
+            st.warning(f"Local save failed ({_we}). Use the download button below.")
+            st.success("Profile Updated Successfully!")
         st.download_button(
             label="DOWNLOAD PROFILE (JSON)",
             data=json_content,
