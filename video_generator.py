@@ -6,10 +6,10 @@ Standalone RAG-powered Educational Video Generator module.
 Script Engine : Groq LPU (llama-3.3-70b-versatile) — fast & free
 Video Engines : 
   1. MoviePy Narrated Video (Scene-by-scene script + Pollinations visuals + edge-tts narration)
-  2. Kling AI Video Generation (Direct Kling AI text-to-video via KLING_API_KEY)
+  2. Kling AI Video Generation (Direct Kling AI text-to-video via KLING_API_KEY with JWT encoding support)
 
 Dependencies:
-    moviepy>=1.0.3   edge-tts>=6.1.9   groq   requests
+    moviepy>=1.0.3   edge-tts>=6.1.9   groq   requests   pyjwt
 """
 
 from __future__ import annotations
@@ -25,6 +25,11 @@ from typing import Optional
 import requests
 import streamlit as st
 from groq import Groq
+
+try:
+    import jwt
+except ImportError:
+    jwt = None
 
 # Re-export TTS from voice_handler
 from voice_handler import run_tts_synthesis  # noqa: F401
@@ -147,8 +152,42 @@ def generate_video_script_groq(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. KLING AI DIRECT VIDEO GENERATION ENGINE
+# 2. KLING AI DIRECT VIDEO GENERATION ENGINE (WITH JWT SIGNING)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _get_kling_auth_token(kling_key: str) -> str:
+    """
+    Resolves KLING_API_KEY into a valid JWT token string.
+    
+    Kling AI authentication formats:
+      1. AK:SK format -> "AccessKey:SecretKey" (generates signed JWT using PyJWT)
+      2. Direct JWT token -> "eyJ..." or pre-signed Bearer string
+    """
+    key_str = kling_key.strip()
+    if key_str.lower().startswith("bearer "):
+        key_str = key_str[7:].strip()
+
+    # If key contains AK:SK format (colon separated), encode with PyJWT algorithm HS256
+    if ":" in key_str and not key_str.startswith("http"):
+        parts = key_str.split(":", 1)
+        ak = parts[0].strip()
+        sk = parts[1].strip()
+        if jwt:
+            now = int(time.time())
+            headers = {"alg": "HS256", "typ": "JWT"}
+            payload = {
+                "iss": ak,
+                "exp": now + 1800,  # 30 mins expiration
+                "nbf": now - 5,
+            }
+            try:
+                token = jwt.encode(payload, sk, algorithm="HS256", headers=headers)
+                return token
+            except Exception:
+                pass
+
+    return key_str
+
 
 def generate_kling_video(
     prompt: str,
@@ -157,10 +196,8 @@ def generate_kling_video(
 ) -> tuple[str | None, str]:
     """
     Dispatches a video generation task to Kling AI API using KLING_API_KEY.
-    
-    Supports official Kling AI API / Aggregator standard endpoints:
-      • Endpoint: https://api.klingai.com/v1/videos/text2video
-      • Fallback: https://api.aimlapi.com/v2/video/generations
+    Supports official Kling AI API with automatic JWT signing (AK:SK),
+    AIMLAPI gateway, and Fal.ai provider endpoints.
 
     Returns (video_url_or_file_path, status_message)
     """
@@ -168,16 +205,16 @@ def generate_kling_video(
         return None, "Missing KLING_API_KEY in Streamlit Secrets."
 
     clean_prompt = prompt.strip()[:1000]
+    jwt_token = _get_kling_auth_token(kling_key)
 
-    # Try Primary Kling AI API endpoint
     headers = {
-        "Authorization": f"Bearer {kling_key.strip()}",
-        "X-API-Key": kling_key.strip(),
+        "Authorization": f"Bearer {jwt_token}",
         "Content-Type": "application/json",
     }
 
     endpoints = [
         {
+            "name": "Kling Open Platform API",
             "url": "https://api.klingai.com/v1/videos/text2video",
             "payload": {
                 "model_name": "kling-v1",
@@ -187,11 +224,20 @@ def generate_kling_video(
             },
         },
         {
+            "name": "AIMLAPI Kling Gateway",
             "url": "https://api.aimlapi.com/v2/video/generations",
             "payload": {
                 "model": "kling-video/v1/standard/text-to-video",
                 "prompt": clean_prompt,
                 "duration": duration,
+            },
+        },
+        {
+            "name": "Fal.ai Kling Service",
+            "url": "https://queue.fal.run/fal-ai/kling-video/v1.5/standard/text-to-video",
+            "payload": {
+                "prompt": clean_prompt,
+                "duration": str(duration),
             },
         },
     ]
@@ -202,43 +248,55 @@ def generate_kling_video(
             resp = requests.post(ep["url"], headers=headers, json=ep["payload"], timeout=30)
             if resp.status_code in (200, 201, 202):
                 res_data = resp.json()
-                # Check for direct video url in response
                 video_url = (
                     res_data.get("video_url")
                     or res_data.get("data", {}).get("video_url")
                     or res_data.get("output", {}).get("video_url")
+                    or res_data.get("video", {}).get("url")
                 )
                 if video_url:
-                    return video_url, "Success (Kling AI Direct)"
-                
-                # Check for task_id (asynchronous workflow)
-                task_id = res_data.get("task_id") or res_data.get("id") or res_data.get("data", {}).get("task_id")
+                    return video_url, f"Success ({ep['name']})"
+
+                task_id = (
+                    res_data.get("task_id")
+                    or res_data.get("id")
+                    or res_data.get("request_id")
+                    or res_data.get("data", {}).get("task_id")
+                )
                 if task_id:
-                    # Poll status endpoint for up to 60 seconds
                     poll_url = f"{ep['url']}/{task_id}"
                     for _ in range(12):
                         time.sleep(5)
                         poll_resp = requests.get(poll_url, headers=headers, timeout=15)
                         if poll_resp.status_code == 200:
                             p_data = poll_resp.json()
-                            status = p_data.get("status") or p_data.get("task_status")
-                            if status in ("succeeded", "completed", "SUCCESS"):
+                            status = p_data.get("status") or p_data.get("task_status") or p_data.get("state")
+                            if status in ("succeeded", "completed", "SUCCESS", "COMPLETED"):
                                 out_url = (
                                     p_data.get("video_url")
                                     or p_data.get("data", {}).get("video_url")
                                     or p_data.get("output", {}).get("video_url")
+                                    or p_data.get("video", {}).get("url")
                                 )
                                 if out_url:
-                                    return out_url, "Success (Kling AI Async)"
-                            elif status in ("failed", "ERROR"):
+                                    return out_url, f"Success ({ep['name']} Async)"
+                            elif status in ("failed", "ERROR", "FAILED"):
                                 break
             else:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                err_text = resp.text[:250]
+                if resp.status_code == 401 and "Invalid JWT token" in err_text:
+                    last_error = (
+                        "HTTP 401 Unauthorized: Invalid JWT Token.\n"
+                        "💡 Tip: If using official Kling AI, enter your KLING_API_KEY as 'AccessKey:SecretKey' "
+                        "or provide your pre-signed Bearer JWT token in Streamlit Secrets."
+                    )
+                else:
+                    last_error = f"{ep['name']} HTTP {resp.status_code}: {err_text}"
         except Exception as e:
             last_error = str(e)
             continue
 
-    return None, f"Kling AI API call failed: {last_error}"
+    return None, f"Kling AI request failed: {last_error}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -495,9 +553,6 @@ def render_video_generator_ui(
                     video_res, status_msg = generate_kling_video(vid_topic, kling_key)
                     if video_res:
                         st.success(f"✅ Kling AI Video Generated! ({status_msg})")
-                        if video_res.startswith("http"):
-                            st.video(video_res)
-                        else:
-                            st.video(video_res)
+                        st.video(video_res)
                     else:
                         st.error(f"❌ Kling AI Error: {status_msg}")
