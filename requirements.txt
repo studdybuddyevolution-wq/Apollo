@@ -21,3 +21,4 @@ perchance
 moviepy>=1.0.3,<2.0.0
 edge-tts>=6.1.9
 pyjwt>=2.8.0
+huggingface_hub
