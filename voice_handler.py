@@ -8,7 +8,6 @@ Handles:
 import asyncio
 import io
 import os
-import tempfile
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 from groq import Groq
@@ -39,7 +38,7 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
     )
 
     col_mic, col_status = st.columns([1, 3], gap="small")
-    
+
     audio_bytes = None
     with col_mic:
         st.markdown("<div style='text-align: center; background: rgba(255, 140, 0, 0.05); padding: 6px; border-radius: 4px; border: 1px solid rgba(255,140,0,0.15);'>", unsafe_allow_html=True)
@@ -76,6 +75,7 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
         st.session_state[dedup_key] = audio_bytes
 
         with st.spinner("⚡ Transcribing audio via Groq Whisper..."):
+            audio_file = None
             try:
                 client = Groq(api_key=api_key.strip())
                 audio_file = io.BytesIO(audio_bytes)
@@ -94,6 +94,10 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
             except Exception as e:
                 st.error(f"Voice Transcription Error: {e}")
                 st.session_state[dedup_key] = None
+            finally:
+                # Explicitly close the BytesIO buffer to free memory
+                if audio_file is not None:
+                    audio_file.close()
 
     return None
 
@@ -118,6 +122,8 @@ def run_tts_synthesis(text: str, voice: str = "en-US-AriaNeural") -> bytes | Non
     """
     Synchronous public wrapper around async edge-tts pipeline.
     Creates an isolated event loop for thread safety.
+    Audio is streamed fully into memory (bytes) — no temp files written to disk.
+    The returned bytes object is discarded by the caller after st.audio() renders it.
     """
     if not text or not text.strip():
         return None
@@ -130,6 +136,7 @@ def run_tts_synthesis(text: str, voice: str = "en-US-AriaNeural") -> bytes | Non
         try:
             mp3_bytes = loop.run_until_complete(_synthesize_async(text, voice))
         finally:
+            # Always close the event loop to release OS resources
             loop.close()
 
         return mp3_bytes if mp3_bytes else None
