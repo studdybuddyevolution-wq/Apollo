@@ -4,6 +4,11 @@ video_generator.py — Apollo Omni AI
 Zero-cost cloud video generation module:
   1. Hugging Face Inference API (Cloud GPU via `huggingface_hub.InferenceClient`)
   2. Narrated Lesson Video (Groq + Pollinations + Edge-TTS + MoviePy)
+
+Upgrades in this version:
+  • Concurrent scene image downloads via ThreadPoolExecutor (up to 4 workers)
+  • Resource leak prevention: all temp files (images, audio, video) are cleaned
+    up in try/finally blocks after rendering completes
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import os
 import re
 import tempfile
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import requests
@@ -58,7 +64,7 @@ def generate_hf_cloud_video(prompt: str, hf_token: str = "") -> tuple[str | None
     for model_id, provider in models_to_try:
         try:
             client = InferenceClient(provider=provider, api_key=token_val)
-            
+
             # Request video generation bytes from the cloud provider
             video_bytes = client.text_to_video(
                 prompt=clean_prompt,
@@ -134,29 +140,37 @@ def generate_video_script_groq(
     prompt = _build_video_prompt(topic, instructions, context, user_prefs)
     client = Groq(api_key=clean_key)
 
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You output ONLY raw JSON objects."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.4,
-            max_tokens=1200,
-        )
-        raw = completion.choices[0].message.content or ""
-        raw = re.sub(r"```json\s*|```\s*", "", raw).strip()
-        data = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
-        return data, "OK"
-    except Exception as ex:
-        return None, f"Groq script error: {ex}"
+    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"]
+    last_err = ""
+
+    for model_id in models_to_try:
+        try:
+            completion = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": "You output ONLY raw JSON objects."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.4,
+                max_tokens=1200,
+            )
+            raw = completion.choices[0].message.content or ""
+            raw = re.sub(r"```json\s*|```\s*", "", raw).strip()
+            data = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
+            return data, f"OK ({model_id})"
+        except Exception as ex:
+          last_err = str(ex)
+          continue
+
+    return None, f"Groq script error across models: {last_err}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. MOVIEPY LIGHTWEIGHT ASSEMBLY ENGINE
+# 3. SCENE IMAGE FETCHER (single scene)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_image_for_scene(keyword: str) -> str | None:
+    """Fetches a single scene image from Pollinations AI. Returns temp file path or None."""
     clean = re.sub(r"[^\w\s]", "", keyword).strip() or "educational graphic"
     encoded = urllib.parse.quote(f"high resolution educational illustration of {clean}, 8k")
     seed = abs(hash(clean)) % 100000
@@ -173,6 +187,38 @@ def _fetch_image_for_scene(keyword: str) -> str | None:
         pass
     return None
 
+
+def _fetch_images_concurrent(scenes: list[dict]) -> list[str | None]:
+    """
+    Fetches all scene images in parallel using a ThreadPoolExecutor.
+    Preserves original scene ordering in the returned list.
+    Uses up to 4 concurrent workers to avoid hammering the image API.
+    """
+    keywords = [s.get("image_keyword", "") for s in scenes]
+    results: list[str | None] = [None] * len(keywords)
+
+    if not keywords:
+        return results
+
+    max_workers = min(len(keywords), 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_fetch_image_for_scene, kw): i
+            for i, kw in enumerate(keywords)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                results[idx] = future.result()
+            except Exception:
+                results[idx] = None
+
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. MOVIEPY LIGHTWEIGHT ASSEMBLY ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
 
 def assemble_video_moviepy(
     scene_image_paths: list[str],
@@ -220,12 +266,13 @@ def assemble_video_moviepy(
         st.error(f"Assembly Error: {ex}")
         return None
     finally:
+        # Always remove the audio temp file regardless of success/failure
         if os.path.exists(audio_tmp.name):
             os.unlink(audio_tmp.name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. STREAMLIT UI PANEL
+# 5. STREAMLIT UI PANEL
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_video_generator_ui(
@@ -277,6 +324,9 @@ def render_video_generator_ui(
 
                 with st.spinner("⚡ Rendering video via HF Cloud Inference... (takes ~30-60 seconds)"):
                     vid_path, status_msg = generate_hf_cloud_video(vid_topic, hf_token=hf_token)
+
+                vid_path_to_cleanup = vid_path
+                try:
                     if vid_path and os.path.exists(vid_path):
                         st.success(f"✅ Video generated! ({status_msg})")
                         st.video(vid_path)
@@ -290,6 +340,15 @@ def render_video_generator_ui(
                             )
                     else:
                         st.error(status_msg)
+                except Exception as _e:
+                    st.error(f"⚠️ Video display error: {_e}")
+                finally:
+                    # Clean up HF video temp file after download button is rendered
+                    if vid_path_to_cleanup and os.path.exists(vid_path_to_cleanup):
+                        try:
+                            os.unlink(vid_path_to_cleanup)
+                        except Exception:
+                            pass
 
         else:
             vid_instructions = st.text_area(
@@ -319,41 +378,67 @@ def render_video_generator_ui(
                     except Exception:
                         pass
 
-                with st.status("🎬 Assembling narrated video...", expanded=True) as status_box:
-                    script, err = generate_video_script_groq(
-                        topic=vid_topic,
-                        instructions=vid_instructions,
-                        context=rag_context,
-                        groq_key=groq_key,
-                        user_prefs=user_prefs,
-                    )
-                    if not script:
-                        status_box.update(label="❌ Script Generation Failed", state="error")
-                        st.error(err)
-                        return
+                images: list[str | None] = []
+                mp4_path: str | None = None
 
-                    images = [_fetch_image_for_scene(s.get("image_keyword", vid_topic)) for s in script["scenes"]]
-                    durations = [int(s.get("duration", 5)) for s in script["scenes"]]
-
-                    if run_tts_synthesis is None:
-                        st.error("`voice_handler.py` module is missing.")
-                        return
-
-                    audio_bytes = run_tts_synthesis(script["narrative_script"], voice=chosen_voice)
-                    mp4_path = assemble_video_moviepy(
-                        [img for img in images if img],
-                        [d for img, d in zip(images, durations) if img],
-                        audio_bytes,
-                    )
-                    status_box.update(label="✅ Complete!", state="complete", expanded=False)
-
-                if mp4_path:
-                    st.video(mp4_path)
-                    with open(mp4_path, "rb") as vf:
-                        st.download_button(
-                            "📥 DOWNLOAD MP4",
-                            vf,
-                            file_name=f"{vid_topic[:15]}.mp4",
-                            mime="video/mp4",
-                            use_container_width=True,
+                try:
+                    with st.status("🎬 Assembling narrated video...", expanded=True) as status_box:
+                        script, err = generate_video_script_groq(
+                            topic=vid_topic,
+                            instructions=vid_instructions,
+                            context=rag_context,
+                            groq_key=groq_key,
+                            user_prefs=user_prefs,
                         )
+                        if not script:
+                            status_box.update(label="❌ Script Generation Failed", state="error")
+                            st.error(err)
+                            return
+
+                        # ── CONCURRENT image fetching ──────────────────────────────
+                        status_box.write("⚡ Fetching scene images in parallel...")
+                        images = _fetch_images_concurrent(script["scenes"])
+                        durations = [int(s.get("duration", 5)) for s in script["scenes"]]
+
+                        if run_tts_synthesis is None:
+                            st.error("`voice_handler.py` module is missing.")
+                            return
+
+                        status_box.write("🎶 Synthesizing voiceover narration...")
+                        audio_bytes = run_tts_synthesis(script["narrative_script"], voice=chosen_voice)
+
+                        status_box.write("🎞️ Assembling video clips...")
+                        valid_images = [img for img in images if img]
+                        valid_durations = [d for img, d in zip(images, durations) if img]
+                        mp4_path = assemble_video_moviepy(valid_images, valid_durations, audio_bytes)
+
+                        status_box.update(label="✅ Complete!", state="complete", expanded=False)
+
+                    if mp4_path:
+                        st.video(mp4_path)
+                        with open(mp4_path, "rb") as vf:
+                            st.download_button(
+                                "📥 DOWNLOAD MP4",
+                                vf,
+                                file_name=f"{vid_topic[:15]}.mp4",
+                                mime="video/mp4",
+                                use_container_width=True,
+                            )
+
+                except Exception as _vid_err:
+                    st.error(f"⚠️ Video generation failed: {_vid_err}")
+
+                finally:
+                    # ── RESOURCE CLEANUP: remove all temp image files ──────────────
+                    for img_p in images:
+                        if img_p and os.path.exists(img_p):
+                            try:
+                                os.unlink(img_p)
+                            except Exception:
+                                pass
+                    # Remove assembled MP4 temp file after download button is rendered
+                    if mp4_path and os.path.exists(mp4_path):
+                        try:
+                            os.unlink(mp4_path)
+                        except Exception:
+                            pass
