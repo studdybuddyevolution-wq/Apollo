@@ -95,8 +95,8 @@ def render_settings_page():
         models = [
             "Meta Llama 3.3 70B (Groq)",
             "Meta Llama 3.1 8B (Groq)",
-            "Meta Llama 3.1 70B (Groq)",
-            "DeepSeek R1 70B (Groq)",
+            "Google Gemma 2 9B (Groq)",
+            "Mixtral 8x7B (Groq)",
             "Qwen 2.5 Coder 32B (Groq)",
         ]
         curr_model = st.session_state.user_prefs.get("default_model", "Meta Llama 3.3 70B (Groq)")
