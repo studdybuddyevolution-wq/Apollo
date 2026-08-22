@@ -136,7 +136,7 @@ _PROFILE_DEFAULTS = {
     "major": "",
     "learning_style": "Visual & Interactive",
     "detail_level": "Intermediate",
-    "default_model": "Meta Llama 3.3 70B (Groq)",
+    "default_model": "Meta Llama 3.1 8B (Groq)",
 }
 if "user_prefs" not in st.session_state:
   _profile_path = "apollo_user_profile.json"
@@ -187,22 +187,32 @@ if "slides_data" not in st.session_state:
       ],
   }]
 
-# 6. Multi-Provider Model Matrix (Groq Llama 3.3 70B Default)
+# 6. Groq LPU Model Matrix (100% Groq API Models)
 MODEL_OPTIONS = {
     "Meta Llama 3.3 70B (Groq)": {
         "provider": "groq",
         "model_id": "llama-3.3-70b-versatile",
-        "desc": "Massive 70B model running at blazing speed on Groq LPUs.",
+        "desc": "Flagship 70B model running at ultra speed on Groq LPUs.",
     },
     "Meta Llama 3.1 8B (Groq)": {
         "provider": "groq",
         "model_id": "llama-3.1-8b-instant",
-        "desc": "Ultra-fast inference speed on Groq LPU.",
+        "desc": "Ultra-fast instant inference speed on Groq LPU.",
     },
-    "Google Gemma 2 9B (OpenRouter)": {
-        "provider": "openrouter",
-        "model_id": "google/gemma-2-9b-it:free",
-        "desc": "Google's lightweight model via OpenRouter free tier.",
+    "Meta Llama 3.1 70B (Groq)": {
+        "provider": "groq",
+        "model_id": "llama-3.1-70b-versatile",
+        "desc": "High performance 70B versatile model on Groq LPU.",
+    },
+    "DeepSeek R1 70B (Groq)": {
+        "provider": "groq",
+        "model_id": "deepseek-r1-distill-llama-70b",
+        "desc": "DeepSeek R1 reasoning model distilled into Llama 70B on Groq.",
+    },
+    "Qwen 2.5 Coder 32B (Groq)": {
+        "provider": "groq",
+        "model_id": "qwen-2.5-coder-32b",
+        "desc": "Alibaba Qwen 2.5 specialized 32B coding model on Groq.",
     },
 }
 
@@ -441,21 +451,33 @@ def create_gamma_style_pptx(slides_data):
   return path
 
 
-# 9. Unified LLM Streamer
-def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
+# 9. Pure Groq LLM Streamer with Automatic Model Fallback
+def generate_llm_stream(messages, groq_key, selected_model_name):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
-  provider = model_cfg.get("provider", "groq")
-  model_id = model_cfg.get("model_id", "llama-3.3-70b-versatile")
+  primary_model = model_cfg.get("model_id", "llama-3.3-70b-versatile")
 
-  if provider == "groq":
-    if not groq_key or not groq_key.startswith("gsk_"):
-      yield (
-          "❌ MISSING CONFIGURATION: Please set a valid 'GROQ_API_KEY' starting"
-          " with 'gsk_' in Streamlit Secrets."
-      )
-      return
+  if not groq_key or not groq_key.startswith("gsk_"):
+    yield (
+        "❌ MISSING CONFIGURATION: Please set a valid 'GROQ_API_KEY' starting"
+        " with 'gsk_' in Streamlit Secrets."
+    )
+    return
+
+  client = Groq(api_key=groq_key.strip())
+
+  # Fallback models in priority order
+  fallback_list = [
+      primary_model,
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
+      "llama-3.1-70b-versatile",
+      "deepseek-r1-distill-llama-70b",
+  ]
+  models_to_try = list(dict.fromkeys(fallback_list))
+
+  last_exception = None
+  for model_id in models_to_try:
     try:
-      client = Groq(api_key=groq_key.strip())
       stream = client.chat.completions.create(
           model=model_id,
           messages=messages,
@@ -463,61 +485,19 @@ def generate_llm_stream(messages, groq_key, or_token, selected_model_name):
           max_tokens=2048,
           stream=True,
       )
+      token_count = 0
       for chunk in stream:
         token_text = chunk.choices[0].delta.content or ""
         if token_text:
+          token_count += 1
           yield token_text
-    except Exception as e:
-      yield f"❌ Groq SDK Failure: {str(e)}"
-      return
-  else:
-    if not or_token or not or_token.startswith("sk-or-"):
-      yield (
-          "❌ MISSING CONFIGURATION: Please set a valid 'OPENROUTER_API_KEY'"
-          " starting with 'sk-or-' in Streamlit Secrets."
-      )
-      return
-    url = "https://openrouter.ai/api/v1/chat/completions".strip()
-    headers = {
-        "Authorization": f"Bearer {or_token.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8501",
-        "X-Title": "APOLLO OMNI",
-    }
-    payload = {
-        "model": model_id,
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": 2048,
-        "stream": True,
-    }
-    try:
-      response = requests.post(
-          url, headers=headers, json=payload, stream=True, timeout=30
-      )
-      if response.status_code != 200:
-        yield f"❌ API Error ({response.status_code}): {response.text}"
+      if token_count > 0:
         return
-      for line in response.iter_lines():
-        if line:
-          decoded = line.decode("utf-8").strip()
-          if decoded.startswith("data: "):
-            data_str = decoded[6:]
-            if data_str == "[DONE]":
-              break
-            try:
-              data_json = json.loads(data_str)
-              token_text = (
-                  data_json.get("choices", [{}])[0]
-                  .get("delta", {})
-                  .get("content", "")
-              )
-              if token_text:
-                yield token_text
-            except Exception:
-              pass
     except Exception as e:
-      yield f"❌ Network Failure: {str(e)}"
+      last_exception = e
+      continue
+
+  yield f"❌ Groq SDK Failure: {str(last_exception)}"
 
 
 # 10. Robust JSON Parser & Slide Generator for Groq (RAG-Enabled)
@@ -598,7 +578,11 @@ SCHEMA REQUIRED:
 }}"""
 
   client = Groq(api_key=groq_key)
-  models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+  models_to_try = [
+      "llama-3.1-8b-instant",
+      "llama-3.3-70b-versatile",
+      "deepseek-r1-distill-llama-70b",
+  ]
 
   for model_id in models_to_try:
     try:
@@ -1352,7 +1336,6 @@ with col_chat:
           stream = generate_llm_stream(
               message_stream,
               GROQ_API_KEY,
-              OPENROUTER_API_KEY,
               selected_model,
           )
           collected_tokens = st.write_stream(stream)
