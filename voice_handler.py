@@ -41,7 +41,6 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
 
     audio_bytes = None
     with col_mic:
-        st.markdown("<div style='text-align: center; background: rgba(255, 140, 0, 0.05); padding: 6px; border-radius: 4px; border: 1px solid rgba(255,140,0,0.15);'>", unsafe_allow_html=True)
         audio_bytes = audio_recorder(
             text="Record",
             recording_color="#ff8c00",
@@ -50,7 +49,6 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
             icon_size="2x",
             key=f"audio_recorder_{key_suffix}",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_status:
         st.markdown(
@@ -60,32 +58,61 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
             unsafe_allow_html=True,
         )
 
+    # Audio file upload fallback (useful if browser blocks mic or component fails)
+    uploaded_audio = st.file_uploader(
+        "Or upload audio file (.mp3, .wav, .m4a)",
+        type=["wav", "mp3", "m4a", "ogg"],
+        key=f"audio_upload_{key_suffix}",
+        label_visibility="collapsed",
+    )
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── 1. Process recorded audio bytes from mic ───────────────────────────
+    # Pick up bytes from mic or uploaded file
+    target_bytes = None
+    file_name = "speech_input.wav"
+
     if audio_bytes:
+        target_bytes = audio_bytes
+        dedup_key = f"last_processed_audio_{key_suffix}"
+        if st.session_state.get(dedup_key) == target_bytes:
+            return None
+        st.session_state[dedup_key] = target_bytes
+
+    elif uploaded_audio:
+        target_bytes = uploaded_audio.read()
+        file_name = uploaded_audio.name
+        dedup_key = f"last_processed_file_{key_suffix}"
+        if st.session_state.get(dedup_key) == uploaded_audio.name:
+            return None
+        st.session_state[dedup_key] = uploaded_audio.name
+
+    # ── Process audio bytes via Groq Whisper ───────────────────────────
+    if target_bytes:
         if not api_key or not api_key.startswith("gsk_"):
             st.error("❌ Invalid or missing GROQ_API_KEY for Speech-to-Text in Streamlit secrets.")
             return None
-
-        dedup_key = f"last_processed_audio_{key_suffix}"
-        if st.session_state.get(dedup_key) == audio_bytes:
-            return None
-
-        st.session_state[dedup_key] = audio_bytes
 
         with st.spinner("⚡ Transcribing audio via Groq Whisper..."):
             audio_file = None
             try:
                 client = Groq(api_key=api_key.strip())
-                audio_file = io.BytesIO(audio_bytes)
-                audio_file.name = "speech_input.wav"
+                audio_file = io.BytesIO(target_bytes)
+                audio_file.name = file_name
 
-                transcription = client.audio.transcriptions.create(
-                    file=(audio_file.name, audio_file.read()),
-                    model="whisper-large-v3",
-                    response_format="text",
-                )
+                transcription = None
+                for whisper_model in ["whisper-large-v3-turbo", "whisper-large-v3"]:
+                    try:
+                        audio_file.seek(0)
+                        transcription = client.audio.transcriptions.create(
+                            file=(audio_file.name, audio_file.read()),
+                            model=whisper_model,
+                            response_format="text",
+                        )
+                        if transcription:
+                            break
+                    except Exception:
+                        continue
 
                 result = str(transcription).strip() if transcription else ""
                 if result:
@@ -93,9 +120,7 @@ def render_voice_input(api_key: str, key_suffix: str = "default") -> str | None:
 
             except Exception as e:
                 st.error(f"Voice Transcription Error: {e}")
-                st.session_state[dedup_key] = None
             finally:
-                # Explicitly close the BytesIO buffer to free memory
                 if audio_file is not None:
                     audio_file.close()
 
@@ -136,11 +161,13 @@ def run_tts_synthesis(text: str, voice: str = "en-US-AriaNeural") -> bytes | Non
         try:
             mp3_bytes = loop.run_until_complete(_synthesize_async(text, voice))
         finally:
-            # Always close the event loop to release OS resources
             loop.close()
 
         return mp3_bytes if mp3_bytes else None
 
     except Exception as e:
+        st.warning(f"⚠️ TTS synthesis failed: {e}")
+        return None
+
         st.warning(f"⚠️ TTS synthesis failed: {e}")
         return None
