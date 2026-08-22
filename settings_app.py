@@ -92,7 +92,13 @@ def render_settings_page():
             value=st.session_state.user_prefs.get("detail_level", "Intermediate")
         )
 
-        models = ["Meta Llama 3.3 70B (Groq)", "Meta Llama 3.1 8B (Groq)", "Google Gemma 2 9B (OpenRouter)"]
+        models = [
+            "Meta Llama 3.3 70B (Groq)",
+            "Meta Llama 3.1 8B (Groq)",
+            "Meta Llama 3.1 70B (Groq)",
+            "DeepSeek R1 70B (Groq)",
+            "Qwen 2.5 Coder 32B (Groq)",
+        ]
         curr_model = st.session_state.user_prefs.get("default_model", "Meta Llama 3.3 70B (Groq)")
         idx_model = models.index(curr_model) if curr_model in models else 0
 
@@ -125,10 +131,6 @@ def render_settings_page():
                 use_container_width=True
             )
     st.markdown("</div>", unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    st.set_page_config(layout="wide", page_title="APOLLO OMNI - Settings", page_icon="⚙️")
-    render_settings_page()
 
 if __name__ == "__main__":
     st.set_page_config(layout="wide", page_title="APOLLO OMNI - Settings", page_icon="⚙️")
