@@ -10,7 +10,7 @@ _DEFAULTS = {
     "major": "",
     "learning_style": "Visual & Interactive",
     "detail_level": "Intermediate",
-    "default_model": "Meta Llama 3.3 70B (Groq)"
+    "default_model": "Qwen 3.6 27B (Groq)"
 }
 
 def generate_profile_json(config):
@@ -93,13 +93,15 @@ def render_settings_page():
         )
 
         models = [
-            "Meta Llama 3.3 70B (Groq)",
-            "Meta Llama 3.1 8B (Groq)",
-            "Google Gemma 2 9B (Groq)",
-            "Mixtral 8x7B (Groq)",
-            "Qwen 2.5 Coder 32B (Groq)",
+            "Qwen 3.6 27B (Groq)",
+            "GPT-OSS 120B (Groq)",
+            "GPT-OSS 20B (Groq)",
+            "Groq Compound",
+            "Groq Compound Mini",
+            "DeepSeek R1 Distill 70B",
+            "Kimi K2 Instruct",
         ]
-        curr_model = st.session_state.user_prefs.get("default_model", "Meta Llama 3.3 70B (Groq)")
+        curr_model = st.session_state.user_prefs.get("default_model", "Qwen 3.6 27B (Groq)")
         idx_model = models.index(curr_model) if curr_model in models else 0
 
         st.session_state.user_prefs["default_model"] = st.selectbox(
@@ -128,6 +130,13 @@ def render_settings_page():
                 data=json_content,
                 file_name="apollo_user_profile.json",
                 mime="application/json",
+                use_container_width=True
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    st.set_page_config(layout="wide", page_title="APOLLO OMNI - Settings", page_icon="⚙️")
+    render_settings_page()
                 use_container_width=True
             )
     st.markdown("</div>", unsafe_allow_html=True)
