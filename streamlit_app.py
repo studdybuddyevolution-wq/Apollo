@@ -207,6 +207,65 @@ MODEL_OPTIONS = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TAVILY CACHED SEARCH  (ttl=1 hour — avoids repeated API calls for same query)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_tavily_search(query: str, api_key: str) -> dict:
+    """
+    Calls Tavily Search API via the official SDK.
+    Results are cached per (query, api_key) pair for 1 hour.
+    include_answer=True requests Tavily's native synthesized quick answer.
+    """
+    try:
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=api_key)
+        return client.search(
+            query=query,
+            search_depth="advanced",
+            max_results=4,
+            include_answer=True,
+        )
+    except ImportError:
+        # Fallback to raw HTTP if SDK not installed yet
+        response = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "search_depth": "advanced",
+                "max_results": 4,
+                "include_answer": True,
+            },
+            timeout=25,
+        )
+        if response.status_code == 200:
+            return response.json()
+        return {}
+    except Exception:
+        return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENTIC AUTO-SEARCH INTENT DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Keywords/phrases that suggest the user wants real-time or current information
+_SEARCH_TRIGGERS = {
+    "latest", "news", "current", "today", "who is", "what is",
+    "2024", "2025", "2026", "recent", "now", "live", "real-time",
+    "realtime", "breaking", "update", "trending", "happening",
+    "this week", "this month", "this year",
+}
+
+
+def _needs_web_search(query: str) -> bool:
+    """Returns True if the query contains temporal or intent keywords."""
+    q = query.lower()
+    return any(kw in q for kw in _SEARCH_TRIGGERS)
+
+
 # 7. Image Engine via Pollinations
 def fetch_image_by_keyword(keyword):
   if not keyword:
@@ -785,7 +844,7 @@ st.markdown(
             </div>
             <div class="omni-badge">
                 <span class="status-pulse"><span class="status-dot"></span></span>
-                SYSTEM_STABLE_V2.0
+                SYSTEM_STABLE_V2.1
             </div>
         </div>
         <div style="display: flex; gap: 40px; align-items: center; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #a1a1aa;">
@@ -970,7 +1029,7 @@ with st.sidebar:
   )
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # Web Crawler (Tavily)
+  # Web Crawler (Tavily) — now using cached SDK call + direct AI answer banner
   st.markdown(
       "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
       unsafe_allow_html=True,
@@ -991,36 +1050,35 @@ with st.sidebar:
     elif web_query:
       with st.spinner("Executing secure web retrieval..."):
         try:
-          api_url = "https://api.tavily.com/search"
-          payload = {
-              "api_key": TAVILY_API_KEY.strip(),
-              "query": web_query,
-              "search_depth": "advanced",
-              "max_results": 4,
-          }
-          response = requests.post(api_url, json=payload, timeout=25)
-          if response.status_code == 200:
-            results = response.json().get("results", [])
-            web_docs = [
-                Document(
-                    page_content=f"Title: {r.get('title')}\nSource: {r.get('url')}\nContext: {r.get('content')}",
-                    metadata={
-                        "source": r.get("url", ""),
-                        "title": r.get("title", ""),
-                    },
-                )
-                for r in results
-            ]
-            chunks = text_splitter.split_documents(web_docs)
-            if chunks:
-              if st.session_state.vector_db is None:
-                st.session_state.vector_db = FAISS.from_documents(
-                    chunks, embedder
-                )
-              else:
-                st.session_state.vector_db.add_documents(chunks)
-              st.session_state.node_count += len(chunks)
-              st.success(f"Indexed {len(chunks)} blocks!")
+          result = _cached_tavily_search(web_query, TAVILY_API_KEY.strip())
+
+          # ── Display Tavily's native quick-answer banner if available ──
+          if tavily_answer := result.get("answer"):
+            st.info(f"💡 **Tavily Quick Answer:** {tavily_answer}")
+
+          results = result.get("results", [])
+          web_docs = [
+              Document(
+                  page_content=f"Title: {r.get('title')}\nSource: {r.get('url')}\nContext: {r.get('content')}",
+                  metadata={
+                      "source": r.get("url", ""),
+                      "title": r.get("title", ""),
+                  },
+              )
+              for r in results
+          ]
+          chunks = text_splitter.split_documents(web_docs)
+          if chunks:
+            if st.session_state.vector_db is None:
+              st.session_state.vector_db = FAISS.from_documents(
+                  chunks, embedder
+              )
+            else:
+              st.session_state.vector_db.add_documents(chunks)
+            st.session_state.node_count += len(chunks)
+            st.success(f"Indexed {len(chunks)} blocks!")
+          elif not results:
+            st.warning("⚠️ No results returned. Try a different query.")
         except Exception as e:
           st.error(f"Search failed: {str(e)}")
   st.markdown("</div>", unsafe_allow_html=True)
@@ -1118,19 +1176,39 @@ else:
 # ----------------- MAIN LEFT: CHAT CONSOLE -----------------
 with col_chat:
 
-  st.markdown(
-      """
-  <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center;'>
-      <div style='display: flex; gap: 8px; align-items: center;'>
-          <div style='width: 8px; height: 8px; background: #ef4444; border-radius: 50%; opacity: 0.8;'></div>
-          <div style='width: 8px; height: 8px; background: #ff8c00; border-radius: 50%; opacity: 0.8;'></div>
-          <div style='width: 8px; height: 8px; background: #22c55e; border-radius: 50%; opacity: 0.8;'></div>
-          <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE</span>
-      </div>
-  </div>
-  """,
-      unsafe_allow_html=True,
-  )
+  # ── Chat console header with Export button ─────────────────────────────
+  _hdr_left, _hdr_right = st.columns([5, 1])
+  with _hdr_left:
+    st.markdown(
+        """
+    <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center;'>
+        <div style='display: flex; gap: 8px; align-items: center;'>
+            <div style='width: 8px; height: 8px; background: #ef4444; border-radius: 50%; opacity: 0.8;'></div>
+            <div style='width: 8px; height: 8px; background: #ff8c00; border-radius: 50%; opacity: 0.8;'></div>
+            <div style='width: 8px; height: 8px; background: #22c55e; border-radius: 50%; opacity: 0.8;'></div>
+            <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE</span>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+  with _hdr_right:
+    # ── Chat history export ──────────────────────────────────────────────
+    if st.session_state.chat_history:
+      _md_lines = []
+      for _m in st.session_state.chat_history:
+        _role_label = "**You**" if _m["role"] == "user" else "**Apollo**"
+        _md_lines.append(f"{_role_label}:\n{_m['content']}\n")
+      _md_export = "\n---\n".join(_md_lines)
+      st.download_button(
+          label="⬇ Export",
+          data=_md_export,
+          file_name="apollo_chat_transcript.md",
+          mime="text/markdown",
+          use_container_width=True,
+          help="Download this conversation as a Markdown transcript",
+      )
 
   if not st.session_state.chat_history:
     st.markdown(
@@ -1188,6 +1266,41 @@ with col_chat:
         + " Tailor all responses accordingly.\n\n"
     )
 
+    # ── AGENTIC AUTO-SEARCH: fire Tavily when no vector DB & query needs web ──
+    _auto_search_fired = False
+    if st.session_state.vector_db is None and _needs_web_search(final_query):
+      if TAVILY_API_KEY and TAVILY_API_KEY.startswith("tvly-"):
+        try:
+          with st.spinner("🌐 Fetching real-time context via Tavily..."):
+            _auto_result = _cached_tavily_search(final_query, TAVILY_API_KEY.strip())
+
+          # Show Tavily's native synthesized answer as a banner
+          if _ta := _auto_result.get("answer"):
+            st.info(f"💡 **Tavily Quick Answer:** {_ta}")
+
+          # Build context payload from top web results
+          _web_ctx_parts = [
+              f"[{r.get('title', 'Web Result')}]\nSource: {r.get('url', '')}\n{r.get('content', '')}"
+              for r in _auto_result.get("results", [])[:3]
+          ]
+          if _web_ctx_parts:
+            context_payload = "\n\n".join(_web_ctx_parts)
+            _auto_search_fired = True
+
+            # Update source reference panel with web sources
+            _clean_web_ctx = (
+                context_payload.replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
+            )
+            st.session_state.source_reference = (
+                "<div class='source-box'><strong>Active Context"
+                " (Tavily Web Search):</strong><br><br>"
+                f"{_clean_web_ctx}</div>"
+            )
+        except Exception as _ae:
+          st.warning(f"⚠️ Auto-search failed gracefully: {_ae}")
+
     if st.session_state.vector_db is not None:
       retriever = st.session_state.vector_db.as_retriever(
           search_kwargs={"k": 5}
@@ -1209,6 +1322,11 @@ with col_chat:
       st.session_state.source_reference = (
           "<div class='source-box'><strong>Active Context"
           f" (RAG):</strong><br><br>{clean_ctx}</div>"
+      )
+    elif _auto_search_fired:
+      sys_instruction = (
+          f"{prefs_preamble}You are APOLLO OMNI AI, an advanced study assistant powered by"
+          f" Llama 3.3 70B. Use the real-time web context below to answer accurately.{chart_instruction}"
       )
     else:
       sys_instruction = (
@@ -1288,7 +1406,6 @@ with col_tools:
   )
 
   # Check if indexed vector DB context is available
-# Check if indexed vector DB context is available
   has_rag = st.session_state.vector_db is not None
   if has_rag:
     st.markdown(
