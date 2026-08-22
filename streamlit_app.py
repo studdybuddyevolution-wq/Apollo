@@ -136,7 +136,7 @@ _PROFILE_DEFAULTS = {
     "major": "",
     "learning_style": "Visual & Interactive",
     "detail_level": "Intermediate",
-    "default_model": "Meta Llama 3.1 8B (Groq)",
+    "default_model": "Qwen 3.6 27B (Groq)",
 }
 if "user_prefs" not in st.session_state:
   _profile_path = "apollo_user_profile.json"
@@ -187,32 +187,42 @@ if "slides_data" not in st.session_state:
       ],
   }]
 
-# 6. Groq LPU Model Matrix (100% Active Groq API Models)
+# 6. Groq LPU Model Matrix (Specified Models)
 MODEL_OPTIONS = {
-    "Meta Llama 3.3 70B (Groq)": {
+    "Qwen 3.6 27B (Groq)": {
         "provider": "groq",
-        "model_id": "llama-3.3-70b-versatile",
-        "desc": "Flagship 70B model running at ultra speed on Groq LPUs.",
+        "model_id": "qwen/qwen3.6-27b",
+        "desc": "High speed 60 RPM, 131K context — primary cognitive engine.",
     },
-    "Meta Llama 3.1 8B (Groq)": {
+    "GPT-OSS 120B (Groq)": {
         "provider": "groq",
-        "model_id": "llama-3.1-8b-instant",
-        "desc": "Ultra-fast instant inference speed on Groq LPU.",
+        "model_id": "openai/gpt-oss-120b",
+        "desc": "Massive 120B model with 131K context window.",
     },
-    "Google Gemma 2 9B (Groq)": {
+    "GPT-OSS 20B (Groq)": {
         "provider": "groq",
-        "model_id": "gemma2-9b-it",
-        "desc": "Google's 9B instruction-tuned model running natively on Groq.",
+        "model_id": "openai/gpt-oss-20b",
+        "desc": "Fast 20B model with 131K context window.",
     },
-    "Mixtral 8x7B (Groq)": {
+    "Groq Compound": {
         "provider": "groq",
-        "model_id": "mixtral-8x7b-32768",
-        "desc": "Mistral AI's high quality MoE model on Groq.",
+        "model_id": "groq/compound",
+        "desc": "Groq Compound reasoning engine (131K context).",
     },
-    "Qwen 2.5 Coder 32B (Groq)": {
+    "Groq Compound Mini": {
         "provider": "groq",
-        "model_id": "qwen-2.5-coder-32b",
-        "desc": "Alibaba Qwen 2.5 specialized 32B coding model on Groq.",
+        "model_id": "groq/compound-mini",
+        "desc": "Ultra-fast Groq Compound Mini (131K context).",
+    },
+    "DeepSeek R1 Distill 70B": {
+        "provider": "groq",
+        "model_id": "deepseek-r1-distill-70b",
+        "desc": "DeepSeek R1 distilled 70B reasoning model.",
+    },
+    "Kimi K2 Instruct": {
+        "provider": "groq",
+        "model_id": "kimi-k2-instruct",
+        "desc": "Huge 262K context window for long documents.",
     },
 }
 
@@ -468,10 +478,12 @@ def generate_llm_stream(messages, groq_key, selected_model_name):
   # Fallback models in priority order
   fallback_list = [
       primary_model,
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-      "gemma2-9b-it",
-      "mixtral-8x7b-32768",
+      "qwen/qwen3.6-27b",
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "groq/compound-mini",
+      "groq/compound",
+      "kimi-k2-instruct",
   ]
   models_to_try = list(dict.fromkeys(fallback_list))
 
@@ -579,9 +591,10 @@ SCHEMA REQUIRED:
 
   client = Groq(api_key=groq_key)
   models_to_try = [
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-      "gemma2-9b-it",
+      "qwen/qwen3.6-27b",
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "groq/compound-mini",
   ]
 
   for model_id in models_to_try:
