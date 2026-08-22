@@ -187,7 +187,7 @@ if "slides_data" not in st.session_state:
       ],
   }]
 
-# 6. Groq LPU Model Matrix (100% Groq API Models)
+# 6. Groq LPU Model Matrix (100% Active Groq API Models)
 MODEL_OPTIONS = {
     "Meta Llama 3.3 70B (Groq)": {
         "provider": "groq",
@@ -199,15 +199,15 @@ MODEL_OPTIONS = {
         "model_id": "llama-3.1-8b-instant",
         "desc": "Ultra-fast instant inference speed on Groq LPU.",
     },
-    "Meta Llama 3.1 70B (Groq)": {
+    "Google Gemma 2 9B (Groq)": {
         "provider": "groq",
-        "model_id": "llama-3.1-70b-versatile",
-        "desc": "High performance 70B versatile model on Groq LPU.",
+        "model_id": "gemma2-9b-it",
+        "desc": "Google's 9B instruction-tuned model running natively on Groq.",
     },
-    "DeepSeek R1 70B (Groq)": {
+    "Mixtral 8x7B (Groq)": {
         "provider": "groq",
-        "model_id": "deepseek-r1-distill-llama-70b",
-        "desc": "DeepSeek R1 reasoning model distilled into Llama 70B on Groq.",
+        "model_id": "mixtral-8x7b-32768",
+        "desc": "Mistral AI's high quality MoE model on Groq.",
     },
     "Qwen 2.5 Coder 32B (Groq)": {
         "provider": "groq",
@@ -470,8 +470,8 @@ def generate_llm_stream(messages, groq_key, selected_model_name):
       primary_model,
       "llama-3.3-70b-versatile",
       "llama-3.1-8b-instant",
-      "llama-3.1-70b-versatile",
-      "deepseek-r1-distill-llama-70b",
+      "gemma2-9b-it",
+      "mixtral-8x7b-32768",
   ]
   models_to_try = list(dict.fromkeys(fallback_list))
 
@@ -579,9 +579,9 @@ SCHEMA REQUIRED:
 
   client = Groq(api_key=groq_key)
   models_to_try = [
-      "llama-3.1-8b-instant",
       "llama-3.3-70b-versatile",
-      "deepseek-r1-distill-llama-70b",
+      "llama-3.1-8b-instant",
+      "gemma2-9b-it",
   ]
 
   for model_id in models_to_try:
