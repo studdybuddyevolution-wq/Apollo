@@ -113,6 +113,8 @@ if "source_reference" not in st.session_state:
   )
 if "node_count" not in st.session_state:
   st.session_state.node_count = 0
+if "active_studio_tool" not in st.session_state:
+  st.session_state.active_studio_tool = "Slide Deck"
 
 # Persistent Auth State Handling
 auth_cookie = cookies.get("apollo_somaiya_session")
@@ -233,11 +235,6 @@ MODEL_OPTIONS = {
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cached_tavily_search(query: str, api_key: str) -> dict:
-    """
-    Calls Tavily Search API via the official SDK.
-    Results are cached per (query, api_key) pair for 1 hour.
-    include_answer=True requests Tavily's native synthesized quick answer.
-    """
     try:
         from tavily import TavilyClient
         client = TavilyClient(api_key=api_key)
@@ -248,7 +245,6 @@ def _cached_tavily_search(query: str, api_key: str) -> dict:
             include_answer=True,
         )
     except ImportError:
-        # Fallback to raw HTTP if SDK not installed yet
         response = requests.post(
             "https://api.tavily.com/search",
             json={
@@ -271,7 +267,6 @@ def _cached_tavily_search(query: str, api_key: str) -> dict:
 # AGENTIC AUTO-SEARCH INTENT DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Keywords/phrases that suggest the user wants real-time or current information
 _SEARCH_TRIGGERS = {
     "latest", "news", "current", "today", "who is", "what is",
     "2024", "2025", "2026", "recent", "now", "live", "real-time",
@@ -281,7 +276,6 @@ _SEARCH_TRIGGERS = {
 
 
 def _needs_web_search(query: str) -> bool:
-    """Returns True if the query contains temporal or intent keywords."""
     q = query.lower()
     return any(kw in q for kw in _SEARCH_TRIGGERS)
 
@@ -464,7 +458,7 @@ def create_gamma_style_pptx(slides_data):
 # 9. Pure Groq LLM Streamer with Automatic Model Fallback
 def generate_llm_stream(messages, groq_key, selected_model_name):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
-  primary_model = model_cfg.get("model_id", "llama-3.3-70b-versatile")
+  primary_model = model_cfg.get("model_id", "qwen/qwen3.6-27b")
 
   if not groq_key or not groq_key.startswith("gsk_"):
     yield (
@@ -475,7 +469,6 @@ def generate_llm_stream(messages, groq_key, selected_model_name):
 
   client = Groq(api_key=groq_key.strip())
 
-  # Fallback models in priority order
   fallback_list = [
       primary_model,
       "qwen/qwen3.6-27b",
@@ -627,11 +620,8 @@ SCHEMA REQUIRED:
 
   return (
       None,
-      "Failed to parse slides JSON. Try clicking 'Gemini Gen' as a backup.",
+      "Failed to parse slides JSON.",
   )
-
-
-# Gemini slide generator removed per user request — Groq LPU is the primary engine.
 
 
 # 12. Email Dispatcher Function for Auth
@@ -690,7 +680,7 @@ st.markdown(
       border: 1px solid var(--glass-border) !important;
       box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37) !important;
       transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s ease !important;
-      border-radius: 4px !important;
+      border-radius: 6px !important;
       padding: 16px !important;
       margin-bottom: 20px !important;
     }
@@ -719,6 +709,12 @@ st.markdown(
       background-color: var(--primary-orange);
     }
 
+    /* NotebookLM Studio Tile Styling */
+    .studio-card-active {
+        background: rgba(255, 140, 0, 0.15) !important;
+        border: 1px solid #ff8c00 !important;
+    }
+
     div[data-testid="stChatInput"] textarea, div[data-testid="stChatInput"] { 
         background-color: rgba(0,0,0,0.8) !important; 
         border-color: rgba(255, 255, 255, 0.1) !important; 
@@ -742,12 +738,12 @@ st.markdown(
         text-transform: uppercase !important;
         letter-spacing: 0.2em !important;
         border: none !important;
-        border-radius: 2px !important;
+        border-radius: 4px !important;
         transition: transform 0.2s, background 0.2s !important;
     }
     .stButton button:hover {
         background: #ff9d2e !important;
-        transform: scale(1.02);
+        transform: scale(1.01);
     }
     
     .stButton button[kind="secondary"] {
@@ -787,21 +783,6 @@ st.markdown(
         max-height: 350px;
     }
 
-    @keyframes pulse-ring {
-      0% { transform: scale(.33); opacity: 1; }
-      80%, 100% { opacity: 0; }
-    }
-    .status-pulse { position: relative; display: inline-block; width: 8px; height: 8px; margin-right: 8px; }
-    .status-pulse::before {
-      content: '';
-      position: absolute;
-      left: -4px; top: -4px; width: 16px; height: 16px;
-      background-color: #22c55e;
-      border-radius: 100%;
-      animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
-    }
-    .status-dot { width: 8px; height: 8px; background-color: #22c55e; border-radius: 100%; display: inline-block; }
-
     .omni-header {
         display: flex;
         align-items: center;
@@ -819,12 +800,6 @@ st.markdown(
     .omni-brand { font-size: 20px; font-weight: 700; letter-spacing: 0.2em; color: white; margin:0; line-height: 1.2;}
     .omni-brand span { color: var(--primary-orange); }
     .omni-subtitle { font-size: 10px; color: #71717a; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em; text-transform: uppercase; margin:0;}
-    .omni-badge {
-        font-size: 10px; font-family: 'JetBrains Mono', monospace;
-        background: rgba(34, 197, 94, 0.1); color: #4ade80;
-        border: 1px solid rgba(34, 197, 94, 0.2); padding: 4px 12px; border-radius: 2px;
-        display: flex; align-items: center;
-    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -837,16 +812,12 @@ st.markdown(
         <div style="display: flex; align-items: center; gap: 24px;">
             <div>
                 <h1 class="omni-brand">APOLLO <span>OMNI</span></h1>
-                <p class="omni-subtitle">Cognitive Study Environment</p>
-            </div>
-            <div class="omni-badge">
-                <span class="status-pulse"><span class="status-dot"></span></span>
-                SYSTEM_STABLE_V2.1
+                <p class="omni-subtitle">Cognitive Study & NotebookLM Studio</p>
             </div>
         </div>
         <div style="display: flex; gap: 40px; align-items: center; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #a1a1aa;">
             <span style="color: #ff8c00; border-bottom: 1px solid #ff8c00; padding-bottom: 4px;">Console</span>
-            <span>Archive</span>
+            <span>Studio</span>
             <span>Cognition</span>
         </div>
     </div>
@@ -859,9 +830,9 @@ st.markdown(
     """
 <style>
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 1rem !important;
-        max-width: 96% !important;
+        max-width: 98% !important;
     }
     .omni-header { margin-top: -10px !important; margin-bottom: 20px !important; }
     [data-testid="stSidebar"] {
@@ -971,27 +942,6 @@ with st.sidebar:
     )
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # RAG Visual
-  st.markdown(
-      """
-  <div class='glass-panel' style='padding: 0; overflow: hidden; margin-bottom: 16px;'>
-      <div style='padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;'>
-          <h2 style='font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: #a1a1aa; text-transform: uppercase; margin: 0;'>RAG_ENGINE_VISUAL</h2>
-          <span style='font-size: 8px; font-family: "JetBrains Mono"; color: #ff8c00; background: rgba(255,140,0,0.1); padding: 2px 6px; border: 1px solid rgba(255,140,0,0.2);'>LIVE</span>
-      </div>
-      <div style='height: 100px; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; position: relative;'>
-          <div style='position: relative; width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;'>
-              <div style='width: 16px; height: 16px; background: #ff8c00; border-radius: 50%; box-shadow: 0 0 15px rgba(255,140,0,0.6); z-index: 10; animation: float 4s ease-in-out infinite;'></div>
-              <div style='position: absolute; width: 40px; height: 40px; border: 1px solid rgba(255,255,255,0.1); border-radius: 50%;'></div>
-              <div style='position: absolute; width: 56px; height: 56px; border: 1px dashed rgba(255,140,0,0.3); border-radius: 50%;'></div>
-          </div>
-      </div>
-  </div>
-  <style>@keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }</style>
-  """,
-      unsafe_allow_html=True,
-  )
-
   # Inference Engine Selection
   st.markdown(
       "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
@@ -1003,11 +953,9 @@ with st.sidebar:
       unsafe_allow_html=True,
   )
 
-  # user_prefs already loaded at startup — no re-init needed here
-
   model_list = list(MODEL_OPTIONS.keys())
   saved_model = st.session_state.user_prefs.get(
-      "default_model", "Meta Llama 3.3 70B (Groq)"
+      "default_model", "Qwen 3.6 27B (Groq)"
   )
   default_index = (
       model_list.index(saved_model) if saved_model in model_list else 0
@@ -1026,7 +974,7 @@ with st.sidebar:
   )
   st.markdown("</div>", unsafe_allow_html=True)
 
-  # Web Crawler (Tavily) — now using cached SDK call + direct AI answer banner
+  # Web Crawler (Tavily)
   st.markdown(
       "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
       unsafe_allow_html=True,
@@ -1049,7 +997,6 @@ with st.sidebar:
         try:
           result = _cached_tavily_search(web_query, TAVILY_API_KEY.strip())
 
-          # ── Display Tavily's native quick-answer banner if available ──
           if tavily_answer := result.get("answer"):
             st.info(f"💡 **Tavily Quick Answer:** {tavily_answer}")
 
@@ -1150,7 +1097,6 @@ with st.sidebar:
     )
     st.rerun()
 
-  # ── Voice TTS output toggle ──────────────────────────────────────
   st.session_state.voice_output_enabled = st.checkbox(
       "🔊 Voice Output (TTS)",
       value=st.session_state.get("voice_output_enabled", False),
@@ -1164,26 +1110,26 @@ with st.sidebar:
   st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ================= MAIN AREA: CONSOLE & TOOLS =================
+# ================= MAIN AREA: EXPANDED CONSOLE & NOTEBOOKLM STUDIO =================
 if app_mode == "⚙️ User Settings & Profile":
   render_settings_page()
 else:
-  col_chat, col_tools = st.columns([6, 4], gap="large")
+  # Expanded column ratio: [7, 5] gives a wider chat area & spacious studio grid
+  col_chat, col_tools = st.columns([7, 5], gap="large")
 
-# ----------------- MAIN LEFT: CHAT CONSOLE -----------------
+# ----------------- MAIN LEFT: EXPANDED CHAT CONSOLE -----------------
 with col_chat:
 
-  # ── Chat console header with Export button ─────────────────────────────
   _hdr_left, _hdr_right = st.columns([5, 1])
   with _hdr_left:
     st.markdown(
         """
-    <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 4px 4px 0 0; display: flex; justify-content: space-between; align-items: center;'>
+    <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 6px 6px 0 0; display: flex; justify-content: space-between; align-items: center;'>
         <div style='display: flex; gap: 8px; align-items: center;'>
             <div style='width: 8px; height: 8px; background: #ef4444; border-radius: 50%; opacity: 0.8;'></div>
             <div style='width: 8px; height: 8px; background: #ff8c00; border-radius: 50%; opacity: 0.8;'></div>
             <div style='width: 8px; height: 8px; background: #22c55e; border-radius: 50%; opacity: 0.8;'></div>
-            <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE</span>
+            <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE_EXPANDED</span>
         </div>
     </div>
     """,
@@ -1191,7 +1137,6 @@ with col_chat:
     )
 
   with _hdr_right:
-    # ── Chat history export ──────────────────────────────────────────────
     if st.session_state.chat_history:
       _md_lines = []
       for _m in st.session_state.chat_history:
@@ -1210,15 +1155,16 @@ with col_chat:
   if not st.session_state.chat_history:
     st.markdown(
         """
-        <div style='margin-top: 50px; margin-bottom: 20px; text-align: center;'>
-            <h2 style='color: #ff8c00; font-family: "Inter", sans-serif; font-weight: 700; font-size: 24px; letter-spacing: 0.1em;'>CONSOLE INITIALIZED</h2>
-            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 12px; margin-top: 10px;'>Awaiting input parameters in the command line below.</p>
+        <div style='margin-top: 70px; margin-bottom: 40px; text-align: center;'>
+            <h2 style='color: #ff8c00; font-family: "Inter", sans-serif; font-weight: 700; font-size: 26px; letter-spacing: 0.1em;'>STUDY CONSOLE READY</h2>
+            <p style='color: #a1a1aa; font-family: "JetBrains Mono", monospace; font-size: 13px; margin-top: 10px;'>Ask questions, analyze uploaded materials, or generate NotebookLM overview assets on the right.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-  chat_scroll_pane = st.container(height=440, border=False)
+  # INCREASED CHAT BOX AREA: Height expanded to 620px
+  chat_scroll_pane = st.container(height=620, border=False)
 
   with chat_scroll_pane:
     for msg in st.session_state.chat_history:
@@ -1230,9 +1176,8 @@ with col_chat:
 
   # --- VOICE & TEXT INPUT MATRIX ---
   voice_prompt = render_voice_input(GROQ_API_KEY, key_suffix="chat_main")
-  user_query = st.chat_input("AWAITING COMMAND...")
+  user_query = st.chat_input("AWAITING COMMAND OR QUESTION...")
 
-  # Consolidate voice transcription or text input
   final_query = voice_prompt if voice_prompt else user_query
 
   if final_query:
@@ -1251,7 +1196,6 @@ with col_chat:
         ' Label",\n  "x": ["Category A", "Category B"],\n  "y": [10, 20]\n}\n```'
     )
 
-    # ── Build user-preference context preamble ───────────────────────────
     _prefs = st.session_state.get("user_prefs", {})
     _style = _prefs.get("learning_style", "General")
     _depth = _prefs.get("detail_level", "Intermediate")
@@ -1263,7 +1207,6 @@ with col_chat:
         + " Tailor all responses accordingly.\n\n"
     )
 
-    # ── AGENTIC AUTO-SEARCH: fire Tavily when no vector DB & query needs web ──
     _auto_search_fired = False
     if st.session_state.vector_db is None and _needs_web_search(final_query):
       if TAVILY_API_KEY and TAVILY_API_KEY.startswith("tvly-"):
@@ -1271,11 +1214,9 @@ with col_chat:
           with st.spinner("🌐 Fetching real-time context via Tavily..."):
             _auto_result = _cached_tavily_search(final_query, TAVILY_API_KEY.strip())
 
-          # Show Tavily's native synthesized answer as a banner
           if _ta := _auto_result.get("answer"):
             st.info(f"💡 **Tavily Quick Answer:** {_ta}")
 
-          # Build context payload from top web results
           _web_ctx_parts = [
               f"[{r.get('title', 'Web Result')}]\nSource: {r.get('url', '')}\n{r.get('content', '')}"
               for r in _auto_result.get("results", [])[:3]
@@ -1284,7 +1225,6 @@ with col_chat:
             context_payload = "\n\n".join(_web_ctx_parts)
             _auto_search_fired = True
 
-            # Update source reference panel with web sources
             _clean_web_ctx = (
                 context_payload.replace("<", "&lt;")
                 .replace(">", "&gt;")
@@ -1309,7 +1249,7 @@ with col_chat:
       ])
       sys_instruction = (
           f"{prefs_preamble}You are APOLLO OMNI AI, an advanced study assistant powered by"
-          f" Llama 3.3 70B. Answer using ONLY context below.{chart_instruction}"
+          f" Groq LPUs. Answer using ONLY context below.{chart_instruction}"
       )
       clean_ctx = (
           context_payload.replace("<", "&lt;")
@@ -1323,12 +1263,12 @@ with col_chat:
     elif _auto_search_fired:
       sys_instruction = (
           f"{prefs_preamble}You are APOLLO OMNI AI, an advanced study assistant powered by"
-          f" Llama 3.3 70B. Use the real-time web context below to answer accurately.{chart_instruction}"
+          f" Groq LPUs. Use the real-time web context below to answer accurately.{chart_instruction}"
       )
     else:
       sys_instruction = (
           f"{prefs_preamble}You are APOLLO OMNI AI, an advanced study assistant powered by"
-          f" Llama 3.3 70B. Answer based on general knowledge.{chart_instruction}"
+          f" Groq LPUs. Answer based on general knowledge.{chart_instruction}"
       )
       st.session_state.source_reference = (
           "<div class='source-box font-mono'>No active context. General weights"
@@ -1359,7 +1299,6 @@ with col_chat:
           collected_tokens = f"❌ FRAMEWORK API FAILURE: {ex}"
           st.markdown(collected_tokens)
 
-        # ── TTS audio player (renders only when toggle is ON) ──────────────
         if st.session_state.get("voice_output_enabled", False):
           _tts_text = str(collected_tokens).strip()
           if _tts_text and not _tts_text.startswith("❌"):
@@ -1375,173 +1314,377 @@ with col_chat:
     st.rerun()
 
 
-# ----------------- MAIN RIGHT: PPT STUDIO & CONTEXT -----------------
+# ----------------- MAIN RIGHT: NOTEBOOKLM STYLE STUDIO GRID -----------------
 with col_tools:
 
-  # --- PRESENTATION STUDIO ---
   st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
   st.markdown(
-      "<div class='panel-header'>🎨 Presentation Studio</div>",
+      "<div class='panel-header' style='font-size: 13px; letter-spacing: 0.25em;'>⚡ STUDIO (NOTEBOOK LM OVERVIEW)</div>",
       unsafe_allow_html=True,
   )
 
-  ppt_topic_input = st.text_input(
-      "Presentation Topic:",
-      placeholder="e.g. Quantum Computing or Boeing Planes",
-      key="ppt_topic_in",
+  # Banner prompt inside Studio header
+  st.markdown(
+      """
+      <div style='background: linear-gradient(135deg, rgba(255, 140, 0, 0.15), rgba(30, 30, 40, 0.8)); border: 1px solid rgba(255, 140, 0, 0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;'>
+          <div style='font-size: 11px; font-weight: 700; color: #ff8c00; font-family: "JetBrains Mono", monospace;'>
+              ✨ GENERATE STUDIO OVERVIEW
+          </div>
+          <div style='font-size: 10px; color: #a1a1aa; margin-top: 4px;'>
+              Select any studio feature tile below to activate its dynamic creation drawer.
+          </div>
+      </div>
+      """,
+      unsafe_allow_html=True,
   )
 
-  custom_prompt_input = st.text_area(
-      "Custom Prompt / Specific Points (Optional):",
-      placeholder=(
-          "e.g. Focus on financial metrics, key breakthroughs, or specific"
-          " architectural comparisons."
-      ),
-      key="ppt_custom_prompt_in",
-      height=80,
-  )
+  # ── NOTEBOOK LM 2-COLUMN FEATURE GRID ─────────────────────────────────────
+  g_col1, g_col2 = st.columns(2)
 
-  # Check if indexed vector DB context is available
-  has_rag = st.session_state.vector_db is not None
-  if has_rag:
+  with g_col1:
+    btn_audio = st.button(
+        "🎙️ Audio Overview  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Audio Overview" else "primary",
+        key="tile_audio",
+    )
+    btn_video = st.button(
+        "🎬 Video Overview  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Video Overview" else "primary",
+        key="tile_video",
+    )
+    btn_reports = st.button(
+        "📝 Study Reports  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Study Reports" else "primary",
+        key="tile_reports",
+    )
+    btn_quiz = st.button(
+        "❓ Practice Quiz  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Practice Quiz" else "primary",
+        key="tile_quiz",
+    )
+
+  with g_col2:
+    btn_slides = st.button(
+        "💻 Slide Deck [BETA] ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Slide Deck" else "primary",
+        key="tile_slides",
+    )
+    btn_mindmap = st.button(
+        "🧠 Mind Map  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Mind Map" else "primary",
+        key="tile_mindmap",
+    )
+    btn_flashcards = st.button(
+        "📇 Flashcards  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Flashcards" else "primary",
+        key="tile_flashcards",
+    )
+    btn_context = st.button(
+        "📑 Active Context  ›",
+        use_container_width=True,
+        type="secondary" if st.session_state.active_studio_tool != "Active Context" else "primary",
+        key="tile_context",
+    )
+
+  # Update active tile state upon user click
+  if btn_audio:
+    st.session_state.active_studio_tool = "Audio Overview"
+    st.rerun()
+  elif btn_slides:
+    st.session_state.active_studio_tool = "Slide Deck"
+    st.rerun()
+  elif btn_video:
+    st.session_state.active_studio_tool = "Video Overview"
+    st.rerun()
+  elif btn_mindmap:
+    st.session_state.active_studio_tool = "Mind Map"
+    st.rerun()
+  elif btn_reports:
+    st.session_state.active_studio_tool = "Study Reports"
+    st.rerun()
+  elif btn_flashcards:
+    st.session_state.active_studio_tool = "Flashcards"
+    st.rerun()
+  elif btn_quiz:
+    st.session_state.active_studio_tool = "Practice Quiz"
+    st.rerun()
+  elif btn_context:
+    st.session_state.active_studio_tool = "Active Context"
+    st.rerun()
+
+  st.markdown("<hr style='border-color: rgba(255,140,0,0.2); margin: 16px 0;'>", unsafe_allow_html=True)
+
+  # ── DYNAMIC FEATURE DRAWER (Renders based on selected tile) ─────────────
+  active_tool = st.session_state.get("active_studio_tool", "Slide Deck")
+
+  # 1. SLIDE DECK (Gamma-style presentation generator)
+  if active_tool == "Slide Deck":
     st.markdown(
-        f"<div style='font-size: 10px; color: #22c55e; font-family: \"JetBrains Mono\"; margin-bottom: 10px;'>"
-        f"⚡ KNOWLEDGE BASE CONNECTED: Using {st.session_state.node_count} indexed vector blocks</div>",
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>💻 PRESENTATION SLIDE DECK</div>",
         unsafe_allow_html=True,
     )
-  else:
-    st.markdown(
-        "<div style='font-size: 10px; color: #a1a1aa; font-family: \"JetBrains Mono\"; margin-bottom: 10px;'>"
-        "ℹ️ No indexed blocks found. Crawl the web or upload documents to anchor slides in specific context.</div>",
-        unsafe_allow_html=True,
-    )
-  if st.button("🚀 GENERATE SLIDE DECK (GROQ LPU)", use_container_width=True):
-    if not GROQ_API_KEY:
-      st.error("Missing GROQ_API_KEY in Streamlit secrets.")
-    elif ppt_topic_input:
-      with st.spinner("Retrieving indexed blocks & generating presentation via Groq..."):
-        ppt_context = ""
-        if st.session_state.vector_db is not None:
-          query = f"{ppt_topic_input} {custom_prompt_input}".strip()
-          retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 6})
-          matched_nodes = retriever.invoke(query)
-          ppt_context = "\n\n".join([
-              f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
-              for node in matched_nodes
-          ])
-
-        new_slides, status = generate_slides_with_groq(
-            topic=ppt_topic_input,
-            custom_instructions=custom_prompt_input,
-            context=ppt_context,
-            groq_key=GROQ_API_KEY,
-            user_prefs=st.session_state.get("user_prefs"),
-        )
-        if new_slides:
-          st.session_state.slides_data = new_slides
-          st.success("New slide deck generated using indexed blocks!")
-          st.rerun()
-        else:
-          st.error(f"Generation Error: {status}")
-
-  with st.expander("✏️ Live Slide Editor", expanded=True):
-    if not st.session_state.slides_data or not isinstance(
-        st.session_state.slides_data, list
-    ):
-      st.session_state.slides_data = [{
-          "title": "Welcome to Apollo Omni AI",
-          "subtitle": "Awaiting Presentation Prompt",
-          "image_keyword": "abstract technology minimalist",
-          "cards": [{
-              "heading": "Getting Started",
-              "text": (
-                  "Enter a topic above to generate a new presentation deck"
-                  " using your indexed knowledge base."
-              ),
-          }],
-      }]
-
-    tabs = st.tabs(
-        [f"S{i+1}" for i in range(len(st.session_state.slides_data))]
+    ppt_topic_input = st.text_input(
+        "Presentation Topic:",
+        placeholder="e.g. Quantum Computing or Boeing Planes",
+        key="ppt_topic_in",
     )
 
-    for i, tab in enumerate(tabs):
-      with tab:
-        slide_info = st.session_state.slides_data[i]
-        st.session_state.slides_data[i]["title"] = st.text_input(
-            f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}"
-        )
-        st.session_state.slides_data[i]["subtitle"] = st.text_input(
-            f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}"
-        )
-        st.session_state.slides_data[i]["image_keyword"] = st.text_input(
-            f"Image {i+1}", slide_info.get("image_keyword", ""), key=f"img_{i}"
-        )
+    custom_prompt_input = st.text_area(
+        "Custom Prompt / Specific Points (Optional):",
+        placeholder="e.g. Focus on financial metrics, key breakthroughs, or specific architectural comparisons.",
+        key="ppt_custom_prompt_in",
+        height=70,
+    )
 
-        cards = slide_info.get("cards", [])
-        if not isinstance(cards, list):
-          cards = [{"heading": "Detail", "text": str(cards)}]
+    if st.button("🚀 GENERATE SLIDE DECK (GROQ LPU)", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY in Streamlit secrets.")
+      elif ppt_topic_input:
+        with st.spinner("Retrieving indexed blocks & generating presentation via Groq..."):
+          ppt_context = ""
+          if st.session_state.vector_db is not None:
+            query = f"{ppt_topic_input} {custom_prompt_input}".strip()
+            retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 6})
+            matched_nodes = retriever.invoke(query)
+            ppt_context = "\n\n".join([
+                f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
+                for node in matched_nodes
+            ])
 
-        for j, card in enumerate(cards):
-          st.markdown(
-              f"<div style='font-size: 11px; font-weight: bold; margin-top:"
-              f" 10px; color: #a1a1aa;'>Card {j+1}</div>",
-              unsafe_allow_html=True,
+          new_slides, status = generate_slides_with_groq(
+              topic=ppt_topic_input,
+              custom_instructions=custom_prompt_input,
+              context=ppt_context,
+              groq_key=GROQ_API_KEY,
+              user_prefs=st.session_state.get("user_prefs"),
           )
-          if isinstance(card, dict):
-            cards[j]["heading"] = st.text_input(
-                f"Heading",
-                card.get("heading", ""),
-                key=f"ch_{i}_{j}",
-                label_visibility="collapsed",
-            )
-            cards[j]["text"] = st.text_area(
-                f"Text",
-                card.get("text", ""),
-                key=f"ct_{i}_{j}",
-                label_visibility="collapsed",
-            )
+          if new_slides:
+            st.session_state.slides_data = new_slides
+            st.success("New slide deck generated using indexed blocks!")
+            st.rerun()
           else:
-            cards[j] = {
-                "heading": "Note",
-                "text": st.text_input(
-                    f"Card {j+1}",
-                    str(card),
-                    key=f"ct_{i}_{j}",
-                    label_visibility="collapsed",
-                ),
-            }
-        st.session_state.slides_data[i]["cards"] = cards
+            st.error(f"Generation Error: {status}")
 
-  if st.button("📥 EXPORT .PPTX", use_container_width=True):
-    with st.spinner("Building PowerPoint file..."):
-      file_path = create_gamma_style_pptx(st.session_state.slides_data)
-      with open(file_path, "rb") as f:
-        st.download_button(
-            label="DOWNLOAD FILE",
-            data=f,
-            file_name="Apollo_Presentation.pptx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            ),
-            use_container_width=True,
-        )
-  st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("✏️ Live Slide Editor", expanded=True):
+      if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
+        st.session_state.slides_data = [{
+            "title": "Welcome to Apollo Omni AI",
+            "subtitle": "Awaiting Presentation Prompt",
+            "image_keyword": "abstract technology minimalist",
+            "cards": [{"heading": "Getting Started", "text": "Enter a topic above to generate a slide deck."}],
+        }]
 
-  # --- VIDEO GENERATOR (standalone module) ---
-  render_video_generator_ui(
-      groq_key=GROQ_API_KEY,
-      kling_key=KLING_API_KEY,
-      vector_db=st.session_state.vector_db,
-      embedder=embedder,
-      user_prefs=st.session_state.get("user_prefs"),
-  )
+      tabs = st.tabs([f"S{i+1}" for i in range(len(st.session_state.slides_data))])
+      for i, tab in enumerate(tabs):
+        with tab:
+          slide_info = st.session_state.slides_data[i]
+          st.session_state.slides_data[i]["title"] = st.text_input(
+              f"Title {i+1}", slide_info.get("title", ""), key=f"t_{i}"
+          )
+          st.session_state.slides_data[i]["subtitle"] = st.text_input(
+              f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}"
+          )
+          st.session_state.slides_data[i]["image_keyword"] = st.text_input(
+              f"Image {i+1}", slide_info.get("image_keyword", ""), key=f"img_{i}"
+          )
 
-  # --- ACTIVE CONTEXT VIEWER ---
-  st.markdown("<div class='glass-panel'>", unsafe_allow_html=True)
-  st.markdown(
-      "<div class='panel-header'>📑 Active Context View</div>",
-      unsafe_allow_html=True,
-  )
-  st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
+          cards = slide_info.get("cards", [])
+          if not isinstance(cards, list):
+            cards = [{"heading": "Detail", "text": str(cards)}]
+
+          for j, card in enumerate(cards):
+            st.markdown(
+                f"<div style='font-size: 10px; font-weight: bold; margin-top: 8px; color: #a1a1aa;'>Card {j+1}</div>",
+                unsafe_allow_html=True,
+            )
+            if isinstance(card, dict):
+              cards[j]["heading"] = st.text_input(
+                  f"Heading", card.get("heading", ""), key=f"ch_{i}_{j}", label_visibility="collapsed"
+              )
+              cards[j]["text"] = st.text_area(
+                  f"Text", card.get("text", ""), key=f"ct_{i}_{j}", label_visibility="collapsed"
+              )
+          st.session_state.slides_data[i]["cards"] = cards
+
+    if st.button("📥 EXPORT .PPTX DECK", use_container_width=True):
+      with st.spinner("Building PowerPoint file..."):
+        file_path = create_gamma_style_pptx(st.session_state.slides_data)
+        with open(file_path, "rb") as f:
+          st.download_button(
+              label="DOWNLOAD FILE",
+              data=f,
+              file_name="Apollo_Presentation.pptx",
+              mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              use_container_width=True,
+          )
+
+  # 2. VIDEO OVERVIEW
+  elif active_tool == "Video Overview":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🎬 AI VIDEO OVERVIEW GENERATOR</div>",
+        unsafe_allow_html=True,
+    )
+    render_video_generator_ui(
+        groq_key=GROQ_API_KEY,
+        kling_key=KLING_API_KEY,
+        vector_db=st.session_state.vector_db,
+        embedder=embedder,
+        user_prefs=st.session_state.get("user_prefs"),
+    )
+
+  # 3. AUDIO OVERVIEW (NotebookLM Podcast Style Audio Summary)
+  elif active_tool == "Audio Overview":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🎙️ AUDIO OVERVIEW (PODCAST SYNTHESIS)</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='font-size: 11px; color: #a1a1aa;'>Generate an engaging 2-host audio overview or podcast summary based on your indexed materials.</p>",
+        unsafe_allow_html=True,
+    )
+
+    audio_topic = st.text_input("Audio Topic / Question:", placeholder="e.g., Summary of uploaded AI paper", key="audio_ov_topic")
+    voice_choice = st.selectbox("Narrator Voice:", ["en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural"], key="audio_ov_voice")
+
+    if st.button("🎙️ GENERATE AUDIO OVERVIEW", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY.")
+      else:
+        with st.spinner("⚡ Synthesizing NotebookLM Podcast Audio Overview..."):
+          ctx = ""
+          if st.session_state.vector_db is not None:
+            nodes = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5}).invoke(audio_topic or "summary")
+            ctx = "\n\n".join(n.page_content for n in nodes)
+
+          prompt = f"Create a concise, highly engaging 2-minute spoken study summary for: '{audio_topic or 'indexed materials'}'.\nContext:\n{ctx}"
+          try:
+            client = Groq(api_key=GROQ_API_KEY)
+            resp = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+            )
+            script_text = resp.choices[0].message.content or ""
+            st.markdown(f"**Generated Script:**\n\n{script_text}")
+
+            audio_bytes = run_tts_synthesis(script_text, voice=voice_choice)
+            if audio_bytes:
+              st.audio(audio_bytes, format="audio/mp3")
+              st.download_button("📥 DOWNLOAD AUDIO (MP3)", audio_bytes, file_name="notebooklm_audio_overview.mp3", mime="audio/mp3", use_container_width=True)
+          except Exception as _e:
+            st.error(f"Audio overview failed: {_e}")
+
+  # 4. MIND MAP GENERATOR
+  elif active_tool == "Mind Map":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🧠 CONCEPT MIND MAP GENERATOR</div>",
+        unsafe_allow_html=True,
+    )
+    mm_topic = st.text_input("Mind Map Topic:", placeholder="e.g. Machine Learning Architecture", key="mm_topic_in")
+    if st.button("🧠 GENERATE MIND MAP STRUCTURE", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY.")
+      else:
+        with st.spinner("Generating mind map breakdown..."):
+          try:
+            client = Groq(api_key=GROQ_API_KEY)
+            resp = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[{"role": "user", "content": f"Generate a structured hierarchical ASCII/Mermaid mind map for: '{mm_topic}'."}],
+                max_tokens=800,
+            )
+            st.code(resp.choices[0].message.content, language="markdown")
+          except Exception as _e:
+            st.error(f"Mind map error: {_e}")
+
+  # 5. STUDY REPORTS
+  elif active_tool == "Study Reports":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📝 COMPREHENSIVE STUDY REPORT</div>",
+        unsafe_allow_html=True,
+    )
+    rpt_topic = st.text_input("Report Focus:", placeholder="e.g., Executive Summary of Indexed Documents", key="rpt_topic_in")
+    if st.button("📝 GENERATE STUDY GUIDE", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY.")
+      else:
+        with st.spinner("Compiling structured report..."):
+          ctx = ""
+          if st.session_state.vector_db is not None:
+            nodes = st.session_state.vector_db.as_retriever(search_kwargs={"k": 6}).invoke(rpt_topic or "summary")
+            ctx = "\n\n".join(n.page_content for n in nodes)
+          try:
+            client = Groq(api_key=GROQ_API_KEY)
+            resp = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[{"role": "user", "content": f"Write an in-depth, beautifully structured Markdown study report on: '{rpt_topic}'. Context:\n{ctx}"}],
+                max_tokens=1500,
+            )
+            report_md = resp.choices[0].message.content or ""
+            st.markdown(report_md)
+            st.download_button("📥 DOWNLOAD REPORT (.MD)", report_md, file_name="apollo_study_report.md", mime="text/markdown", use_container_width=True)
+          except Exception as _e:
+            st.error(f"Report generation error: {_e}")
+
+  # 6. FLASHCARDS
+  elif active_tool == "Flashcards":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📇 REVISION FLASHCARDS</div>",
+        unsafe_allow_html=True,
+    )
+    fc_topic = st.text_input("Flashcard Topic:", placeholder="e.g. Key Definitions & Formulas", key="fc_topic_in")
+    if st.button("📇 GENERATE 5 FLASHCARDS", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY.")
+      else:
+        with st.spinner("Creating flashcard deck..."):
+          try:
+            client = Groq(api_key=GROQ_API_KEY)
+            resp = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[{"role": "user", "content": f"Create 5 Q&A study flashcards for: '{fc_topic}'. Format as Q: ... / A: ..."}],
+                max_tokens=800,
+            )
+            st.markdown(resp.choices[0].message.content)
+          except Exception as _e:
+            st.error(f"Flashcard error: {_e}")
+
+  # 7. PRACTICE QUIZ
+  elif active_tool == "Practice Quiz":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>❓ PRACTICE QUIZ GENERATOR</div>",
+        unsafe_allow_html=True,
+    )
+    qz_topic = st.text_input("Quiz Topic:", placeholder="e.g. Exam practice questions", key="qz_topic_in")
+    if st.button("❓ GENERATE PRACTICE QUIZ", use_container_width=True):
+      if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY.")
+      else:
+        with st.spinner("Generating multiple-choice quiz..."):
+          try:
+            client = Groq(api_key=GROQ_API_KEY)
+            resp = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[{"role": "user", "content": f"Generate a 3-question multiple choice quiz with answer explanations for: '{qz_topic}'."}],
+                max_tokens=1000,
+            )
+            st.markdown(resp.choices[0].message.content)
+          except Exception as _e:
+            st.error(f"Quiz error: {_e}")
+
+  # 8. ACTIVE CONTEXT
+  elif active_tool == "Active Context":
+    st.markdown(
+        "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📑 ACTIVE VECTOR RAG CONTEXT</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
+
   st.markdown("</div>", unsafe_allow_html=True)
