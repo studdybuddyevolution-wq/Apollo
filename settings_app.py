@@ -130,14 +130,7 @@ def render_settings_page():
                 data=json_content,
                 file_name="apollo_user_profile.json",
                 mime="application/json",
-                use_container_width=True
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    st.set_page_config(layout="wide", page_title="APOLLO OMNI - Settings", page_icon="⚙️")
-    render_settings_page()
-                use_container_width=True
+                use_container_width=True,
             )
     st.markdown("</div>", unsafe_allow_html=True)
 
