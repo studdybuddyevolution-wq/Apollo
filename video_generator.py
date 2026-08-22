@@ -140,7 +140,7 @@ def generate_video_script_groq(
     prompt = _build_video_prompt(topic, instructions, context, user_prefs)
     client = Groq(api_key=clean_key)
 
-    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"]
+    models_to_try = ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "groq/compound-mini"]
     last_err = ""
 
     for model_id in models_to_try:
