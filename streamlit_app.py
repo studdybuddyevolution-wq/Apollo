@@ -1,4 +1,5 @@
 import datetime
+import gc
 import hashlib
 import hmac
 import io
@@ -10,6 +11,7 @@ import requests
 import smtplib
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 import urllib.parse
 
@@ -140,6 +142,16 @@ if "node_count" not in st.session_state:
   st.session_state.node_count = 0
 if "active_studio_tool" not in st.session_state:
   st.session_state.active_studio_tool = "Slide Deck"
+if "indexed_sources" not in st.session_state:
+  # Readable registry of every source that has been embedded into vector_db,
+  # e.g. [{"name": "syllabus.pdf", "kind": "file"}, {"name": "https://...", "kind": "web"}]
+  st.session_state.indexed_sources = []
+if "dialog_open" not in st.session_state:
+  # Whether the NotebookLM-style Studio creation dialog is currently open
+  st.session_state.dialog_open = False
+if "studio_results" not in st.session_state:
+  # Persisted output per Studio tool, e.g. studio_results["Mind Map"] = {...}
+  st.session_state.studio_results = {}
 
 # Persistent Signed Cookie Auth State Handling
 auth_cookie = cookies.get("apollo_somaiya_session")
@@ -189,6 +201,10 @@ if "slides_data" not in st.session_state:
       "subtitle": "Cognitive Presentation & RAG Studio",
       "image_keyword": (
           "abstract futuristic orange technology grid network minimalist"
+      ),
+      "image_prompt": (
+          "futuristic orange technology grid over a dark navy workspace,"
+          " cinematic lighting, photorealistic, no text"
       ),
       "cards": [
           {
@@ -297,38 +313,198 @@ def _needs_web_search(query: str) -> bool:
   return any(kw in q for kw in _SEARCH_TRIGGERS)
 
 
-# 7. Image Engine via Pollinations
-def fetch_image_by_keyword(keyword):
-  if not keyword:
-    keyword = "abstract orange dark digital technology background"
+# 6b. Source Registry & Scoped Retrieval Helpers (NotebookLM-style "Sources")
+def register_source(name: str, kind: str = "file"):
+  """Adds a human-readable source name to the session registry (deduplicated)."""
+  if not name:
+    return
+  existing_names = {s["name"] for s in st.session_state.indexed_sources}
+  if name not in existing_names:
+    st.session_state.indexed_sources.append({"name": name, "kind": kind})
 
-  clean_kw = re.sub(r"[^\w\s]", "", keyword).strip()
-  prompt_encoded = urllib.parse.quote(
-      f"high resolution modern photograph of {clean_kw}, detailed,"
-      " 8k wallpaper"
+
+def get_source_names() -> list[str]:
+  return [s["name"] for s in st.session_state.indexed_sources]
+
+
+def get_scoped_context(query: str, selected_sources: list[str] | None, k: int = 6) -> str:
+  """
+  Retrieves top-k relevant chunks from vector_db, optionally restricted to a
+  subset of the indexed sources the user picked in a Studio dialog's
+  'Sources' selector. Falls back to the full index when nothing is selected
+  or everything is selected.
+  """
+  if st.session_state.vector_db is None:
+    return ""
+  try:
+    all_names = get_source_names()
+    restrict = bool(selected_sources) and 0 < len(selected_sources) < len(all_names)
+    fetch_k = k * 4 if restrict else k
+    retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": fetch_k})
+    nodes = retriever.invoke(query or "summary")
+    if restrict:
+      nodes = [n for n in nodes if n.metadata.get("source") in selected_sources]
+    nodes = nodes[:k]
+    return "\n\n".join(
+        f"[{n.metadata.get('source', 'Unknown')}]\n{n.page_content}" for n in nodes
+    )
+  except Exception:
+    return ""
+
+
+def render_sources_and_topic(
+    tool_key: str,
+    placeholder: str,
+    suggestions: list[str],
+    label: str = "What should the topic be?",
+    area: bool = False,
+):
+  """
+  Renders the NotebookLM/Gemini-style 'Sources' picker + topic field +
+  'Things to try' suggestion chips used inside every Studio creation dialog.
+  Returns (topic_text, selected_source_names).
+  """
+  all_sources = get_source_names()
+  n_sources = len(all_sources)
+  src_label = f"{n_sources} source{'s' if n_sources != 1 else ''}" if n_sources else "No sources"
+
+  with st.expander(f"📎 Sources — {src_label}", expanded=False):
+    if not all_sources:
+      st.caption(
+          "No materials indexed yet. Add PDFs/TXT files or run a web search from"
+          " the sidebar — generation will use general knowledge until then."
+      )
+      selected = []
+    else:
+      st.caption("Restrict this generation to specific sources, or leave all checked to use everything indexed.")
+      selected = [
+          name for name in all_sources
+          if st.checkbox(name, value=True, key=f"{tool_key}_src_{name}")
+      ]
+
+  st.markdown(
+      f"<div style='font-size:12px; font-weight:600; color:#e5e7eb; margin: 10px 0 4px 0;'>{label}</div>",
+      unsafe_allow_html=True,
+  )
+  input_key = f"{tool_key}_input"
+  if area:
+    topic = st.text_area(label, placeholder=placeholder, key=input_key, label_visibility="collapsed", height=90)
+  else:
+    topic = st.text_input(label, placeholder=placeholder, key=input_key, label_visibility="collapsed")
+
+  if suggestions:
+    st.markdown(
+        "<div style='font-size:10px; color:#71717a; margin-top: 10px; text-transform: uppercase; letter-spacing: 0.05em;'>Things to try</div>",
+        unsafe_allow_html=True,
+    )
+    for sug_idx, sug in enumerate(suggestions):
+      if st.button(f"• {sug}", key=f"{tool_key}_sugg_{sug_idx}", use_container_width=True):
+        st.session_state[input_key] = sug
+        st.rerun()
+
+  return st.session_state.get(input_key, ""), selected
+
+
+# 7. Image Engine via Pollinations
+_DEFAULT_IMAGE_PROMPT = (
+    "cinematic professional presentation visual, dark navy and orange lighting,"
+    " high detail, photorealistic, no text, no watermark"
+)
+_IMAGE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+}
+
+
+def generate_pollinations_image_url(
+    prompt: str, width: int = 1024, height: int = 576
+) -> str:
+  clean_prompt = (prompt or "").strip() or _DEFAULT_IMAGE_PROMPT
+  encoded_prompt = urllib.parse.quote(clean_prompt)
+  random_seed = random.randint(1, 999_999)
+  return (
+      f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+      f"?width={width}&height={height}&nologo=true&seed={random_seed}"
   )
 
-  pollinations_url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=800&height=600&seed={abs(hash(clean_kw)) % 100000}&nologo=true"
 
+def _download_image_bytes(url: str):
+  """Safely fetch image bytes. Returns None on timeout or any failure."""
+  if not url:
+    return None
   try:
-    resp = requests.get(
-        pollinations_url,
-        timeout=10,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
-            )
-        },
-    )
-    if resp.status_code == 200 and len(resp.content) > 5000:
-      tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-      tmp.write(resp.content)
-      tmp.close()
-      return tmp.name
+    resp = requests.get(url, timeout=5, headers=_IMAGE_HEADERS)
+    if resp.status_code == 200 and resp.content and len(resp.content) > 5000:
+      return resp.content
   except Exception:
-    pass
-
+    return None
   return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_pollinations_image_bytes(
+    prompt: str, width: int = 1024, height: int = 576
+):
+  """Cached Pollinations download keyed by prompt + dimensions (1h TTL)."""
+  url = generate_pollinations_image_url(prompt, width=width, height=height)
+  return _download_image_bytes(url)
+
+
+def _slide_image_prompt(slide_info):
+  if not isinstance(slide_info, dict):
+    return _DEFAULT_IMAGE_PROMPT
+  prompt = (
+      slide_info.get("image_prompt")
+      or slide_info.get("image_keyword")
+      or slide_info.get("title")
+      or ""
+  )
+  prompt = str(prompt).strip()
+  return prompt or _DEFAULT_IMAGE_PROMPT
+
+
+def prefetch_slide_images_parallel(slides_data):
+  """Download all slide images concurrently. Failures become None."""
+  prompts = [_slide_image_prompt(item) for item in slides_data]
+  results = [None] * len(prompts)
+  if not prompts:
+    return results
+
+  def _load(prompt):
+    try:
+      return fetch_pollinations_image_bytes(prompt)
+    except Exception:
+      url = generate_pollinations_image_url(prompt)
+      return _download_image_bytes(url)
+
+  workers = min(8, max(1, len(prompts)))
+  with ThreadPoolExecutor(max_workers=workers) as pool:
+    future_map = {
+        pool.submit(_load, prompt): idx for idx, prompt in enumerate(prompts)
+    }
+    for future in as_completed(future_map):
+      idx = future_map[future]
+      try:
+        results[idx] = future.result()
+      except Exception:
+        results[idx] = None
+  gc.collect()
+  return results
+
+
+def fetch_image_by_keyword(keyword):
+  """Backward-compatible helper: returns a temp JPEG path or None."""
+  image_bytes = fetch_pollinations_image_bytes(
+      keyword or _DEFAULT_IMAGE_PROMPT
+  )
+  if not image_bytes:
+    return None
+  try:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    tmp.write(image_bytes)
+    tmp.close()
+    return tmp.name
+  except Exception:
+    return None
 
 
 # 8. PPTX Builder Engine (Gamma AI Style)
@@ -345,6 +521,7 @@ def create_gamma_style_pptx(slides_data):
   TEXT_MUTED = RGBColor(148, 163, 184)
 
   blank_layout = prs.slide_layouts[6]
+  slide_images = prefetch_slide_images_parallel(slides_data)
 
   for index, slide_info in enumerate(slides_data):
     if not isinstance(slide_info, dict):
@@ -359,8 +536,8 @@ def create_gamma_style_pptx(slides_data):
 
     title_text = slide_info.get("title", f"Slide {index+1}")
     subtitle_text = slide_info.get("subtitle", "")
-    keyword = slide_info.get("image_keyword", title_text)
     cards = slide_info.get("cards", [])
+    image_bytes = slide_images[index] if index < len(slide_images) else None
 
     title_box = slide.shapes.add_textbox(
         Inches(0.8), Inches(0.5), Inches(11.7), Inches(1.2)
@@ -382,11 +559,8 @@ def create_gamma_style_pptx(slides_data):
       p2.font.color.rgb = TEXT_MUTED
       p2.font.name = "Arial"
 
-    img_path = fetch_image_by_keyword(keyword)
-    has_image = img_path is not None
-    content_width = Inches(7.6) if has_image else Inches(11.7)
-
-    if has_image:
+    has_image = False
+    if image_bytes:
       try:
         img_card = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
@@ -400,17 +574,17 @@ def create_gamma_style_pptx(slides_data):
         img_card.line.color.rgb = CARD_BORDER
 
         slide.shapes.add_picture(
-            img_path,
+            io.BytesIO(image_bytes),
             Inches(8.95),
             Inches(1.95),
             width=Inches(3.5),
             height=Inches(4.7),
         )
+        has_image = True
       except Exception:
-        pass
-      finally:
-        if img_path and os.path.exists(img_path):
-          os.unlink(img_path)
+        has_image = False
+
+    content_width = Inches(7.6) if has_image else Inches(11.7)
 
     if isinstance(cards, list) and len(cards) > 0:
       num_cards = min(len(cards), 4)
@@ -469,6 +643,7 @@ def create_gamma_style_pptx(slides_data):
 
   path = "apollo_gamma_presentation.pptx"
   prs.save(path)
+  gc.collect()
   return path
 
 
@@ -611,6 +786,8 @@ def generate_slides_with_groq(
 
   prompt = f"""{prefs_line}Create an in-depth 4 to 5 slide presentation outline on the topic: '{topic}'.
 
+For EACH slide, also write a concise, descriptive `image_prompt` (12-20 words) that visually represents that slide's specific topic — include subject, setting, lighting, and style. Do not request text, captions, watermarks, or logos in the image. Keep `image_keyword` as a short 3-6 word fallback.
+
 SPECIFIC USER INSTRUCTIONS / FOCUS POINTS:
 {custom_instructions if custom_instructions else "None provided."}
 
@@ -625,7 +802,8 @@ SCHEMA REQUIRED:
     {{
       "title": "Slide Title",
       "subtitle": "Informative Subtitle",
-      "image_keyword": "descriptive picture keyword",
+      "image_keyword": "short visual keyword",
+      "image_prompt": "concise 12-20 word visual description of this slide topic for an AI image model: subject, setting, lighting, style; no text or logos in the image",
       "cards": [
         {{
           "heading": "Subtopic Heading",
@@ -659,7 +837,9 @@ SCHEMA REQUIRED:
                   "content": (
                       "You are an expert slide deck generator. You output ONLY"
                       " valid raw JSON strictly derived from the given context"
-                      " and user instructions."
+                      " and user instructions. Every slide must include a"
+                      " concise topic-specific image_prompt for AI image"
+                      " generation (no text in the image)."
                   ),
               },
               {"role": "user", "content": prompt},
@@ -898,6 +1078,285 @@ st.markdown(
 )
 
 
+# ================= STUDIO CREATION DIALOGS (NotebookLM-style) =================
+# Each dialog mirrors the "Sources -> topic -> Things to try -> Generate" flow
+# from the reference screenshot. Generating stores the result in
+# st.session_state.studio_results[<tool name>] and closes the dialog; the
+# persistent Studio panel then renders whatever is in that slot.
+
+def _dialog_footer_generate_cancel(key_prefix: str) -> bool:
+  """Shared Generate/Cancel row. Returns True if Generate was clicked."""
+  col_gen, col_cancel = st.columns([2, 1])
+  with col_cancel:
+    if st.button("Cancel", use_container_width=True, key=f"{key_prefix}_cancel"):
+      st.session_state.dialog_open = False
+      st.rerun()
+  with col_gen:
+    return st.button("✨ Generate", type="primary", use_container_width=True, key=f"{key_prefix}_generate")
+
+
+@st.dialog("🎙️ Audio Overview")
+def dialog_audio_overview():
+  st.caption("Generate a spoken, podcast-style summary of your sources.")
+  topic, sel_sources = render_sources_and_topic(
+      "audio",
+      placeholder="e.g., Summary of the uploaded lecture notes",
+      suggestions=[
+          "Summarize the key findings of my sources",
+          "Give a 2-host podcast style overview",
+          "Focus only on the most exam-relevant points",
+      ],
+  )
+  voice_choice = st.selectbox(
+      "Narrator Voice:",
+      ["en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural"],
+      key="audio_voice_dialog",
+  )
+
+  if _dialog_footer_generate_cancel("audio"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    else:
+      with st.spinner("⚡ Synthesizing Audio Overview from your sources..."):
+        ctx = get_scoped_context(topic or "summary", sel_sources, k=5)
+        prompt = (
+            f"Create a concise, highly engaging 2-minute spoken study summary for:"
+            f" '{topic or 'the indexed materials'}'.\nContext:\n{ctx}"
+        )
+        script_text, status = generate_llm_response(
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=600
+        )
+        if script_text:
+          audio_bytes = run_tts_synthesis(script_text, voice=voice_choice)
+          st.session_state.studio_results["Audio Overview"] = {
+              "script": script_text,
+              "audio": audio_bytes,
+              "voice": voice_choice,
+              "sources": sel_sources,
+          }
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Audio overview failed: {status}")
+
+
+@st.dialog("💻 Slide Deck")
+def dialog_slide_deck():
+  st.caption("Generate a Gamma-style presentation from your sources.")
+  topic, sel_sources = render_sources_and_topic(
+      "slides",
+      placeholder="e.g. Quantum Computing or Boeing Planes",
+      suggestions=[
+          "Turn my sources into a presentation",
+          "Focus on financial metrics and key breakthroughs",
+          "Create a 6-slide executive summary",
+      ],
+  )
+  custom_prompt_input = st.text_area(
+      "Custom Prompt / Specific Points (optional):",
+      placeholder="e.g., Focus on architectural comparisons, or a specific section only.",
+      key="ppt_custom_prompt_in",
+      height=70,
+  )
+
+  if _dialog_footer_generate_cancel("slides"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a presentation topic.")
+    else:
+      with st.spinner("Retrieving indexed blocks & generating presentation via Groq..."):
+        ppt_context = get_scoped_context(f"{topic} {custom_prompt_input}".strip(), sel_sources, k=6)
+        new_slides, status = generate_slides_with_groq(
+            topic=topic,
+            custom_instructions=custom_prompt_input,
+            context=ppt_context,
+            groq_key=GROQ_API_KEY,
+            user_prefs=st.session_state.get("user_prefs"),
+        )
+        if new_slides:
+          st.session_state.slides_data = new_slides
+          st.session_state.studio_results["Slide Deck"] = {"sources": sel_sources}
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Generation Error: {status}")
+
+
+@st.dialog("🎬 Video Overview")
+def dialog_video_overview():
+  st.caption("Generate a short AI video overview from your sources.")
+  all_sources = get_source_names()
+  sel_sources = all_sources
+  if all_sources:
+    with st.expander(f"📎 Sources — {len(all_sources)} source{'s' if len(all_sources) != 1 else ''}", expanded=False):
+      sel_sources = [n for n in all_sources if st.checkbox(n, value=True, key=f"video_src_{n}")]
+  else:
+    st.caption("No materials indexed yet — the narrated engine will fall back to general knowledge.")
+
+  render_video_generator_ui(
+      groq_key=GROQ_API_KEY,
+      kling_key=KLING_API_KEY,
+      vector_db=st.session_state.vector_db,
+      embedder=embedder,
+      user_prefs=st.session_state.get("user_prefs"),
+      selected_sources=sel_sources,
+  )
+
+  if st.button("Done", use_container_width=True, key="video_done"):
+    st.session_state.studio_results["Video Overview"] = {"sources": sel_sources}
+    st.session_state.dialog_open = False
+    st.rerun()
+
+
+@st.dialog("🧠 Mind Map")
+def dialog_mind_map():
+  topic, sel_sources = render_sources_and_topic(
+      "mindmap",
+      placeholder="e.g. Machine Learning Architecture",
+      suggestions=[
+          "The mind map must be restricted to a specific source",
+          "Focus solely on the key concepts of my materials",
+          "Create a mind map to help me study for the exam",
+      ],
+  )
+
+  if _dialog_footer_generate_cancel("mindmap"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a topic for the mind map.")
+    else:
+      with st.spinner("Generating mind map breakdown..."):
+        ctx = get_scoped_context(topic, sel_sources, k=6)
+        prompt = (
+            f"Generate a structured hierarchical Mermaid mind map for: '{topic}'."
+            f"{' Use ONLY the context below.' if ctx else ''}\nContext:\n{ctx}"
+        )
+        content, status = generate_llm_response(
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=800
+        )
+        if content:
+          st.session_state.studio_results["Mind Map"] = {"content": content, "sources": sel_sources, "topic": topic}
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Mind map error: {status}")
+
+
+@st.dialog("📝 Study Reports")
+def dialog_study_reports():
+  topic, sel_sources = render_sources_and_topic(
+      "reports",
+      placeholder="e.g., Executive Summary of Indexed Documents",
+      suggestions=[
+          "Write an executive summary of my sources",
+          "Compare and contrast the key arguments",
+          "Draft a study report for the exam syllabus",
+      ],
+  )
+
+  if _dialog_footer_generate_cancel("reports"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a report focus.")
+    else:
+      with st.spinner("Compiling structured report..."):
+        ctx = get_scoped_context(topic, sel_sources, k=6)
+        prompt = f"Write an in-depth, beautifully structured Markdown study report on: '{topic}'. Context:\n{ctx}"
+        report_md, status = generate_llm_response(
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=1500
+        )
+        if report_md:
+          st.session_state.studio_results["Study Reports"] = {"content": report_md, "sources": sel_sources, "topic": topic}
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Report error: {status}")
+
+
+@st.dialog("📇 Flashcards")
+def dialog_flashcards():
+  topic, sel_sources = render_sources_and_topic(
+      "flashcards",
+      placeholder="e.g. Key Definitions & Formulas",
+      suggestions=[
+          "Make flashcards from my sources",
+          "Focus on definitions and formulas",
+          "Create flashcards for the hardest concepts",
+      ],
+  )
+
+  if _dialog_footer_generate_cancel("flashcards"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a flashcard topic.")
+    else:
+      with st.spinner("Creating flashcard deck..."):
+        ctx = get_scoped_context(topic, sel_sources, k=6)
+        prompt = (
+            f"Create 5 Q&A study flashcards for: '{topic}'. Format as Q: ... / A: ..."
+            f"{' Base them ONLY on this context:' if ctx else ''}\n{ctx}"
+        )
+        content, status = generate_llm_response(
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=800
+        )
+        if content:
+          st.session_state.studio_results["Flashcards"] = {"content": content, "sources": sel_sources, "topic": topic}
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Flashcard error: {status}")
+
+
+@st.dialog("❓ Practice Quiz")
+def dialog_practice_quiz():
+  topic, sel_sources = render_sources_and_topic(
+      "quiz",
+      placeholder="e.g. Exam practice questions",
+      suggestions=[
+          "Quiz me on my sources",
+          "Focus on the most exam-relevant material",
+          "Create harder, application-style questions",
+      ],
+  )
+
+  if _dialog_footer_generate_cancel("quiz"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a quiz topic.")
+    else:
+      with st.spinner("Generating multiple-choice quiz..."):
+        ctx = get_scoped_context(topic, sel_sources, k=6)
+        prompt = (
+            f"Generate a 3-question multiple choice quiz with answer explanations for: '{topic}'."
+            f"{' Base it ONLY on this context:' if ctx else ''}\n{ctx}"
+        )
+        content, status = generate_llm_response(
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=1000
+        )
+        if content:
+          st.session_state.studio_results["Practice Quiz"] = {"content": content, "sources": sel_sources, "topic": topic}
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Quiz error: {status}")
+
+
+_STUDIO_DIALOGS = {
+    "Audio Overview": dialog_audio_overview,
+    "Slide Deck": dialog_slide_deck,
+    "Video Overview": dialog_video_overview,
+    "Mind Map": dialog_mind_map,
+    "Study Reports": dialog_study_reports,
+    "Flashcards": dialog_flashcards,
+    "Practice Quiz": dialog_practice_quiz,
+}
+
+
 # ================= AUTHENTICATION GATEKEEPER =================
 if not st.session_state.authenticated:
   st.markdown(
@@ -1088,6 +1547,8 @@ with st.sidebar:
             else:
               st.session_state.vector_db.add_documents(chunks)
             st.session_state.node_count += len(chunks)
+            for r in results:
+              register_source(r.get("url") or r.get("title") or "Web result", kind="web")
             st.success(f"Indexed {len(chunks)} blocks!")
           elif not results:
             st.warning("⚠️ No results returned. Try a different query.")
@@ -1124,9 +1585,16 @@ with st.sidebar:
             path = tmp.name
           try:
             if suffix == ".pdf":
-              docs.extend(PyPDFLoader(path).load())
+              loaded = PyPDFLoader(path).load()
             elif suffix == ".txt":
-              docs.extend(TextLoader(path, encoding="utf-8").load())
+              loaded = TextLoader(path, encoding="utf-8").load()
+            else:
+              loaded = []
+            for d in loaded:
+              d.metadata["source"] = f.name  # readable name instead of temp path
+            docs.extend(loaded)
+            if loaded:
+              register_source(f.name, kind="file")
           except Exception:
             pass
           finally:
@@ -1160,6 +1628,9 @@ with st.sidebar:
     st.session_state.vector_db = None
     st.session_state.node_count = 0
     st.session_state.response_time = "0.00"
+    st.session_state.indexed_sources = []
+    st.session_state.studio_results = {}
+    st.session_state.dialog_open = False
     st.session_state.source_reference = (
         "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
     )
@@ -1400,7 +1871,7 @@ else:
                 ✨ GENERATE STUDIO OVERVIEW
             </div>
             <div style='font-size: 10px; color: #a1a1aa; margin-top: 4px;'>
-                Select any studio feature tile below to activate its dynamic creation drawer.
+                Select any studio feature tile below to open its creation window, scoped to your indexed sources.
             </div>
         </div>
         """,
@@ -1462,36 +1933,50 @@ else:
           key="tile_context",
       )
 
-    # Update active tile state upon user click
+    # Clicking a generation tile opens its NotebookLM-style creation dialog;
+    # "Active Context" just switches the persistent panel below (no dialog needed).
     if btn_audio:
       st.session_state.active_studio_tool = "Audio Overview"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_slides:
       st.session_state.active_studio_tool = "Slide Deck"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_video:
       st.session_state.active_studio_tool = "Video Overview"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_mindmap:
       st.session_state.active_studio_tool = "Mind Map"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_reports:
       st.session_state.active_studio_tool = "Study Reports"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_flashcards:
       st.session_state.active_studio_tool = "Flashcards"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_quiz:
       st.session_state.active_studio_tool = "Practice Quiz"
+      st.session_state.dialog_open = True
       st.rerun()
     elif btn_context:
       st.session_state.active_studio_tool = "Active Context"
+      st.session_state.dialog_open = False
       st.rerun()
 
     st.markdown("<hr style='border-color: rgba(255,140,0,0.2); margin: 16px 0;'>", unsafe_allow_html=True)
 
-    # ── DYNAMIC FEATURE DRAWER (Renders based on selected tile) ─────────────
+    # ── OPEN THE NOTEBOOKLM-STYLE CREATION DIALOG FOR THE ACTIVE TOOL ───────
     active_tool = st.session_state.get("active_studio_tool", "Slide Deck")
+    if st.session_state.dialog_open and active_tool in _STUDIO_DIALOGS:
+      _STUDIO_DIALOGS[active_tool]()
+
+    # ── PERSISTENT RESULTS PANEL (renders whatever was last generated) ──────
+    result = st.session_state.studio_results.get(active_tool)
 
     # 1. SLIDE DECK (Gamma-style presentation generator)
     if active_tool == "Slide Deck":
@@ -1499,58 +1984,23 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>💻 PRESENTATION SLIDE DECK</div>",
           unsafe_allow_html=True,
       )
-      ppt_topic_input = st.text_input(
-          "Presentation Topic:",
-          placeholder="e.g. Quantum Computing or Boeing Planes",
-          key="ppt_topic_in",
-      )
+      if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
+        st.session_state.slides_data = [{
+            "title": "Welcome to Apollo Omni AI",
+            "subtitle": "Awaiting Presentation Prompt",
+            "image_keyword": "abstract technology minimalist",
+            "image_prompt": (
+                "abstract technology network, dark navy background, orange"
+                " neon highlights, cinematic lighting, no text"
+            ),
+            "cards": [{"heading": "Getting Started", "text": "Click 'Slide Deck' above to generate a deck from your sources."}],
+        }]
 
-      custom_prompt_input = st.text_area(
-          "Custom Prompt / Specific Points (Optional):",
-          placeholder="e.g. Focus on financial metrics, key breakthroughs, or specific architectural comparisons.",
-          key="ppt_custom_prompt_in",
-          height=70,
-      )
-
-      if st.button("🚀 GENERATE SLIDE DECK (GROQ LPU)", use_container_width=True):
-        # FIX 4: Standardized API key check
-        if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
-          st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_'). Set it in Streamlit Secrets.")
-        elif ppt_topic_input:
-          with st.spinner("Retrieving indexed blocks & generating presentation via Groq..."):
-            ppt_context = ""
-            if st.session_state.vector_db is not None:
-              query = f"{ppt_topic_input} {custom_prompt_input}".strip()
-              retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 6})
-              matched_nodes = retriever.invoke(query)
-              ppt_context = "\n\n".join([
-                  f"[{node.metadata.get('source', 'Unknown')}]\n{node.page_content}"
-                  for node in matched_nodes
-              ])
-
-            new_slides, status = generate_slides_with_groq(
-                topic=ppt_topic_input,
-                custom_instructions=custom_prompt_input,
-                context=ppt_context,
-                groq_key=GROQ_API_KEY,
-                user_prefs=st.session_state.get("user_prefs"),
-            )
-            if new_slides:
-              st.session_state.slides_data = new_slides
-              st.success("New slide deck generated using indexed blocks!")
-              st.rerun()
-            else:
-              st.error(f"Generation Error: {status}")
+      if st.button("💻 Open Slide Deck Generator", use_container_width=True, key="reopen_slides"):
+        st.session_state.dialog_open = True
+        st.rerun()
 
       with st.expander("✏️ Live Slide Editor", expanded=True):
-        if not st.session_state.slides_data or not isinstance(st.session_state.slides_data, list):
-          st.session_state.slides_data = [{
-              "title": "Welcome to Apollo Omni AI",
-              "subtitle": "Awaiting Presentation Prompt",
-              "image_keyword": "abstract technology minimalist",
-              "cards": [{"heading": "Getting Started", "text": "Enter a topic above to generate a slide deck."}],
-          }]
-
         tabs = st.tabs([f"S{i+1}" for i in range(len(st.session_state.slides_data))])
         for i, tab in enumerate(tabs):
           with tab:
@@ -1561,9 +2011,14 @@ else:
             st.session_state.slides_data[i]["subtitle"] = st.text_input(
                 f"Subtitle {i+1}", slide_info.get("subtitle", ""), key=f"sub_{i}"
             )
-            st.session_state.slides_data[i]["image_keyword"] = st.text_input(
-                f"Image {i+1}", slide_info.get("image_keyword", ""), key=f"img_{i}"
+            current_img = slide_info.get("image_prompt") or slide_info.get(
+                "image_keyword", ""
             )
+            updated_img = st.text_input(
+                f"Image prompt {i+1}", current_img, key=f"img_{i}"
+            )
+            st.session_state.slides_data[i]["image_prompt"] = updated_img
+            st.session_state.slides_data[i]["image_keyword"] = updated_img
 
             cards = slide_info.get("cards", [])
             if not isinstance(cards, list):
@@ -1601,13 +2056,10 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🎬 AI VIDEO OVERVIEW GENERATOR</div>",
           unsafe_allow_html=True,
       )
-      render_video_generator_ui(
-          groq_key=GROQ_API_KEY,
-          kling_key=KLING_API_KEY,
-          vector_db=st.session_state.vector_db,
-          embedder=embedder,
-          user_prefs=st.session_state.get("user_prefs"),
-      )
+      st.caption("Click 'Video Overview' above to open the generator window.")
+      if st.button("🎬 Open Video Generator", use_container_width=True, key="reopen_video"):
+        st.session_state.dialog_open = True
+        st.rerun()
 
     # 3. AUDIO OVERVIEW (NotebookLM Podcast Style Audio Summary)
     elif active_tool == "Audio Overview":
@@ -1615,39 +2067,23 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🎙️ AUDIO OVERVIEW (PODCAST SYNTHESIS)</div>",
           unsafe_allow_html=True,
       )
-      st.markdown(
-          "<p style='font-size: 11px; color: #a1a1aa;'>Generate an engaging 2-host audio overview or podcast summary based on your indexed materials.</p>",
-          unsafe_allow_html=True,
-      )
+      if st.button("🎙️ Open Audio Overview Generator", use_container_width=True, key="reopen_audio"):
+        st.session_state.dialog_open = True
+        st.rerun()
 
-      audio_topic = st.text_input("Audio Topic / Question:", placeholder="e.g., Summary of uploaded AI paper", key="audio_ov_topic")
-      voice_choice = st.selectbox("Narrator Voice:", ["en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural"], key="audio_ov_voice")
-
-      if st.button("🎙️ GENERATE AUDIO OVERVIEW", use_container_width=True):
-        # FIX 4: Standardized API Key Check
-        if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
-          st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_'). Set it in Streamlit Secrets.")
-        else:
-          with st.spinner("⚡ Synthesizing NotebookLM Podcast Audio Overview..."):
-            ctx = ""
-            if st.session_state.vector_db is not None:
-              nodes = st.session_state.vector_db.as_retriever(search_kwargs={"k": 5}).invoke(audio_topic or "summary")
-              ctx = "\n\n".join(n.page_content for n in nodes)
-
-            prompt = f"Create a concise, highly engaging 2-minute spoken study summary for: '{audio_topic or 'indexed materials'}'.\nContext:\n{ctx}"
-            # FIX 3: Use generate_llm_response with fallback & selected_model
-            msgs = [{"role": "user", "content": prompt}]
-            script_text, status = generate_llm_response(msgs, GROQ_API_KEY, selected_model, max_tokens=600)
-
-            if script_text:
-              st.markdown(f"**Generated Script:**\n\n{script_text}")
-              # FIX 6: Explicit voice parameter passed to run_tts_synthesis
-              audio_bytes = run_tts_synthesis(script_text, voice=voice_choice)
-              if audio_bytes:
-                st.audio(audio_bytes, format="audio/mp3")
-                st.download_button("📥 DOWNLOAD AUDIO (MP3)", audio_bytes, file_name="notebooklm_audio_overview.mp3", mime="audio/mp3", use_container_width=True)
-            else:
-              st.error(f"Audio overview failed: {status}")
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        st.markdown(f"**Generated Script:**\n\n{result.get('script', '')}")
+        if result.get("audio"):
+          st.audio(result["audio"], format="audio/mp3")
+          st.download_button(
+              "📥 DOWNLOAD AUDIO (MP3)", result["audio"],
+              file_name="notebooklm_audio_overview.mp3", mime="audio/mp3",
+              use_container_width=True, key="dl_audio_overview",
+          )
+      else:
+        st.info("Nothing generated yet — open the generator above to create an audio overview.")
 
     # 4. MIND MAP GENERATOR
     elif active_tool == "Mind Map":
@@ -1655,20 +2091,16 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🧠 CONCEPT MIND MAP GENERATOR</div>",
           unsafe_allow_html=True,
       )
-      mm_topic = st.text_input("Mind Map Topic:", placeholder="e.g. Machine Learning Architecture", key="mm_topic_in")
-      if st.button("🧠 GENERATE MIND MAP STRUCTURE", use_container_width=True):
-        # FIX 4: Standardized API Key Check
-        if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
-          st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_'). Set it in Streamlit Secrets.")
-        else:
-          with st.spinner("Generating mind map breakdown..."):
-            # FIX 3: Use generate_llm_response with fallback & selected_model
-            msgs = [{"role": "user", "content": f"Generate a structured hierarchical ASCII/Mermaid mind map for: '{mm_topic}'."}]
-            content, status = generate_llm_response(msgs, GROQ_API_KEY, selected_model, max_tokens=800)
-            if content:
-              st.code(content, language="markdown")
-            else:
-              st.error(f"Mind map error: {status}")
+      if st.button("🧠 Open Mind Map Generator", use_container_width=True, key="reopen_mindmap"):
+        st.session_state.dialog_open = True
+        st.rerun()
+
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        st.code(result.get("content", ""), language="markdown")
+      else:
+        st.info("Nothing generated yet — open the generator above to create a mind map.")
 
     # 5. STUDY REPORTS
     elif active_tool == "Study Reports":
@@ -1676,25 +2108,21 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📝 COMPREHENSIVE STUDY REPORT</div>",
           unsafe_allow_html=True,
       )
-      rpt_topic = st.text_input("Report Focus:", placeholder="e.g., Executive Summary of Indexed Documents", key="rpt_topic_in")
-      if st.button("📝 GENERATE STUDY GUIDE", use_container_width=True):
-        # FIX 4: Standardized API Key Check
-        if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
-          st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_'). Set it in Streamlit Secrets.")
-        else:
-          with st.spinner("Compiling structured report..."):
-            ctx = ""
-            if st.session_state.vector_db is not None:
-              nodes = st.session_state.vector_db.as_retriever(search_kwargs={"k": 6}).invoke(rpt_topic or "summary")
-              ctx = "\n\n".join(n.page_content for n in nodes)
-            # FIX 3: Use generate_llm_response with fallback & selected_model
-            msgs = [{"role": "user", "content": f"Write an in-depth, beautifully structured Markdown study report on: '{rpt_topic}'. Context:\n{ctx}"}]
-            report_md, status = generate_llm_response(msgs, GROQ_API_KEY, selected_model, max_tokens=1500)
-            if report_md:
-              st.markdown(report_md)
-              st.download_button("📥 DOWNLOAD REPORT (.MD)", report_md, file_name="apollo_study_report.md", mime="text/markdown", use_container_width=True)
-            else:
-              st.error(f"Report error: {status}")
+      if st.button("📝 Open Study Report Generator", use_container_width=True, key="reopen_reports"):
+        st.session_state.dialog_open = True
+        st.rerun()
+
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        st.markdown(result.get("content", ""))
+        st.download_button(
+            "📥 DOWNLOAD REPORT (.MD)", result.get("content", ""),
+            file_name="apollo_study_report.md", mime="text/markdown",
+            use_container_width=True, key="dl_report",
+        )
+      else:
+        st.info("Nothing generated yet — open the generator above to create a study report.")
 
     # 6. FLASHCARDS
     elif active_tool == "Flashcards":
@@ -1702,20 +2130,16 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📇 REVISION FLASHCARDS</div>",
           unsafe_allow_html=True,
       )
-      fc_topic = st.text_input("Flashcard Topic:", placeholder="e.g. Key Definitions & Formulas", key="fc_topic_in")
-      if st.button("📇 GENERATE 5 FLASHCARDS", use_container_width=True):
-        # FIX 4: Standardized API Key Check
-        if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
-          st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_'). Set it in Streamlit Secrets.")
-        else:
-          with st.spinner("Creating flashcard deck..."):
-            # FIX 3: Use generate_llm_response with fallback & selected_model
-            msgs = [{"role": "user", "content": f"Create 5 Q&A study flashcards for: '{fc_topic}'. Format as Q: ... / A: ..."}]
-            content, status = generate_llm_response(msgs, GROQ_API_KEY, selected_model, max_tokens=800)
-            if content:
-              st.markdown(content)
-            else:
-              st.error(f"Flashcard error: {status}")
+      if st.button("📇 Open Flashcard Generator", use_container_width=True, key="reopen_flashcards"):
+        st.session_state.dialog_open = True
+        st.rerun()
+
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        st.markdown(result.get("content", ""))
+      else:
+        st.info("Nothing generated yet — open the generator above to create flashcards.")
 
     # 7. PRACTICE QUIZ
     elif active_tool == "Practice Quiz":
@@ -1723,20 +2147,16 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>❓ PRACTICE QUIZ GENERATOR</div>",
           unsafe_allow_html=True,
       )
-      qz_topic = st.text_input("Quiz Topic:", placeholder="e.g. Exam practice questions", key="qz_topic_in")
-      if st.button("❓ GENERATE PRACTICE QUIZ", use_container_width=True):
-        # FIX 4: Standardized API Key Check
-        if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
-          st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_'). Set it in Streamlit Secrets.")
-        else:
-          with st.spinner("Generating multiple-choice quiz..."):
-            # FIX 3: Use generate_llm_response with fallback & selected_model
-            msgs = [{"role": "user", "content": f"Generate a 3-question multiple choice quiz with answer explanations for: '{qz_topic}'."}]
-            content, status = generate_llm_response(msgs, GROQ_API_KEY, selected_model, max_tokens=1000)
-            if content:
-              st.markdown(content)
-            else:
-              st.error(f"Quiz error: {status}")
+      if st.button("❓ Open Quiz Generator", use_container_width=True, key="reopen_quiz"):
+        st.session_state.dialog_open = True
+        st.rerun()
+
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        st.markdown(result.get("content", ""))
+      else:
+        st.info("Nothing generated yet — open the generator above to create a practice quiz.")
 
     # 8. ACTIVE CONTEXT
     elif active_tool == "Active Context":
@@ -1744,6 +2164,15 @@ else:
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📑 ACTIVE VECTOR RAG CONTEXT</div>",
           unsafe_allow_html=True,
       )
+      if st.session_state.indexed_sources:
+        st.markdown(
+            "<div style='font-size: 10px; color: #a1a1aa; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;'>Indexed Sources</div>",
+            unsafe_allow_html=True,
+        )
+        for s in st.session_state.indexed_sources:
+          icon = "📄" if s["kind"] == "file" else "🌐"
+          st.markdown(f"{icon} {s['name']}")
+        st.markdown("<hr style='border-color: rgba(255,140,0,0.15); margin: 10px 0;'>", unsafe_allow_html=True)
       st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
