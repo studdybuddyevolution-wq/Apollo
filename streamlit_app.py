@@ -40,6 +40,9 @@ from video_generator import render_video_generator_ui
 # Import User Settings Page
 from settings_app import render_settings_page
 
+# Import Adaptive Socratic Tutor (placement test -> tier-calibrated teaching)
+from tutor_engine import render_tutor_mode, init_mastery_state
+
 # Import interactive Plotly chart engine
 try:
   from charts import render_dynamic_chart_from_text
@@ -152,6 +155,9 @@ if "dialog_open" not in st.session_state:
 if "studio_results" not in st.session_state:
   # Persisted output per Studio tool, e.g. studio_results["Mind Map"] = {...}
   st.session_state.studio_results = {}
+
+# Adaptive Socratic Tutor: placement-test scores, tiers, chat state, etc.
+init_mastery_state()
 
 # Persistent Signed Cookie Auth State Handling
 auth_cookie = cookies.get("apollo_somaiya_session")
@@ -1443,10 +1449,16 @@ with st.sidebar:
       unsafe_allow_html=True,
   )
 
+  # Apply a pending cross-panel navigation jump (e.g. the Studio's Tutor tile)
+  # BEFORE the radio widget below is instantiated -- setting a widget's own
+  # session_state key after it has rendered this run would raise an error.
+  if "nav_override" in st.session_state:
+    st.session_state["main_app_navigation"] = st.session_state.pop("nav_override")
+
   # Interactive App Navigation Switcher
   app_mode = st.radio(
       "NAVIGATION:",
-      options=["⚡ Console & Tools", "⚙️ User Settings & Profile"],
+      options=["⚡ Console & Tools", "🎓 Socratic Tutor", "⚙️ User Settings & Profile"],
       key="main_app_navigation",
   )
   st.markdown("<hr style='border-color: rgba(255,140,0,0.2); margin: 12px 0;'>", unsafe_allow_html=True)
@@ -1652,6 +1664,16 @@ with st.sidebar:
 # ================= MAIN AREA: EXPANDED CONSOLE & NOTEBOOKLM STUDIO =================
 if app_mode == "⚙️ User Settings & Profile":
   render_settings_page()
+elif app_mode == "🎓 Socratic Tutor":
+  render_tutor_mode(
+      groq_key=GROQ_API_KEY,
+      selected_model=selected_model,
+      generate_llm_response_fn=generate_llm_response,
+      generate_llm_stream_fn=generate_llm_stream,
+      get_scoped_context_fn=get_scoped_context,
+      source_names=get_source_names(),
+      user_prefs=st.session_state.get("user_prefs"),
+  )
 else:
   # FIX 1: Column definition and ALL console/studio rendering blocks are inside else:
   col_chat, col_tools = st.columns([72, 28], gap="medium")
@@ -1966,6 +1988,15 @@ else:
     elif btn_context:
       st.session_state.active_studio_tool = "Active Context"
       st.session_state.dialog_open = False
+      st.rerun()
+
+    st.markdown(
+        "<div style='font-size:9px; color:#71717a; text-align:center; margin: 6px 0 4px 0;"
+        " text-transform: uppercase; letter-spacing: 0.1em;'>Beyond one-shot generation</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("🎓  SOCRATIC TUTOR — Get Tested & Taught Live  ›", use_container_width=True, key="tile_tutor", type="primary"):
+      st.session_state["nav_override"] = "🎓 Socratic Tutor"
       st.rerun()
 
     st.markdown("<hr style='border-color: rgba(255,140,0,0.2); margin: 16px 0;'>", unsafe_allow_html=True)
