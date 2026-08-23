@@ -76,7 +76,14 @@ def generate_kling_video(prompt: str, kling_key: str = "") -> tuple[str | None, 
         )
 
         if response.status_code not in (200, 201):
-            return None, f"Kling API Error ({response.status_code}): {response.text}"
+            try:
+                err_json = response.json()
+                msg = err_json.get("message", response.text)
+                if err_json.get("code") == 1102 or "balance" in msg.lower():
+                    return None, "💳 **Kling AI Balance Exhausted**: Your Kling AI account has insufficient API credits. Please top up at https://klingai.com or switch to the free **Narrated Scene Video** engine below."
+                return None, f"Kling API Error ({response.status_code}): {msg}"
+            except Exception:
+                return None, f"Kling API Error ({response.status_code}): {response.text}"
 
         res_data = response.json()
         data_block = res_data.get("data", {})
@@ -352,6 +359,7 @@ def render_video_generator_ui(
     vector_db=None,
     embedder=None,
     user_prefs: dict | None = None,
+    selected_sources: list | None = None,
 ) -> None:
     """Renders the Video Generator UI panel."""
     with st.expander("🎥 AI Video Generator Studio", expanded=True):
@@ -496,7 +504,10 @@ def render_video_generator_ui(
                 rag_context = ""
                 if vector_db is not None and embedder is not None:
                     try:
-                        nodes = vector_db.as_retriever(search_kwargs={"k": 3}).invoke(vid_topic)
+                        fetch_k = 12 if selected_sources else 3
+                        nodes = vector_db.as_retriever(search_kwargs={"k": fetch_k}).invoke(vid_topic)
+                        if selected_sources:
+                            nodes = [n for n in nodes if n.metadata.get("source") in selected_sources][:3]
                         rag_context = "\n\n".join(n.page_content for n in nodes)
                     except Exception:
                         pass
