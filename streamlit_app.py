@@ -43,6 +43,9 @@ from settings_app import render_settings_page
 # Import Adaptive Socratic Tutor (placement test -> tier-calibrated teaching)
 from tutor_engine import render_tutor_mode, init_mastery_state
 
+# Import multi-notebook workspace switcher (per-user, NotebookLM-style)
+from notebook_manager import render_notebook_switcher, save_active_notebook, get_active_notebook
+
 # Import interactive Plotly chart engine
 try:
   from charts import render_dynamic_chart_from_text
@@ -1449,6 +1452,9 @@ with st.sidebar:
       unsafe_allow_html=True,
   )
 
+  # Per-user Notebooks: switch between separate source/chat workspaces
+  render_notebook_switcher(st.session_state.user_email, embedder)
+
   # Apply a pending cross-panel navigation jump (e.g. the Studio's Tutor tile)
   # BEFORE the radio widget below is instantiated -- setting a widget's own
   # session_state key after it has rendered this run would raise an error.
@@ -1562,6 +1568,7 @@ with st.sidebar:
             for r in results:
               register_source(r.get("url") or r.get("title") or "Web result", kind="web")
             st.success(f"Indexed {len(chunks)} blocks!")
+            save_active_notebook(st.session_state.user_email)
           elif not results:
             st.warning("⚠️ No results returned. Try a different query.")
         except Exception as e:
@@ -1624,6 +1631,7 @@ with st.sidebar:
               st.session_state.vector_db.add_documents(chunks)
             st.session_state.node_count += len(chunks)
             st.success(f"Indexed {len(chunks)} blocks.")
+            save_active_notebook(st.session_state.user_email)
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Session Control
@@ -1646,6 +1654,7 @@ with st.sidebar:
     st.session_state.source_reference = (
         "<div class='source-box font-mono'>Awaiting vector alignment...</div>"
     )
+    save_active_notebook(st.session_state.user_email)
     st.rerun()
 
   st.session_state.voice_output_enabled = st.checkbox(
@@ -1683,14 +1692,16 @@ else:
 
     _hdr_left, _hdr_right = st.columns([5, 1])
     with _hdr_left:
+      _active_nb = get_active_notebook(st.session_state.user_email)
+      _nb_label = f" · {_active_nb['title']}" if _active_nb else ""
       st.markdown(
-          """
+          f"""
       <div style='background: rgba(0,0,0,0.6); padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 6px 6px 0 0; display: flex; justify-content: space-between; align-items: center;'>
           <div style='display: flex; gap: 8px; align-items: center;'>
               <div style='width: 8px; height: 8px; background: #ef4444; border-radius: 50%; opacity: 0.8;'></div>
               <div style='width: 8px; height: 8px; background: #ff8c00; border-radius: 50%; opacity: 0.8;'></div>
               <div style='width: 8px; height: 8px; background: #22c55e; border-radius: 50%; opacity: 0.8;'></div>
-              <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE_EXPANDED</span>
+              <span style='font-size: 11px; font-weight: 700; letter-spacing: 0.2em; color: #a1a1aa; text-transform: uppercase; margin-left: 12px;'>STUDY_CONSOLE_EXPANDED{_nb_label}</span>
           </div>
       </div>
       """,
@@ -1873,6 +1884,7 @@ else:
           {"role": "assistant", "content": collected_tokens}
       )
       st.session_state.response_time = f"{time.time() - start_time:.2f}"
+      save_active_notebook(st.session_state.user_email)
       st.rerun()
 
 
