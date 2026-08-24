@@ -17,7 +17,7 @@ import urllib.parse
 
 import extra_streamlit_components as stx
 from groq import Groq
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
@@ -33,6 +33,7 @@ import streamlit as st
 
 # Import Modular Voice Handler
 from voice_handler import render_voice_input, run_tts_synthesis
+from vision_handler import render_image_question_widget
 
 # Import RAG & Kling AI Video Generator module
 from video_generator import render_video_generator_ui
@@ -116,12 +117,24 @@ def verify_session_token(token: str) -> bool:
 
 
 # 4. Resource Caching Pipelines
+try:
+  import torch
+  torch.set_num_threads(max(1, os.cpu_count() or 4))  # use every core for embedding inference
+except Exception:
+  pass
+
+
 @st.cache_resource
 def get_embedding_model():
+  try:
+    import torch as _torch
+    _device = "cuda" if _torch.cuda.is_available() else "cpu"
+  except Exception:
+    _device = "cpu"
   return HuggingFaceEmbeddings(
       model_name="sentence-transformers/all-MiniLM-L6-v2",
-      model_kwargs={"device": "cpu"},
-      encode_kwargs={"normalize_embeddings": True},
+      model_kwargs={"device": _device},
+      encode_kwargs={"normalize_embeddings": True, "batch_size": 64},
   )
 
 
@@ -334,6 +347,43 @@ def register_source(name: str, kind: str = "file"):
 
 def get_source_names() -> list[str]:
   return [s["name"] for s in st.session_state.indexed_sources]
+
+
+_LOADER_BY_SUFFIX = {
+    ".pdf": PyPDFLoader,
+    ".txt": lambda p: TextLoader(p, encoding="utf-8"),
+    ".docx": Docx2txtLoader,
+}
+
+
+def _parse_uploaded_file(file_name: str, file_bytes: bytes) -> tuple[str, list, str | None]:
+  """Writes one uploaded file to a temp path, loads it with the matching
+  LangChain loader, and returns (file_name, documents, error_message).
+  Designed to be safely run inside a ThreadPoolExecutor for parallel parsing
+  of multi-file uploads -- each call gets its own temp file, so there's no
+  shared state between threads.
+  """
+  suffix = os.path.splitext(file_name)[1].lower()
+  loader_factory = _LOADER_BY_SUFFIX.get(suffix)
+  if loader_factory is None:
+    return file_name, [], f"Unsupported file type: {suffix or 'unknown'}"
+
+  path = None
+  try:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+      tmp.write(file_bytes)
+      path = tmp.name
+    loaded = loader_factory(path).load()
+    for d in loaded:
+      d.metadata["source"] = file_name  # readable name instead of temp path
+    if not loaded:
+      return file_name, [], "No extractable text found (scanned image PDF?)."
+    return file_name, loaded, None
+  except Exception as e:
+    return file_name, [], str(e)
+  finally:
+    if path and os.path.exists(path):
+      os.unlink(path)
 
 
 def get_scoped_context(query: str, selected_sources: list[str] | None, k: int = 6) -> str:
@@ -1587,51 +1637,82 @@ with st.sidebar:
   )
   uploaded_files = st.file_uploader(
       "Upload course materials...",
-      type=["pdf", "txt"],
+      type=["pdf", "txt", "docx"],
       accept_multiple_files=True,
       label_visibility="collapsed",
       key="file_in",
   )
-  if st.button("+ ADD TO KNOWLEDGE", use_container_width=True):
-    if uploaded_files:
-      with st.spinner("Structuring uploaded data nodes..."):
-        docs = []
-        for f in uploaded_files:
-          suffix = os.path.splitext(f.name)[1].lower()
-          file_bytes = f.read()
-          with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(file_bytes)
-            path = tmp.name
-          try:
-            if suffix == ".pdf":
-              loaded = PyPDFLoader(path).load()
-            elif suffix == ".txt":
-              loaded = TextLoader(path, encoding="utf-8").load()
-            else:
-              loaded = []
-            for d in loaded:
-              d.metadata["source"] = f.name  # readable name instead of temp path
-            docs.extend(loaded)
-            if loaded:
-              register_source(f.name, kind="file")
-          except Exception:
-            pass
-          finally:
-            if os.path.exists(path):
-              os.unlink(path)
+  force_reindex = False
+  if uploaded_files:
+    _already = set(get_source_names())
+    _dupes = [f.name for f in uploaded_files if f.name in _already]
+    if _dupes:
+      force_reindex = st.checkbox(
+          f"🔁 Re-index {len(_dupes)} file(s) already in this notebook",
+          value=False,
+          help="Off = skip files with a name that's already indexed here.",
+      )
 
-        if docs:
-          chunks = text_splitter.split_documents(docs)
-          if chunks:
-            if st.session_state.vector_db is None:
-              st.session_state.vector_db = FAISS.from_documents(
-                  chunks, embedder
-              )
+  if st.button("+ ADD TO KNOWLEDGE", use_container_width=True):
+    if not uploaded_files:
+      st.warning("Choose at least one PDF, TXT, or DOCX file first.")
+    else:
+      already_indexed = set(get_source_names())
+      to_parse = [
+          f for f in uploaded_files
+          if force_reindex or f.name not in already_indexed
+      ]
+      skipped = [f.name for f in uploaded_files if f not in to_parse]
+
+      docs = []
+      failures = []
+      if to_parse:
+        progress = st.progress(0.0, text=f"Parsing 0/{len(to_parse)} files...")
+        # Parse files concurrently -- I/O + PDF-parsing bound, so threads
+        # give a real wall-clock speedup on multi-file uploads.
+        with ThreadPoolExecutor(max_workers=min(8, len(to_parse))) as pool:
+          futures = {
+              pool.submit(_parse_uploaded_file, f.name, f.read()): f.name
+              for f in to_parse
+          }
+          done = 0
+          for future in as_completed(futures):
+            f_name, loaded, err = future.result()
+            done += 1
+            progress.progress(done / len(to_parse), text=f"Parsing {done}/{len(to_parse)} files...")
+            if err:
+              failures.append(f"{f_name} — {err}")
             else:
-              st.session_state.vector_db.add_documents(chunks)
-            st.session_state.node_count += len(chunks)
-            st.success(f"Indexed {len(chunks)} blocks.")
-            save_active_notebook(st.session_state.user_email)
+              docs.extend(loaded)
+              register_source(f_name, kind="file")
+        progress.empty()
+
+      if docs:
+        chunks = text_splitter.split_documents(docs)
+        if chunks:
+          # Embed in batches with a progress bar instead of one giant blocking
+          # call -- keeps memory use flat and gives real feedback on large
+          # uploads instead of a frozen spinner.
+          BATCH = 64
+          embed_progress = st.progress(0.0, text=f"Embedding 0/{len(chunks)} blocks...")
+          for start in range(0, len(chunks), BATCH):
+            batch = chunks[start:start + BATCH]
+            if st.session_state.vector_db is None:
+              st.session_state.vector_db = FAISS.from_documents(batch, embedder)
+            else:
+              st.session_state.vector_db.add_documents(batch)
+            done_n = min(start + BATCH, len(chunks))
+            embed_progress.progress(done_n / len(chunks), text=f"Embedding {done_n}/{len(chunks)} blocks...")
+          embed_progress.empty()
+
+          st.session_state.node_count += len(chunks)
+          st.success(f"✅ Indexed {len(chunks)} blocks from {len(to_parse) - len(failures)} file(s).")
+          save_active_notebook(st.session_state.user_email)
+
+      if skipped:
+        st.caption(f"⏭️ Skipped (already indexed): {', '.join(skipped)}")
+      if failures:
+        st.warning("⚠️ Couldn't index:\n" + "\n".join(f"- {f}" for f in failures))
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Session Control
@@ -1745,6 +1826,13 @@ else:
             render_dynamic_chart_from_text(msg["content"])
           else:
             st.markdown(msg["content"])
+
+    # --- ASK WITH A PHOTO (handwriting / diagrams / textbook pages) ---
+    render_image_question_widget(
+        GROQ_API_KEY,
+        key_suffix="chat_main",
+        on_answered=lambda: save_active_notebook(st.session_state.user_email),
+    )
 
     # --- VOICE & TEXT INPUT MATRIX ---
     voice_prompt = render_voice_input(GROQ_API_KEY, key_suffix="chat_main")
