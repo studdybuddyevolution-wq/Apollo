@@ -1,4 +1,5 @@
 import datetime
+import functools
 import gc
 import hashlib
 import hmac
@@ -16,6 +17,8 @@ from email.mime.text import MIMEText
 import urllib.parse
 
 import extra_streamlit_components as stx
+from google import genai as gemini_client_sdk
+from google.genai import types as gemini_types
 from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -70,6 +73,11 @@ try:
   GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 except Exception:
   GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+try:
+  GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+except Exception:
+  GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 try:
   OPENROUTER_API_KEY = st.secrets.get(
@@ -280,6 +288,24 @@ MODEL_OPTIONS = {
         "provider": "groq",
         "model_id": "groq/compound-mini",
         "desc": "Ultra-fast Groq Compound Mini (131K context).",
+    },
+    # Google Gemini free tier (as of Aug 2026): Pro-tier models are paid/
+    # heavily rate-gated, so only Flash / Flash-Lite are listed here. Check
+    # https://ai.google.dev/gemini-api/docs/rate-limits for current figures.
+    "Gemini 2.5 Flash (Google)": {
+        "provider": "gemini",
+        "model_id": "gemini-2.5-flash",
+        "desc": "Google's balanced free-tier model — strong reasoning, 1M context.",
+    },
+    "Gemini 2.5 Flash-Lite (Google)": {
+        "provider": "gemini",
+        "model_id": "gemini-2.5-flash-lite",
+        "desc": "Fastest, highest free-tier request quota — best under load.",
+    },
+    "Gemini 2.0 Flash (Google)": {
+        "provider": "gemini",
+        "model_id": "gemini-2.0-flash",
+        "desc": "Prior-gen Google Flash model, still free-tier accessible.",
     },
 }
 
@@ -706,10 +732,90 @@ def create_gamma_style_pptx(slides_data):
   return path
 
 
-# 9. Pure Groq LLM Streamer with Automatic Model Fallback
-def generate_llm_stream(messages, groq_key, selected_model_name):
+# 9. Message-format adapter: OpenAI-style {role, content} -> Gemini's
+# {role: "user"/"model", parts:[...]} + a separate system_instruction string.
+def _messages_to_gemini(messages):
+  system_parts = []
+  contents = []
+  for m in messages:
+    role = m.get("role")
+    text = m.get("content", "")
+    if role == "system":
+      system_parts.append(text)
+    elif role == "assistant":
+      contents.append({"role": "model", "parts": [{"text": text}]})
+    else:
+      contents.append({"role": "user", "parts": [{"text": text}]})
+  system_instruction = "\n\n".join(system_parts) if system_parts else None
+  return system_instruction, contents
+
+
+_GEMINI_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+
+
+def _generate_gemini_stream(messages, gemini_key, primary_model):
+  if not gemini_key:
+    yield "❌ MISSING CONFIGURATION: Please set a valid 'GEMINI_API_KEY' in Streamlit Secrets."
+    return
+
+  client = gemini_client_sdk.Client(api_key=gemini_key.strip())
+  system_instruction, contents = _messages_to_gemini(messages)
+  config = gemini_types.GenerateContentConfig(
+      system_instruction=system_instruction, temperature=0.3, max_output_tokens=2048
+  )
+  models_to_try = list(dict.fromkeys([primary_model] + _GEMINI_FALLBACKS))
+
+  last_exception = None
+  for model_id in models_to_try:
+    try:
+      token_count = 0
+      for chunk in client.models.generate_content_stream(model=model_id, contents=contents, config=config):
+        if chunk.text:
+          token_count += 1
+          yield chunk.text
+      if token_count > 0:
+        return
+    except Exception as e:
+      last_exception = e
+      continue
+
+  yield f"❌ Gemini SDK Failure: {str(last_exception)}"
+
+
+def _generate_gemini_response(messages, gemini_key, primary_model, max_tokens=1200) -> tuple[str | None, str]:
+  if not gemini_key:
+    return None, "❌ Missing GEMINI_API_KEY in Streamlit secrets."
+
+  client = gemini_client_sdk.Client(api_key=gemini_key.strip())
+  system_instruction, contents = _messages_to_gemini(messages)
+  config = gemini_types.GenerateContentConfig(
+      system_instruction=system_instruction, temperature=0.3, max_output_tokens=max_tokens
+  )
+  models_to_try = list(dict.fromkeys([primary_model] + _GEMINI_FALLBACKS))
+
+  last_err = ""
+  for model_id in models_to_try:
+    try:
+      response = client.models.generate_content(model=model_id, contents=contents, config=config)
+      content = response.text or ""
+      if content.strip():
+        return content, f"Success ({model_id})"
+    except Exception as ex:
+      last_err = str(ex)
+      continue
+
+  return None, f"Gemini API Error across models: {last_err}"
+
+
+# 9a. Provider-Routed LLM Streamer with Automatic Same-Provider Model Fallback
+def generate_llm_stream(messages, groq_key, selected_model_name, gemini_key=""):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   primary_model = model_cfg.get("model_id", "qwen/qwen3.6-27b")
+  provider = model_cfg.get("provider", "groq")
+
+  if provider == "gemini":
+    yield from _generate_gemini_stream(messages, gemini_key, primary_model)
+    return
 
   if not groq_key or not groq_key.startswith("gsk_"):
     yield (
@@ -755,17 +861,22 @@ def generate_llm_stream(messages, groq_key, selected_model_name):
   yield f"❌ Groq SDK Failure: {str(last_exception)}"
 
 
-# 9b. Non-Streaming Groq LLM Response Helper with Automatic Model Fallback
-def generate_llm_response(messages, groq_key, selected_model_name, max_tokens=1200) -> tuple[str | None, str]:
+# 9b. Provider-Routed Non-Streaming LLM Response Helper
+def generate_llm_response(messages, groq_key, selected_model_name, max_tokens=1200, gemini_key="") -> tuple[str | None, str]:
   """
-  Non-streaming completion wrapper around Groq API with robust model fallback.
-  Returns (content_text, status_message).
+  Non-streaming completion wrapper. Routes to Gemini or Groq based on the
+  selected model's provider, with automatic fallback within that same
+  provider's free-tier model set. Returns (content_text, status_message).
   """
-  if not groq_key or not groq_key.startswith("gsk_"):
-    return None, "❌ Missing or invalid GROQ_API_KEY starting with 'gsk_' in Streamlit secrets."
-
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   primary_model = model_cfg.get("model_id", "qwen/qwen3.6-27b")
+  provider = model_cfg.get("provider", "groq")
+
+  if provider == "gemini":
+    return _generate_gemini_response(messages, gemini_key, primary_model, max_tokens)
+
+  if not groq_key or not groq_key.startswith("gsk_"):
+    return None, "❌ Missing or invalid GROQ_API_KEY starting with 'gsk_' in Streamlit secrets."
 
   client = Groq(api_key=groq_key.strip())
   fallback_list = [
@@ -1183,7 +1294,8 @@ def dialog_audio_overview():
             f" '{topic or 'the indexed materials'}'.\nContext:\n{ctx}"
         )
         script_text, status = generate_llm_response(
-            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=600
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model,
+            max_tokens=600, gemini_key=GEMINI_API_KEY,
         )
         if script_text:
           audio_bytes = run_tts_synthesis(script_text, voice=voice_choice)
@@ -1293,7 +1405,8 @@ def dialog_mind_map():
             f"{' Use ONLY the context below.' if ctx else ''}\nContext:\n{ctx}"
         )
         content, status = generate_llm_response(
-            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=800
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model,
+            max_tokens=800, gemini_key=GEMINI_API_KEY,
         )
         if content:
           st.session_state.studio_results["Mind Map"] = {"content": content, "sources": sel_sources, "topic": topic}
@@ -1325,7 +1438,8 @@ def dialog_study_reports():
         ctx = get_scoped_context(topic, sel_sources, k=6)
         prompt = f"Write an in-depth, beautifully structured Markdown study report on: '{topic}'. Context:\n{ctx}"
         report_md, status = generate_llm_response(
-            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=1500
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model,
+            max_tokens=1500, gemini_key=GEMINI_API_KEY,
         )
         if report_md:
           st.session_state.studio_results["Study Reports"] = {"content": report_md, "sources": sel_sources, "topic": topic}
@@ -1360,7 +1474,8 @@ def dialog_flashcards():
             f"{' Base them ONLY on this context:' if ctx else ''}\n{ctx}"
         )
         content, status = generate_llm_response(
-            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=800
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model,
+            max_tokens=800, gemini_key=GEMINI_API_KEY,
         )
         if content:
           st.session_state.studio_results["Flashcards"] = {"content": content, "sources": sel_sources, "topic": topic}
@@ -1395,7 +1510,8 @@ def dialog_practice_quiz():
             f"{' Base it ONLY on this context:' if ctx else ''}\n{ctx}"
         )
         content, status = generate_llm_response(
-            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model, max_tokens=1000
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model,
+            max_tokens=1000, gemini_key=GEMINI_API_KEY,
         )
         if content:
           st.session_state.studio_results["Practice Quiz"] = {"content": content, "sources": sel_sources, "topic": topic}
@@ -1758,8 +1874,8 @@ elif app_mode == "🎓 Socratic Tutor":
   render_tutor_mode(
       groq_key=GROQ_API_KEY,
       selected_model=selected_model,
-      generate_llm_response_fn=generate_llm_response,
-      generate_llm_stream_fn=generate_llm_stream,
+      generate_llm_response_fn=functools.partial(generate_llm_response, gemini_key=GEMINI_API_KEY),
+      generate_llm_stream_fn=functools.partial(generate_llm_stream, gemini_key=GEMINI_API_KEY),
       get_scoped_context_fn=get_scoped_context,
       source_names=get_source_names(),
       user_prefs=st.session_state.get("user_prefs"),
@@ -1950,6 +2066,7 @@ else:
                 message_stream,
                 GROQ_API_KEY,
                 selected_model,
+                gemini_key=GEMINI_API_KEY,
             )
             collected_tokens = st.write_stream(stream)
             if not collected_tokens or not str(collected_tokens).strip():
