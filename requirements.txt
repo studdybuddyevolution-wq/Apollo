@@ -15,6 +15,7 @@ torchvision
 python-pptx
 extra-streamlit-components
 groq
+google-genai>=0.3.0
 pillow
 plotly
 audio-recorder-streamlit
