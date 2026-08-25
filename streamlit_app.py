@@ -289,23 +289,25 @@ MODEL_OPTIONS = {
         "model_id": "groq/compound-mini",
         "desc": "Ultra-fast Groq Compound Mini (131K context).",
     },
-    # Google Gemini free tier (as of Aug 2026): Pro-tier models are paid/
-    # heavily rate-gated, so only Flash / Flash-Lite are listed here. Check
-    # https://ai.google.dev/gemini-api/docs/rate-limits for current figures.
+    # Google Gemini free tier (verified live Aug 2026 after a 404 on the old
+    # 2.0 Flash ID -- Google's own deprecation message pointed to 3.6 Flash).
+    # Pro-tier models remain paid/heavily gated, so only Flash/Flash-Lite are
+    # listed. Check https://ai.google.dev/gemini-api/docs/models if this
+    # 404s again -- Google rotates these fast.
+    "Gemini 3.6 Flash (Google)": {
+        "provider": "gemini",
+        "model_id": "gemini-3.6-flash",
+        "desc": "Current-gen Google Flash model — free tier, 1M context.",
+    },
     "Gemini 2.5 Flash (Google)": {
         "provider": "gemini",
         "model_id": "gemini-2.5-flash",
-        "desc": "Google's balanced free-tier model — strong reasoning, 1M context.",
+        "desc": "Prior-gen but stable and still free-tier — strong reasoning, 1M context.",
     },
     "Gemini 2.5 Flash-Lite (Google)": {
         "provider": "gemini",
         "model_id": "gemini-2.5-flash-lite",
         "desc": "Fastest, highest free-tier request quota — best under load.",
-    },
-    "Gemini 2.0 Flash (Google)": {
-        "provider": "gemini",
-        "model_id": "gemini-2.0-flash",
-        "desc": "Prior-gen Google Flash model, still free-tier accessible.",
     },
 }
 
@@ -750,7 +752,7 @@ def _messages_to_gemini(messages):
   return system_instruction, contents
 
 
-_GEMINI_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+_GEMINI_FALLBACKS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 
 def _generate_gemini_stream(messages, gemini_key, primary_model):
