@@ -96,10 +96,11 @@ def render_settings_page():
             "Qwen 3.6 27B (Groq)",
             "GPT-OSS 120B (Groq)",
             "GPT-OSS 20B (Groq)",
-            "Groq Compound",
+            "Llama 3.3 70B (Groq)",
             "Groq Compound Mini",
-            "DeepSeek R1 Distill 70B",
-            "Kimi K2 Instruct",
+            "Gemini 2.5 Flash (Google)",
+            "Gemini 2.5 Flash-Lite (Google)",
+            "Gemini 2.0 Flash (Google)",
         ]
         curr_model = st.session_state.user_prefs.get("default_model", "Qwen 3.6 27B (Groq)")
         idx_model = models.index(curr_model) if curr_model in models else 0
