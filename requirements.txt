@@ -19,6 +19,7 @@ groq
 google-genai>=0.3.0
 pillow
 plotly
+reportlab
 audio-recorder-streamlit
 perchance
 moviepy>=1.0.3,<2.0.0
