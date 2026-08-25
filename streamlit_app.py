@@ -754,28 +754,64 @@ def _messages_to_gemini(messages):
 
 _GEMINI_FALLBACKS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
+# When a response gets cut off mid-way by the per-request output cap, we
+# automatically ask the model to keep going from exactly where it stopped,
+# up to this many extra rounds, instead of just handing back a truncated
+# answer. This is what long asks (a full 80-mark exam paper, a long report)
+# actually need -- a bigger fixed max_tokens just moves the same cliff edge
+# further out; continuation removes the cliff.
+_MAX_CONTINUATIONS = 4
+_CONTINUE_INSTRUCTION = (
+    "Continue EXACTLY where you left off. Do not repeat any earlier content,"
+    " do not restart numbering, and do not add a new introduction or"
+    " conclusion -- just keep going from the exact cutoff point as if there"
+    " was never a break."
+)
 
-def _generate_gemini_stream(messages, gemini_key, primary_model):
+
+def _gemini_finish_reason(candidate) -> str:
+  return str(getattr(candidate, "finish_reason", "") or "").upper()
+
+
+def _generate_gemini_stream(messages, gemini_key, primary_model, max_output_tokens=4096):
   if not gemini_key:
     yield "❌ MISSING CONFIGURATION: Please set a valid 'GEMINI_API_KEY' in Streamlit Secrets."
     return
 
   client = gemini_client_sdk.Client(api_key=gemini_key.strip())
-  system_instruction, contents = _messages_to_gemini(messages)
-  config = gemini_types.GenerateContentConfig(
-      system_instruction=system_instruction, temperature=0.3, max_output_tokens=2048
-  )
   models_to_try = list(dict.fromkeys([primary_model] + _GEMINI_FALLBACKS))
 
   last_exception = None
   for model_id in models_to_try:
     try:
-      token_count = 0
-      for chunk in client.models.generate_content_stream(model=model_id, contents=contents, config=config):
-        if chunk.text:
-          token_count += 1
-          yield chunk.text
-      if token_count > 0:
+      working_messages = list(messages)
+      any_yielded = False
+      for round_i in range(_MAX_CONTINUATIONS + 1):
+        system_instruction, contents = _messages_to_gemini(working_messages)
+        config = gemini_types.GenerateContentConfig(
+            system_instruction=system_instruction, temperature=0.3, max_output_tokens=max_output_tokens
+        )
+        round_text = ""
+        finish_reason = ""
+        for chunk in client.models.generate_content_stream(model=model_id, contents=contents, config=config):
+          if chunk.text:
+            round_text += chunk.text
+            any_yielded = True
+            yield chunk.text
+          if getattr(chunk, "candidates", None):
+            fr = _gemini_finish_reason(chunk.candidates[0])
+            if fr:
+              finish_reason = fr
+
+        if "MAX_TOKENS" in finish_reason and round_i < _MAX_CONTINUATIONS and round_text:
+          working_messages = working_messages + [
+              {"role": "assistant", "content": round_text},
+              {"role": "user", "content": _CONTINUE_INSTRUCTION},
+          ]
+          continue
+        break
+
+      if any_yielded:
         return
     except Exception as e:
       last_exception = e
@@ -789,19 +825,35 @@ def _generate_gemini_response(messages, gemini_key, primary_model, max_tokens=12
     return None, "❌ Missing GEMINI_API_KEY in Streamlit secrets."
 
   client = gemini_client_sdk.Client(api_key=gemini_key.strip())
-  system_instruction, contents = _messages_to_gemini(messages)
-  config = gemini_types.GenerateContentConfig(
-      system_instruction=system_instruction, temperature=0.3, max_output_tokens=max_tokens
-  )
   models_to_try = list(dict.fromkeys([primary_model] + _GEMINI_FALLBACKS))
 
   last_err = ""
   for model_id in models_to_try:
     try:
-      response = client.models.generate_content(model=model_id, contents=contents, config=config)
-      content = response.text or ""
-      if content.strip():
-        return content, f"Success ({model_id})"
+      working_messages = list(messages)
+      full_text = ""
+      for round_i in range(_MAX_CONTINUATIONS + 1):
+        system_instruction, contents = _messages_to_gemini(working_messages)
+        config = gemini_types.GenerateContentConfig(
+            system_instruction=system_instruction, temperature=0.3, max_output_tokens=max_tokens
+        )
+        response = client.models.generate_content(model=model_id, contents=contents, config=config)
+        piece = response.text or ""
+        full_text += piece
+        finish_reason = ""
+        if getattr(response, "candidates", None):
+          finish_reason = _gemini_finish_reason(response.candidates[0])
+
+        if "MAX_TOKENS" in finish_reason and round_i < _MAX_CONTINUATIONS and piece:
+          working_messages = working_messages + [
+              {"role": "assistant", "content": piece},
+              {"role": "user", "content": _CONTINUE_INSTRUCTION},
+          ]
+          continue
+        break
+
+      if full_text.strip():
+        return full_text, f"Success ({model_id})"
     except Exception as ex:
       last_err = str(ex)
       continue
@@ -810,13 +862,15 @@ def _generate_gemini_response(messages, gemini_key, primary_model, max_tokens=12
 
 
 # 9a. Provider-Routed LLM Streamer with Automatic Same-Provider Model Fallback
-def generate_llm_stream(messages, groq_key, selected_model_name, gemini_key=""):
+# and Automatic Continuation (keeps going past the per-request token cap
+# instead of truncating long documents like exam papers or reports).
+def generate_llm_stream(messages, groq_key, selected_model_name, gemini_key="", max_tokens=4096):
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   primary_model = model_cfg.get("model_id", "qwen/qwen3.6-27b")
   provider = model_cfg.get("provider", "groq")
 
   if provider == "gemini":
-    yield from _generate_gemini_stream(messages, gemini_key, primary_model)
+    yield from _generate_gemini_stream(messages, gemini_key, primary_model, max_output_tokens=max_tokens)
     return
 
   if not groq_key or not groq_key.startswith("gsk_"):
@@ -841,20 +895,37 @@ def generate_llm_stream(messages, groq_key, selected_model_name, gemini_key=""):
   last_exception = None
   for model_id in models_to_try:
     try:
-      stream = client.chat.completions.create(
-          model=model_id,
-          messages=messages,
-          temperature=0.3,
-          max_tokens=2048,
-          stream=True,
-      )
-      token_count = 0
-      for chunk in stream:
-        token_text = chunk.choices[0].delta.content or ""
-        if token_text:
-          token_count += 1
-          yield token_text
-      if token_count > 0:
+      working_messages = list(messages)
+      any_yielded = False
+      for round_i in range(_MAX_CONTINUATIONS + 1):
+        stream = client.chat.completions.create(
+            model=model_id,
+            messages=working_messages,
+            temperature=0.3,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        round_text = ""
+        finish_reason = None
+        for chunk in stream:
+          token_text = chunk.choices[0].delta.content or ""
+          if token_text:
+            round_text += token_text
+            any_yielded = True
+            yield token_text
+          fr = chunk.choices[0].finish_reason
+          if fr:
+            finish_reason = fr
+
+        if finish_reason == "length" and round_i < _MAX_CONTINUATIONS and round_text:
+          working_messages = working_messages + [
+              {"role": "assistant", "content": round_text},
+              {"role": "user", "content": _CONTINUE_INSTRUCTION},
+          ]
+          continue
+        break
+
+      if any_yielded:
         return
     except Exception as e:
       last_exception = e
@@ -863,12 +934,14 @@ def generate_llm_stream(messages, groq_key, selected_model_name, gemini_key=""):
   yield f"❌ Groq SDK Failure: {str(last_exception)}"
 
 
-# 9b. Provider-Routed Non-Streaming LLM Response Helper
+# 9b. Provider-Routed Non-Streaming LLM Response Helper with Auto-Continuation
 def generate_llm_response(messages, groq_key, selected_model_name, max_tokens=1200, gemini_key="") -> tuple[str | None, str]:
   """
   Non-streaming completion wrapper. Routes to Gemini or Groq based on the
   selected model's provider, with automatic fallback within that same
-  provider's free-tier model set. Returns (content_text, status_message).
+  provider's free-tier model set, AND automatic continuation if a response
+  gets cut off by the per-request token cap (e.g. a long exam paper or
+  report). Returns (content_text, status_message).
   """
   model_cfg = MODEL_OPTIONS.get(selected_model_name, {})
   primary_model = model_cfg.get("model_id", "qwen/qwen3.6-27b")
@@ -894,15 +967,30 @@ def generate_llm_response(messages, groq_key, selected_model_name, max_tokens=12
   last_err = ""
   for model_id in models_to_try:
     try:
-      completion = client.chat.completions.create(
-          model=model_id,
-          messages=messages,
-          temperature=0.3,
-          max_tokens=max_tokens,
-      )
-      content = completion.choices[0].message.content or ""
-      if content.strip():
-        return content, f"Success ({model_id})"
+      working_messages = list(messages)
+      full_text = ""
+      for round_i in range(_MAX_CONTINUATIONS + 1):
+        completion = client.chat.completions.create(
+            model=model_id,
+            messages=working_messages,
+            temperature=0.3,
+            max_tokens=max_tokens,
+        )
+        choice = completion.choices[0]
+        piece = choice.message.content or ""
+        full_text += piece
+        finish_reason = getattr(choice, "finish_reason", None)
+
+        if finish_reason == "length" and round_i < _MAX_CONTINUATIONS and piece:
+          working_messages = working_messages + [
+              {"role": "assistant", "content": piece},
+              {"role": "user", "content": _CONTINUE_INSTRUCTION},
+          ]
+          continue
+        break
+
+      if full_text.strip():
+        return full_text, f"Success ({model_id})"
     except Exception as ex:
       last_err = str(ex)
       continue
