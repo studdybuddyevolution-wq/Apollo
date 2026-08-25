@@ -32,6 +32,13 @@ DEFAULT_VISION_PROMPT = (
     " step rather than just stating a final answer."
 )
 
+DEFAULT_GRADING_RUBRIC = (
+    "Grade the student's handwritten solution as a teacher. Identify the"
+    " likely question, check each step, assign a score out of 10, explain"
+    " what earned credit, point out mistakes, and give a short corrected"
+    " solution or improvement plan. Be fair and specific."
+)
+
 
 def _image_to_data_url(image_bytes: bytes, mime_type: str) -> str:
   b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -123,6 +130,67 @@ def render_image_question_widget(groq_key: str, key_suffix: str = "main", on_ans
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": answer if answer else f"❌ Couldn't read that image: {status}",
+        })
+
+        if on_answered:
+          try:
+            on_answered()
+          except Exception:
+            pass
+        st.rerun()
+
+
+def render_homework_grading_widget(groq_key: str, key_suffix: str = "main", on_answered=None):
+  """Sibling of Ask With a Photo for solved homework. It sends the image to
+  the same vision pipeline, but asks Apollo to grade against a rubric."""
+  with st.expander("🧾 Grade Homework From a Photo", expanded=False):
+    st.caption("Upload a solved handwritten answer and Apollo will grade it against a rubric.")
+
+    tab_upload, tab_camera = st.tabs(["📁 Upload", "📸 Camera"])
+    image_file = None
+    with tab_upload:
+      uploaded = st.file_uploader(
+          "Upload solved homework", type=["png", "jpg", "jpeg", "webp"],
+          key=f"grading_upload_{key_suffix}", label_visibility="collapsed",
+      )
+      if uploaded is not None:
+        image_file = uploaded
+    with tab_camera:
+      cam_shot = st.camera_input(
+          "Take a photo", key=f"grading_camera_{key_suffix}", label_visibility="collapsed"
+      )
+      if cam_shot is not None:
+        image_file = cam_shot
+
+    if image_file is not None:
+      st.image(image_file, caption="Submission preview", width=280)
+
+    rubric_text = st.text_area(
+        "Rubric / expected answer (optional):",
+        placeholder="e.g., 5 marks for formula, 3 for substitution, 2 for final answer with units.",
+        key=f"grading_rubric_{key_suffix}",
+        height=90,
+    )
+
+    if st.button("✅ Grade This Submission", use_container_width=True, key=f"grading_submit_{key_suffix}"):
+      if image_file is None:
+        st.warning("Please upload or capture the solved answer first.")
+      else:
+        image_bytes = image_file.getvalue()
+        mime_type = getattr(image_file, "type", None) or "image/jpeg"
+        prompt = DEFAULT_GRADING_RUBRIC
+        if rubric_text.strip():
+          prompt += f"\n\nUse this rubric / expected answer:\n{rubric_text.strip()}"
+        with st.spinner("🧾 Reading and grading the submission..."):
+          answer, status = ask_vision_model(image_bytes, mime_type, prompt, groq_key)
+
+        user_note = "🧾 *[Homework photo grading request]*"
+        if rubric_text.strip():
+          user_note += f"\n\nRubric: {rubric_text.strip()}"
+        st.session_state.chat_history.append({"role": "user", "content": user_note})
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": answer if answer else f"❌ Couldn't grade that image: {status}",
         })
 
         if on_answered:
