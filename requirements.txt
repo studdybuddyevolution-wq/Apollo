@@ -12,6 +12,7 @@ sentence-transformers
 duckduckgo-search
 requests
 torchvision
+python-docx
 python-pptx
 extra-streamlit-components
 groq
