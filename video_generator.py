@@ -1,4 +1,4 @@
-"""
+﻿"""
 video_generator.py — Apollo Omni AI
 ────────────────────────────────────
 Zero-cost cloud & AI video generation module:
@@ -573,3 +573,6 @@ def render_video_generator_ui(
                             os.unlink(mp4_path)
                         except Exception:
                             pass
+
+
+
