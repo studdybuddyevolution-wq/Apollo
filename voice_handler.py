@@ -1,4 +1,4 @@
-"""
+﻿"""
 voice_handler.py — Apollo Omni AI
 Handles:
   • Speech-to-Text  : Groq Whisper via audio_recorder_streamlit + Audio File Upload Fallback
@@ -169,5 +169,5 @@ def run_tts_synthesis(text: str, voice: str = "en-US-AriaNeural") -> bytes | Non
         st.warning(f"⚠️ TTS synthesis failed: {e}")
         return None
 
-        st.warning(f"⚠️ TTS synthesis failed: {e}")
-        return None
+
+
