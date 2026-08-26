@@ -130,6 +130,7 @@ def render_image_question_widget(groq_key: str, key_suffix: str = "main", on_ans
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": answer if answer else f"❌ Couldn't read that image: {status}",
+            "citation_sources": [],
         })
 
         if on_answered:
@@ -191,6 +192,7 @@ def render_homework_grading_widget(groq_key: str, key_suffix: str = "main", on_a
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": answer if answer else f"❌ Couldn't grade that image: {status}",
+            "citation_sources": [],
         })
 
         if on_answered:
