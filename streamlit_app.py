@@ -1,4 +1,4 @@
-import datetime
+﻿import datetime
 import functools
 import gc
 import hashlib
@@ -2812,6 +2812,19 @@ else:
               context_payload = "\n\n".join(_web_ctx_parts)
               _auto_search_fired = True
 
+              # Build lightweight citation sources from Tavily results so the UI
+              # can render Source panels and inline [source: S1] tags.
+              citation_sources = []
+              for _idx, _r in enumerate(_auto_result.get("results", [])[:3], start=1):
+                _snippet = re.sub(r"\s+", " ", _r.get("content", "")).strip()
+                citation_sources.append({
+                  "id": f"S{_idx}",
+                  "label": _r.get("title", "Web Result"),
+                  "source": _r.get("url", ""),
+                  "page": None,
+                  "snippet": _snippet[:1200],
+                })
+
               _clean_web_ctx = (
                   context_payload.replace("<", "&lt;")
                   .replace(">", "&gt;")
@@ -3347,3 +3360,5 @@ else:
       st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+
