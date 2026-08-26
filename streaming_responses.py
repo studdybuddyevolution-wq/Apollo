@@ -169,7 +169,7 @@ def render_thinking_process(stream_generator: Generator) -> tuple[str, str]:
     answer_text = ""
     in_thinking = False
     
-    for token in builder_generator:
+    for token in stream_generator:
         builder.add_token(token)
         full_text += token
         
