@@ -70,6 +70,21 @@ except ImportError:
   def render_dynamic_chart_from_text(text):
     pass
 
+# Import Citation & Fact-Checking System (claim-level verification against sources)
+from citation_system import CitationExtractor, FactChecker, render_citations, render_fact_check
+
+# Import Long-Term Conversation Memory (persistent save/search/reload of chats)
+from conversation_memory import ConversationMemory, render_conversation_browser
+
+# Import Async Search & Caching (parallel Tavily queries + on-disk result cache)
+from async_search import AsyncCache, AsyncSearchEngine
+
+# Import Agentic Reasoning Engine (chain-of-thought prompting + query decomposition)
+from agentic_reasoning import ReasoningMode, build_reasoning_prompt, AgenticPlanner
+
+# Import Streaming Responses helpers (token/latency telemetry for streamed answers)
+from streaming_responses import StreamMetrics
+
 
 # 1. Page Configuration & Title
 st.set_page_config(layout="wide", page_title="APOLLO OMNI AI", page_icon="⚡")
@@ -166,6 +181,20 @@ def get_text_splitter():
 embedder = get_embedding_model()
 text_splitter = get_text_splitter()
 
+
+@st.cache_resource
+def get_conversation_memory():
+  return ConversationMemory(db_path="./apollo_conversations_db")
+
+
+@st.cache_resource
+def get_async_cache():
+  return AsyncCache(cache_dir="./apollo_async_cache", ttl_hours=6)
+
+
+conversation_memory = get_conversation_memory()
+async_cache = get_async_cache()
+
 # 5. State Management Matrix
 if "vector_db" not in st.session_state:
   st.session_state.vector_db = None
@@ -199,6 +228,18 @@ if "planner_result" not in st.session_state:
   st.session_state.planner_result = ""
 if "cross_notebook_results" not in st.session_state:
   st.session_state.cross_notebook_results = []
+if "fact_check_results" not in st.session_state:
+  # Cache of FactChecker verdicts keyed by chat_history message index, so a
+  # "Verify Claims" click survives reruns without re-calling the LLM.
+  st.session_state.fact_check_results = {}
+if "reasoning_mode" not in st.session_state:
+  # Maps to agentic_reasoning.ReasoningMode; controls how the chat query is
+  # wrapped before being sent to the LLM.
+  st.session_state.reasoning_mode = "simple"
+if "stream_metrics" not in st.session_state:
+  st.session_state.stream_metrics = StreamMetrics()
+if "multi_research_results" not in st.session_state:
+  st.session_state.multi_research_results = []
 
 # Adaptive Socratic Tutor: placement-test scores, tiers, chat state, etc.
 init_mastery_state()
@@ -364,6 +405,28 @@ def _cached_tavily_search(query: str, api_key: str) -> dict:
     return {}
   except Exception:
     return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ASYNC / PARALLEL SEARCH ENGINE  (async_search.py) -- lets the "Multi-Query
+# Research" panel fire several Tavily searches concurrently instead of
+# sequentially, reusing the same st.cache_data-backed Tavily call plus an
+# additional on-disk AsyncCache layer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tavily_search_sync(query: str) -> dict:
+  """Adapter: gives AsyncSearchEngine a plain `query -> results` callable."""
+  if not TAVILY_API_KEY or not TAVILY_API_KEY.startswith("tvly-"):
+    return {}
+  return _cached_tavily_search(query, TAVILY_API_KEY.strip())
+
+
+@st.cache_resource
+def get_async_search_engine():
+  return AsyncSearchEngine(_tavily_search_sync, cache=get_async_cache())
+
+
+async_search_engine = get_async_search_engine()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1273,6 +1336,19 @@ def decorate_citation_links(content: str, sources: list[dict] | None = None) -> 
       display = f"source: {src['id']}"
     rendered = rendered.replace(label, f"[{display}](#apollo-source-{src['id'].lower()})")
   return rendered
+
+
+def make_fact_checker(groq_key: str, gemini_key: str, model_name: str) -> FactChecker:
+  """Builds a citation_system.FactChecker wired to the app's existing
+  provider-routed (Groq/Gemini) non-streaming LLM call."""
+
+  def _llm_generator(messages):
+    text, _status = generate_llm_response(
+        messages, groq_key, model_name, max_tokens=700, gemini_key=gemini_key
+    )
+    return text or ""
+
+  return FactChecker(llm_generator=_llm_generator)
 
 
 def render_citation_source_panel(sources: list[dict] | None = None):
@@ -2240,6 +2316,52 @@ def dialog_practice_quiz():
           st.error(f"Quiz error: {status}")
 
 
+@st.dialog("🧭 Agentic Research")
+def dialog_agentic_research():
+  st.caption(
+      "Breaks a complex question into sub-questions, answers each one using"
+      " your indexed sources, then synthesizes a single, comprehensive report."
+  )
+  topic, sel_sources = render_sources_and_topic(
+      "agentic",
+      placeholder="e.g. Compare TCP and UDP and recommend one for a real-time game",
+      suggestions=[
+          "Break this down and answer it thoroughly using my sources",
+          "Compare and evaluate multiple approaches from the syllabus",
+          "Give a fully-reasoned, multi-part answer to a hard question",
+      ],
+      label="What's the complex question?",
+      area=True,
+  )
+
+  if _dialog_footer_generate_cancel("agentic"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a question to research.")
+    else:
+      with st.spinner("Planning sub-questions, researching, and synthesizing..."):
+        ctx = get_scoped_context(topic, sel_sources, k=6)
+        planner = AgenticPlanner(
+            llm_generator=lambda messages: (
+                generate_llm_response(
+                    messages, GROQ_API_KEY, selected_model, max_tokens=900, gemini_key=GEMINI_API_KEY
+                )[0]
+                or ""
+            )
+        )
+        try:
+          plan_result = planner.plan_and_solve(topic, context=ctx)
+          st.session_state.studio_results["Agentic Research"] = {
+              **plan_result,
+              "sources": sel_sources,
+          }
+          st.session_state.dialog_open = False
+          st.rerun()
+        except Exception as e:
+          st.error(f"Agentic research failed: {str(e)}")
+
+
 _STUDIO_DIALOGS = {
     "Audio Overview": dialog_audio_overview,
     "Slide Deck": dialog_slide_deck,
@@ -2248,6 +2370,7 @@ _STUDIO_DIALOGS = {
     "Study Reports": dialog_study_reports,
     "Flashcards": dialog_flashcards,
     "Practice Quiz": dialog_practice_quiz,
+    "Agentic Research": dialog_agentic_research,
 }
 
 
@@ -2430,6 +2553,24 @@ with st.sidebar:
       f" Mono\"; margin-top: 4px;'>{MODEL_OPTIONS[selected_model]['desc']}</div>",
       unsafe_allow_html=True,
   )
+
+  _reasoning_labels = {
+      "Direct answer": ReasoningMode.SIMPLE.value,
+      "Chain-of-thought": ReasoningMode.CHAIN_OF_THOUGHT.value,
+      "Deep analysis": ReasoningMode.DEEP.value,
+  }
+  _reasoning_values = list(_reasoning_labels.values())
+  _current_reasoning_label = next(
+      (lbl for lbl, val in _reasoning_labels.items() if val == st.session_state.reasoning_mode),
+      "Direct answer",
+  )
+  chosen_reasoning_label = st.selectbox(
+      "Reasoning depth:",
+      options=list(_reasoning_labels.keys()),
+      index=list(_reasoning_labels.keys()).index(_current_reasoning_label),
+      help="Chain-of-thought / Deep analysis wrap your chat question with an explicit reasoning scaffold before it's sent to the model.",
+  )
+  st.session_state.reasoning_mode = _reasoning_labels[chosen_reasoning_label]
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Cross-notebook search
@@ -2504,6 +2645,75 @@ with st.sidebar:
             st.warning("⚠️ No results returned. Try a different query.")
         except Exception as e:
           st.error(f"Search failed: {str(e)}")
+  st.markdown("</div>", unsafe_allow_html=True)
+
+  # Parallel Multi-Query Research (async_search.py)
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
+      unsafe_allow_html=True,
+  )
+  st.markdown(
+      "<div class='panel-header' style='margin-bottom: 8px; padding-bottom:"
+      " 8px;'>🧵 Parallel Multi-Query Research</div>",
+      unsafe_allow_html=True,
+  )
+  st.caption("One query per line — all searches run concurrently and are cached on disk.")
+  multi_query_text = st.text_area(
+      "Queries (one per line):",
+      placeholder="Transformer attention mechanism\nRAG vs fine-tuning tradeoffs\nFAISS index types",
+      key="multi_research_input",
+      label_visibility="collapsed",
+      height=90,
+  )
+  if st.button("RESEARCH & INDEX ALL (PARALLEL)", use_container_width=True, key="multi_research_btn"):
+    queries = [q.strip() for q in multi_query_text.splitlines() if q.strip()]
+    if not TAVILY_API_KEY or not TAVILY_API_KEY.startswith("tvly-"):
+      st.error("No active Tavily API Key found in Streamlit Secrets.")
+    elif not queries:
+      st.warning("Add at least one query, one per line.")
+    else:
+      with st.spinner(f"Running {len(queries)} searches in parallel..."):
+        try:
+          batch_results = async_search_engine.search_many(queries)
+        except Exception as e:
+          batch_results = []
+          st.error(f"Parallel search failed: {str(e)}")
+
+        all_web_docs = []
+        summary_rows = []
+        for entry in batch_results:
+          q = entry.get("query", "")
+          res = entry.get("results") or {}
+          cache_tag = "cached" if entry.get("cached") else "fresh"
+          hits = res.get("results", []) if isinstance(res, dict) else []
+          summary_rows.append(f"- **{q}** — {len(hits)} result(s), {cache_tag}")
+          for r in hits:
+            all_web_docs.append(
+                LangchainDocument(
+                    page_content=f"Title: {r.get('title')}\nSource: {r.get('url')}\nContext: {r.get('content')}",
+                    metadata={"source": r.get("url", ""), "title": r.get("title", "")},
+                )
+            )
+            register_source(r.get("url") or r.get("title") or "Web result", kind="web")
+
+        if all_web_docs:
+          chunks = text_splitter.split_documents(all_web_docs)
+          if chunks:
+            if st.session_state.vector_db is None:
+              st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
+            else:
+              st.session_state.vector_db.add_documents(chunks)
+            st.session_state.node_count += len(chunks)
+            save_active_notebook(st.session_state.user_email)
+        st.session_state.multi_research_results = summary_rows
+        if all_web_docs:
+          st.success(f"Indexed results from {len(queries)} parallel quer{'y' if len(queries) == 1 else 'ies'}.")
+        elif queries:
+          st.warning("⚠️ No results returned for any query.")
+
+  if st.session_state.multi_research_results:
+    with st.expander("Last parallel research run", expanded=False):
+      st.markdown("\n".join(st.session_state.multi_research_results))
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Local Documents Upload
@@ -2594,6 +2804,33 @@ with st.sidebar:
         st.caption(f"⏭️ Skipped (already indexed): {', '.join(skipped)}")
       if failures:
         st.warning("⚠️ Couldn't index:\n" + "\n".join(f"- {f}" for f in failures))
+  st.markdown("</div>", unsafe_allow_html=True)
+
+  # Long-Term Conversation Memory (conversation_memory.py)
+  st.markdown(
+      "<div class='glass-panel' style='padding: 12px; margin-bottom: 16px;'>",
+      unsafe_allow_html=True,
+  )
+  with st.expander("💾 Saved Conversations", expanded=False):
+    save_topic = st.text_input(
+        "Topic / title for this conversation",
+        value=(st.session_state.chat_history[0]["content"][:60] if st.session_state.chat_history else ""),
+        key="save_conv_topic",
+    )
+    if st.button("Save current conversation", use_container_width=True, key="save_conv_btn"):
+      if not st.session_state.chat_history:
+        st.warning("Nothing to save yet — start chatting first.")
+      else:
+        _active_nb = get_active_notebook(st.session_state.user_email)
+        _tags = [_active_nb["title"]] if _active_nb else []
+        conv_id = conversation_memory.save_conversation(
+            user_email=st.session_state.user_email,
+            conversation_history=st.session_state.chat_history,
+            topic=save_topic or "Untitled conversation",
+            tags=_tags,
+        )
+        st.success(f"Saved (id: {conv_id}).")
+    render_conversation_browser(conversation_memory, st.session_state.user_email)
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Session Control
@@ -2712,6 +2949,26 @@ else:
             _renderable_content = decorate_citation_links(msg["content"], _citation_sources)
             render_dynamic_chart_from_text(_renderable_content)
             render_citation_source_panel(_citation_sources)
+
+            # --- Fact-check this answer against its sources (citation_system.py) ---
+            _verify_col, _ = st.columns([1, 3])
+            with _verify_col:
+              if st.button("🔍 Verify Claims", key=f"verify_{_msg_idx}", use_container_width=True):
+                with st.spinner("Cross-checking claims against sources..."):
+                  _verify_context = citation_context_from_sources(_citation_sources)
+                  _checker = make_fact_checker(GROQ_API_KEY, GEMINI_API_KEY, selected_model)
+                  _extractor = CitationExtractor(indexed_sources=st.session_state.indexed_sources)
+                  _, _inline_citations = _extractor.extract_citations_from_response(msg["content"])
+                  st.session_state.fact_check_results[_msg_idx] = {
+                      "verification": _checker.verify_response(msg["content"], context=_verify_context),
+                      "citations": _inline_citations,
+                  }
+            _fc_result = st.session_state.fact_check_results.get(_msg_idx)
+            if _fc_result:
+              render_fact_check(_fc_result["verification"])
+              if _fc_result["citations"]:
+                render_citations(_fc_result["citations"])
+
             _docx_path = msg.get("docx_path")
             if _docx_path and os.path.exists(_docx_path):
               with open(_docx_path, "rb") as _qp_f:
@@ -2862,13 +3119,18 @@ else:
             " used.</div>"
         )
 
+      _reasoning_mode_enum = ReasoningMode(st.session_state.get("reasoning_mode", ReasoningMode.SIMPLE.value))
+      if _reasoning_mode_enum == ReasoningMode.SIMPLE:
+        _user_turn_content = f"Context Matrix:\n{context_payload}\n\nQuery: {final_query}"
+      else:
+        _user_turn_content = build_reasoning_prompt(
+            final_query, context=context_payload, mode=_reasoning_mode_enum
+        )
+
       message_stream = [{"role": "system", "content": sys_instruction}]
       for msg in st.session_state.chat_history[-4:]:
         message_stream.append({"role": msg["role"], "content": msg["content"]})
-      message_stream.append({
-          "role": "user",
-          "content": f"Context Matrix:\n{context_payload}\n\nQuery: {final_query}",
-      })
+      message_stream.append({"role": "user", "content": _user_turn_content})
 
       with chat_scroll_pane:
         with st.chat_message("assistant"):
@@ -2939,7 +3201,14 @@ else:
           "pdf_path": pdf_path,
           "citation_sources": citation_sources,
       })
-      st.session_state.response_time = f"{time.time() - start_time:.2f}"
+      _elapsed = time.time() - start_time
+      st.session_state.response_time = f"{_elapsed:.2f}"
+      if collected_tokens and not str(collected_tokens).startswith("❌"):
+        st.session_state.stream_metrics.log_session(
+            token_count=len(str(collected_tokens).split()),
+            elapsed_seconds=_elapsed,
+            model=selected_model,
+        )
       save_active_notebook(st.session_state.user_email)
       st.rerun()
 
@@ -3022,6 +3291,12 @@ else:
           type="secondary" if st.session_state.active_studio_tool != "Active Context" else "primary",
           key="tile_context",
       )
+      btn_agentic = st.button(
+          "🧭 Agentic Research  ›",
+          use_container_width=True,
+          type="secondary" if st.session_state.active_studio_tool != "Agentic Research" else "primary",
+          key="tile_agentic",
+      )
 
     # Clicking a generation tile opens its NotebookLM-style creation dialog;
     # "Active Context" just switches the persistent panel below (no dialog needed).
@@ -3056,6 +3331,10 @@ else:
     elif btn_context:
       st.session_state.active_studio_tool = "Active Context"
       st.session_state.dialog_open = False
+      st.rerun()
+    elif btn_agentic:
+      st.session_state.active_studio_tool = "Agentic Research"
+      st.session_state.dialog_open = True
       st.rerun()
 
     st.markdown(
@@ -3329,7 +3608,49 @@ else:
       else:
         st.info("Nothing generated yet — open the generator above to create a practice quiz.")
 
-    # 8. ACTIVE CONTEXT
+    # 8. AGENTIC RESEARCH (agentic_reasoning.py AgenticPlanner)
+    elif active_tool == "Agentic Research":
+      st.markdown(
+          "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>🧭 AGENTIC RESEARCH (DECOMPOSE → ANSWER → SYNTHESIZE)</div>",
+          unsafe_allow_html=True,
+      )
+      if st.button("🧭 Open Agentic Research", use_container_width=True, key="reopen_agentic"):
+        st.session_state.dialog_open = True
+        st.rerun()
+
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        decomposition = result.get("decomposition", [])
+        if decomposition:
+          with st.expander(f"🧩 Sub-questions ({len(decomposition)})", expanded=False):
+            sub_answers = result.get("sub_answers", {})
+            for i, sub_q in enumerate(decomposition, 1):
+              st.markdown(f"**{i}. {sub_q}**")
+              st.caption(sub_answers.get(sub_q, ""))
+        st.markdown("**Synthesized Answer:**")
+        st.markdown(result.get("final_answer", ""))
+        st.download_button(
+            "📥 DOWNLOAD REPORT (.MD)", result.get("final_answer", ""),
+            file_name="apollo_agentic_research.md", mime="text/markdown",
+            use_container_width=True, key="dl_agentic",
+        )
+        if st.session_state.get("chat_pdf_enabled", True):
+          pdf_path = pdf_from_markdown(result.get("original_query", "Apollo Agentic Research"), result.get("final_answer", ""))
+          if pdf_path and os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+              st.download_button(
+                  "📕 DOWNLOAD REPORT (.PDF)",
+                  f.read(),
+                  file_name="apollo_agentic_research.pdf",
+                  mime="application/pdf",
+                  use_container_width=True,
+                  key="dl_agentic_pdf",
+              )
+      else:
+        st.info("Nothing generated yet — open the generator above to decompose and research a complex question.")
+
+    # 9. ACTIVE CONTEXT
     elif active_tool == "Active Context":
       st.markdown(
           "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📑 ACTIVE VECTOR RAG CONTEXT</div>",
@@ -3345,5 +3666,8 @@ else:
           st.markdown(f"{icon} {s['name']}")
         st.markdown("<hr style='border-color: rgba(255,140,0,0.15); margin: 10px 0;'>", unsafe_allow_html=True)
       st.markdown(st.session_state.source_reference, unsafe_allow_html=True)
+
+      with st.expander("📈 Streaming Performance (this session)", expanded=False):
+        st.session_state.stream_metrics.render_dashboard()
 
     st.markdown("</div>", unsafe_allow_html=True)
