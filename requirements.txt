@@ -6,6 +6,7 @@ langchain-core
 langchain-community
 langchain-text-splitters
 pypdf
+pymupdf
 docx2txt
 faiss-cpu
 sentence-transformers
