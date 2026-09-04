@@ -23,6 +23,8 @@ from google import genai as gemini_client_sdk
 from google.genai import types as gemini_types
 from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
+
+from pdf_ocr_fallback import looks_garbled, combined_text, ocr_pdf_via_vision
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document as LangchainDocument
@@ -467,17 +469,30 @@ _LOADER_BY_SUFFIX = {
 }
 
 
-def _parse_uploaded_file(file_name: str, file_bytes: bytes) -> tuple[str, list, str | None]:
+def _parse_uploaded_file(
+    file_name: str, file_bytes: bytes, groq_key: str = ""
+) -> tuple[str, list, str | None, bool]:
   """Writes one uploaded file to a temp path, loads it with the matching
-  LangChain loader, and returns (file_name, documents, error_message).
+  LangChain loader, and returns (file_name, documents, error_message, used_ocr_fallback).
   Designed to be safely run inside a ThreadPoolExecutor for parallel parsing
   of multi-file uploads -- each call gets its own temp file, so there's no
   shared state between threads.
+
+  For PDFs specifically: some files (very commonly Sanskrit/Devanagari
+  material typeset with legacy non-Unicode fonts, or scanned image PDFs)
+  yield either no text or unreadable "garbled" text from the normal text
+  layer -- pypdf can only read whatever character codes the font's
+  internal table happens to use, and legacy fonts often map Devanagari
+  glyphs onto arbitrary Latin codepoints with no Unicode mapping stored
+  anywhere in the file. When that's detected, we fall back to rendering
+  each page as an image and reading it with the vision model instead
+  (see pdf_ocr_fallback.py) -- the same approach as "Ask With a Photo",
+  just applied per-page.
   """
   suffix = os.path.splitext(file_name)[1].lower()
   loader_factory = _LOADER_BY_SUFFIX.get(suffix)
   if loader_factory is None:
-    return file_name, [], f"Unsupported file type: {suffix or 'unknown'}"
+    return file_name, [], f"Unsupported file type: {suffix or 'unknown'}", False
 
   path = None
   try:
@@ -487,11 +502,32 @@ def _parse_uploaded_file(file_name: str, file_bytes: bytes) -> tuple[str, list, 
     loaded = loader_factory(path).load()
     for d in loaded:
       d.metadata["source"] = file_name  # readable name instead of temp path
+
+    needs_ocr = suffix == ".pdf" and (not loaded or looks_garbled(combined_text(loaded)))
+    if needs_ocr:
+      if not groq_key or not groq_key.startswith("gsk_"):
+        reason = "no extractable text" if not loaded else "an unreadable/garbled text layer"
+        return (
+            file_name, [],
+            f"This PDF has {reason} (common with legacy Devanagari/Sanskrit fonts or "
+            "scanned pages) and needs the AI-vision OCR fallback to read it -- add a "
+            "valid GROQ_API_KEY to enable that.",
+            False,
+        )
+      ocr_docs, ocr_warning = ocr_pdf_via_vision(file_name, file_bytes, groq_key)
+      if ocr_docs:
+        return file_name, ocr_docs, ocr_warning, True
+      return (
+          file_name, [],
+          ocr_warning or "OCR fallback found no readable text on any page.",
+          True,
+      )
+
     if not loaded:
-      return file_name, [], "No extractable text found (scanned image PDF?)."
-    return file_name, loaded, None
+      return file_name, [], "No extractable text found (scanned image PDF?).", False
+    return file_name, loaded, None, False
   except Exception as e:
-    return file_name, [], str(e)
+    return file_name, [], str(e), False
   finally:
     if path and os.path.exists(path):
       os.unlink(path)
@@ -2757,26 +2793,43 @@ with st.sidebar:
 
       docs = []
       failures = []
+      ocr_used = []
       if to_parse:
         progress = st.progress(0.0, text=f"Parsing 0/{len(to_parse)} files...")
         # Parse files concurrently -- I/O + PDF-parsing bound, so threads
         # give a real wall-clock speedup on multi-file uploads.
         with ThreadPoolExecutor(max_workers=min(8, len(to_parse))) as pool:
           futures = {
-              pool.submit(_parse_uploaded_file, f.name, f.read()): f.name
+              pool.submit(_parse_uploaded_file, f.name, f.read(), GROQ_API_KEY): f.name
               for f in to_parse
           }
           done = 0
           for future in as_completed(futures):
-            f_name, loaded, err = future.result()
+            f_name, loaded, err, used_ocr = future.result()
             done += 1
             progress.progress(done / len(to_parse), text=f"Parsing {done}/{len(to_parse)} files...")
-            if err:
+            if used_ocr and loaded:
+              ocr_used.append(f_name)
+            if err and not loaded:
               failures.append(f"{f_name} — {err}")
+            elif err and loaded:
+              # OCR fallback succeeded but with a partial warning (e.g. a
+              # few pages failed, or the file was truncated at the page cap).
+              ocr_used[-1] = f"{f_name} ({err})" if ocr_used and ocr_used[-1] == f_name else f_name
+              docs.extend(loaded)
+              register_source(f_name, kind="file")
             else:
               docs.extend(loaded)
               register_source(f_name, kind="file")
         progress.empty()
+
+      if ocr_used:
+        st.info(
+            "🔎 Used AI-vision OCR (page-by-page image reading) instead of the normal "
+            "text extractor for: " + ", ".join(ocr_used) +
+            ". This kicks in automatically when a PDF's text layer is empty or "
+            "unreadable -- common with legacy/non-Unicode Devanagari fonts or scanned pages."
+        )
 
       if docs:
         chunks = text_splitter.split_documents(docs)
