@@ -45,9 +45,20 @@ def _image_to_data_url(image_bytes: bytes, mime_type: str) -> str:
   return f"data:{mime_type};base64,{b64}"
 
 
-def ask_vision_model(image_bytes: bytes, mime_type: str, question: str, groq_key: str) -> tuple[str | None, str]:
+def ask_vision_model(
+    image_bytes: bytes,
+    mime_type: str,
+    question: str,
+    groq_key: str,
+    max_tokens: int = 1200,
+    temperature: float = 0.3,
+) -> tuple[str | None, str]:
   """Sends one image (+ optional question) to a Groq vision model with
-  automatic fallback across model IDs. Returns (answer, status)."""
+  automatic fallback across model IDs. Returns (answer, status).
+
+  max_tokens/temperature are exposed (rather than hardcoded) so callers like
+  the PDF-OCR fallback can ask for longer, low-temperature transcriptions
+  instead of the short, more creative tutoring-style default."""
   if not groq_key or not groq_key.startswith("gsk_"):
     return None, "Missing or invalid GROQ_API_KEY (must start with 'gsk_')."
 
@@ -67,8 +78,8 @@ def ask_vision_model(image_bytes: bytes, mime_type: str, question: str, groq_key
                   {"type": "image_url", "image_url": {"url": data_url}},
               ],
           }],
-          temperature=0.3,
-          max_tokens=1200,
+          temperature=temperature,
+          max_tokens=max_tokens,
       )
       answer = completion.choices[0].message.content
       if answer:
