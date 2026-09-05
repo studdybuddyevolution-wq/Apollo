@@ -14,15 +14,18 @@ import streamlit as st
 from groq import Groq
 
 # Groq vision-capable chat models, tried in order. All are on Groq's free,
-# no-credit-card tier (rate-limited, not model-gated) -- confirmed Aug 2026.
-# Groq deprecates model IDs periodically (same caveat as the text
-# MODEL_OPTIONS matrix in Apollo_omni.py); as of this writing,
-# llama-4-maverick-17b-128e-instruct and the llama-3.2-*-vision-preview IDs
-# have already been deprecated, so they're intentionally left out below.
-# Check https://console.groq.com/docs/models if this list starts failing.
+# no-credit-card tier (rate-limited, not model-gated).
+#
+# Groq deprecates model IDs periodically -- the previous list here
+# (meta-llama/llama-4-scout-17b-16e-instruct, qwen/qwen3-vl-32b-instruct)
+# is now dead: llama-4-scout was formally deprecated by Groq on 2026-06-17,
+# and qwen3-vl-32b-instruct was never a valid Groq model ID at all (404,
+# not a deprecation). Per Groq's vision docs as of Sep 2026, the current
+# vision-capable models are qwen3.6-27b and qwen3.8-27b. Check
+# https://console.groq.com/docs/vision if this list starts failing again.
 VISION_MODEL_FALLBACKS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "qwen/qwen3-vl-32b-instruct",  # enterprise-gated as of Aug 2026; harmless to try, just falls through if unavailable on your account
+    "qwen/qwen3.6-27b",  # up to 5 images/request, thinking + non-thinking modes
+    "qwen/qwen3.8-27b",  # up to 3 images/request, tunable reasoning effort
 ]
 
 DEFAULT_VISION_PROMPT = (
