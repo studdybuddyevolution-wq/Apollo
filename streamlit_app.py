@@ -25,6 +25,7 @@ from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 
 from pdf_ocr_fallback import looks_garbled, combined_text, ocr_pdf_via_vision
+from diagrams import build_diagram_prompt, generate_and_render, RenderedDiagram
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document as LangchainDocument
@@ -556,6 +557,37 @@ def get_scoped_context(query: str, selected_sources: list[str] | None, k: int = 
     )
   except Exception:
     return ""
+
+
+def render_diagram_result(result_content: str, key_prefix: str = "diagram"):
+  """Renders a diagram Studio result: parses the LLM's mermaid/svg block,
+  renders it to a real image (Kroki for mermaid, direct for illustrative
+  SVG), and shows it with a download button + collapsible source view.
+  Falls back to showing the raw code if rendering failed for any reason
+  (e.g. Kroki unreachable) so nothing is ever silently lost.
+  """
+  rendered: RenderedDiagram | None = generate_and_render(result_content or "")
+
+  if rendered is None:
+    st.warning("Couldn't find a diagram block in the generated response -- showing raw output instead.")
+    st.markdown(result_content or "")
+    return
+
+  if rendered.svg_bytes:
+    st.image(rendered.svg_bytes, use_container_width=True)
+    st.download_button(
+        "📥 DOWNLOAD DIAGRAM (.svg)",
+        rendered.svg_bytes,
+        file_name=f"apollo_{key_prefix}.svg",
+        mime="image/svg+xml",
+        use_container_width=True,
+        key=f"dl_{key_prefix}_svg",
+    )
+  else:
+    st.error(f"⚠️ Couldn't render the diagram: {rendered.error}")
+
+  with st.expander(f"📄 View {rendered.kind} source", expanded=False):
+    st.code(rendered.source_code, language=rendered.kind)
 
 
 def render_sources_and_topic(
@@ -2204,6 +2236,39 @@ def dialog_video_overview():
     st.rerun()
 
 
+@st.dialog("📊 Diagrams")
+def dialog_diagrams():
+  topic, sel_sources = render_sources_and_topic(
+      "diagrams",
+      placeholder="e.g. The Krebs Cycle, TCP Handshake, Water Cycle, Sorting Algorithm Comparison",
+      suggestions=[
+          "Draw a labeled diagram of this",
+          "Show this process as a colored flowchart",
+          "Diagram the architecture/relationships described in my sources",
+      ],
+  )
+
+  if _dialog_footer_generate_cancel("diagrams"):
+    if not GROQ_API_KEY or not GROQ_API_KEY.startswith("gsk_"):
+      st.error("❌ Missing or invalid GROQ_API_KEY (must start with 'gsk_').")
+    elif not topic:
+      st.warning("Please enter a topic for the diagram.")
+    else:
+      with st.spinner("Sketching the diagram..."):
+        ctx = get_scoped_context(topic, sel_sources, k=6)
+        prompt = build_diagram_prompt(topic, ctx)
+        content, status = generate_llm_response(
+            [{"role": "user", "content": prompt}], GROQ_API_KEY, selected_model,
+            max_tokens=1800, gemini_key=GEMINI_API_KEY,
+        )
+        if content:
+          st.session_state.studio_results["Diagrams"] = {"content": content, "sources": sel_sources, "topic": topic}
+          st.session_state.dialog_open = False
+          st.rerun()
+        else:
+          st.error(f"Diagram generation error: {status}")
+
+
 @st.dialog("🧠 Mind Map")
 def dialog_mind_map():
   topic, sel_sources = render_sources_and_topic(
@@ -2225,7 +2290,10 @@ def dialog_mind_map():
       with st.spinner("Generating mind map breakdown..."):
         ctx = get_scoped_context(topic, sel_sources, k=6)
         prompt = (
-            f"Generate a structured hierarchical Mermaid mind map for: '{topic}'."
+            f"Generate a structured hierarchical Mermaid mind map (or flowchart, if that "
+            f"reads better hierarchically) for: '{topic}'. Color-code branches/categories "
+            f"with `style` or `classDef` lines so distinct groups are visually distinct. "
+            f"Output ONLY a single ```mermaid fenced code block, nothing else."
             f"{' Use ONLY the context below.' if ctx else ''}\nContext:\n{ctx}"
         )
         content, status = generate_llm_response(
@@ -2403,6 +2471,7 @@ _STUDIO_DIALOGS = {
     "Slide Deck": dialog_slide_deck,
     "Video Overview": dialog_video_overview,
     "Mind Map": dialog_mind_map,
+    "Diagrams": dialog_diagrams,
     "Study Reports": dialog_study_reports,
     "Flashcards": dialog_flashcards,
     "Practice Quiz": dialog_practice_quiz,
@@ -3318,6 +3387,12 @@ else:
           type="secondary" if st.session_state.active_studio_tool != "Practice Quiz" else "primary",
           key="tile_quiz",
       )
+      btn_diagrams = st.button(
+          "📊 Diagrams  ›",
+          use_container_width=True,
+          type="secondary" if st.session_state.active_studio_tool != "Diagrams" else "primary",
+          key="tile_diagrams",
+      )
 
     with g_col2:
       btn_slides = st.button(
@@ -3379,6 +3454,10 @@ else:
       st.rerun()
     elif btn_quiz:
       st.session_state.active_studio_tool = "Practice Quiz"
+      st.session_state.dialog_open = True
+      st.rerun()
+    elif btn_diagrams:
+      st.session_state.active_studio_tool = "Diagrams"
       st.session_state.dialog_open = True
       st.rerun()
     elif btn_context:
@@ -3542,9 +3621,27 @@ else:
       if result:
         if result.get("sources"):
           st.caption(f"Based on: {', '.join(result['sources'])}")
-        st.code(result.get("content", ""), language="markdown")
+        render_diagram_result(result.get("content", ""), key_prefix="mindmap")
       else:
         st.info("Nothing generated yet — open the generator above to create a mind map.")
+
+    # 4b. GENERAL-PURPOSE DIAGRAMS (flowcharts, architecture, illustrative/labeled diagrams)
+    elif active_tool == "Diagrams":
+      st.markdown(
+          "<div style='font-size: 12px; font-weight: 700; color: #ff8c00; font-family: \"JetBrains Mono\", monospace; margin-bottom: 8px;'>📊 DIAGRAM GENERATOR</div>",
+          unsafe_allow_html=True,
+      )
+      st.caption("Flowcharts, timelines, architecture diagrams, or fully illustrated labeled diagrams — Apollo picks the right format automatically.")
+      if st.button("📊 Open Diagram Generator", use_container_width=True, key="reopen_diagrams"):
+        st.session_state.dialog_open = True
+        st.rerun()
+
+      if result:
+        if result.get("sources"):
+          st.caption(f"Based on: {', '.join(result['sources'])}")
+        render_diagram_result(result.get("content", ""), key_prefix="diagram")
+      else:
+        st.info("Nothing generated yet — open the generator above to create a diagram.")
 
     # 5. STUDY REPORTS
     elif active_tool == "Study Reports":
