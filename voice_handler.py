@@ -1,13 +1,16 @@
 ﻿"""
 voice_handler.py — Apollo Omni AI
 Handles:
-  • Speech-to-Text  : Groq Whisper via audio_recorder_streamlit + Audio File Upload Fallback
+  • Speech-to-Text  : Streamlit native microphone recorder (with legacy
+    audio-recorder-streamlit fallback) + Audio File Upload Fallback
   • Text-to-Speech  : Microsoft Edge TTS (edge-tts) — free neural voices
 """
 
 import asyncio
+import hashlib
 import io
 import os
+
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 from groq import Groq
@@ -22,10 +25,13 @@ def render_voice_input(api_key: str, key_suffix: str = "default", compact: bool 
     Renders a microphone recorder widget & audio upload fallback.
     Transcribes spoken voice using Groq Whisper API (whisper-large-v3).
 
+    The primary recorder is Streamlit's native st.audio_input(), which is
+    substantially more reliable than the old third-party recorder component
+    across current Streamlit releases and hosted HTTPS deployments.
+
     Args:
         compact: if True, renders inside a small popover (mic icon trigger)
-            instead of an always-open full-width panel. All transcription
-            logic below is unchanged either way.
+            instead of an always-open full-width panel.
 
     Returns transcribed text string or None.
     """
@@ -52,15 +58,32 @@ def _render_voice_input_body(api_key: str, key_suffix: str) -> str | None:
     col_mic, col_status = st.columns([1, 3], gap="small")
 
     audio_bytes = None
+    file_name = "speech_input.wav"
+
     with col_mic:
-        audio_bytes = audio_recorder(
-            text="Record",
-            recording_color="#ff8c00",
-            neutral_color="#e5e2e1",
-            icon_name="microphone",
-            icon_size="2x",
-            key=f"audio_recorder_{key_suffix}",
-        )
+        # Streamlit's native audio_input was made generally available in 1.40
+        # and handles browser microphone permissions/recording state itself.
+        # Prefer it over the legacy custom component; retain the old component
+        # as a compatibility fallback for older Streamlit installations.
+        if hasattr(st, "audio_input"):
+            audio_value = st.audio_input(
+                "Record",
+                sample_rate=16000,
+                key=f"audio_input_{key_suffix}",
+                label_visibility="collapsed",
+            )
+            if audio_value is not None:
+                audio_bytes = audio_value.getvalue()
+                file_name = getattr(audio_value, "name", None) or "speech_input.wav"
+        else:
+            audio_bytes = audio_recorder(
+                text="Record",
+                recording_color="#ff8c00",
+                neutral_color="#e5e2e1",
+                icon_name="microphone",
+                icon_size="2x",
+                key=f"audio_recorder_{key_suffix}",
+            )
 
     with col_status:
         st.markdown(
@@ -82,22 +105,27 @@ def _render_voice_input_body(api_key: str, key_suffix: str) -> str | None:
 
     # Pick up bytes from mic or uploaded file
     target_bytes = None
-    file_name = "speech_input.wav"
+    source_id = None
 
     if audio_bytes:
         target_bytes = audio_bytes
+        # Hash the actual recording instead of relying on the component/file
+        # name. This lets a user make multiple recordings reliably while still
+        # preventing Streamlit reruns from transcribing the same recording twice.
+        source_id = hashlib.sha256(target_bytes).hexdigest()
         dedup_key = f"last_processed_audio_{key_suffix}"
-        if st.session_state.get(dedup_key) == target_bytes:
+        if st.session_state.get(dedup_key) == source_id:
             return None
-        st.session_state[dedup_key] = target_bytes
+        st.session_state[dedup_key] = source_id
 
     elif uploaded_audio:
-        target_bytes = uploaded_audio.read()
-        file_name = uploaded_audio.name
+        target_bytes = uploaded_audio.getvalue()
+        source_id = hashlib.sha256(target_bytes).hexdigest()
         dedup_key = f"last_processed_file_{key_suffix}"
-        if st.session_state.get(dedup_key) == uploaded_audio.name:
+        if st.session_state.get(dedup_key) == source_id:
             return None
-        st.session_state[dedup_key] = uploaded_audio.name
+        st.session_state[dedup_key] = source_id
+        file_name = uploaded_audio.name
 
     # ── Process audio bytes via Groq Whisper ───────────────────────────
     if target_bytes:
