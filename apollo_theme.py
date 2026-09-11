@@ -154,7 +154,7 @@ def inject_theme():
     #MainMenu, footer {{ visibility: hidden; }}
     </style>
     """
-    st.markdown(textwrap.dedent(css), unsafe_allow_html=True)
+    st.html(textwrap.dedent(css))
 
 
 def icon(name: str, size: int = 18, color: str = None) -> str:
