@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
+
+# Load local Apollo secrets from the repository-root .env file.
+# Shell environment variables take precedence, so existing deployments remain compatible.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_REPO_ROOT / ".env", override=False)
 
 DEFAULT_MODEL = "qwen/qwen3.6-27b"
 MAX_OUTPUT_TOKENS = 900  # Keep below the current 1,000 OTPM free-tier limit.
