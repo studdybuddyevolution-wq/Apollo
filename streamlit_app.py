@@ -2904,7 +2904,7 @@ with st.sidebar:
             tags=_tags,
         )
         st.success(f"Saved (id: {conv_id}).")
-    render_past_sessions_panel(conversation_memory, st.session_state.user_email)
+    render_past_sessions_panel(conversation_memory, st.session_state.user_email, key_prefix="sidebar")
   st.markdown("</div>", unsafe_allow_html=True)
 
   # Session Control
@@ -2974,7 +2974,7 @@ elif app_mode == "📜 Past Sessions":
       """,
       unsafe_allow_html=True,
   )
-  render_past_sessions_panel(conversation_memory, st.session_state.user_email)
+  render_past_sessions_panel(conversation_memory, st.session_state.user_email, key_prefix="mainpage")
 else:
   # FIX 1: Column definition and ALL console/studio rendering blocks are inside else:
   col_chat, col_tools = st.columns([72, 28], gap="medium")
