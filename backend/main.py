@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 
 DEFAULT_MODEL = "qwen/qwen3.6-27b"
+MAX_OUTPUT_TOKENS = 900  # Keep below the current 1,000 OTPM free-tier limit.
 
 
 def _cors_origins() -> list[str]:
@@ -88,7 +89,7 @@ def _stream_groq(request: ChatRequest):
             model=request.model or DEFAULT_MODEL,
             messages=messages,
             temperature=0.3,
-            max_tokens=4096,
+            max_tokens=MAX_OUTPUT_TOKENS,
             stream=True,
         )
 
