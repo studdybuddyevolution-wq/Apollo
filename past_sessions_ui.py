@@ -11,7 +11,17 @@ import apollo_theme as theme
 from conversation_memory import ConversationMemory
 
 
-def render_past_sessions_panel(memory: ConversationMemory, user_email: str):
+def render_past_sessions_panel(memory: ConversationMemory, user_email: str, key_prefix: str = "default"):
+    """
+    Args:
+        memory: ConversationMemory instance
+        user_email: User identifier
+        key_prefix: Unique namespace for this panel's widget keys. Required
+            because this panel can be rendered more than once per script run
+            (e.g. once in the sidebar, once on the "Past Sessions" page) —
+            without a distinct prefix, Streamlit raises
+            StreamlitDuplicateElementKey on the second instance.
+    """
     c = theme.COLORS
     st.markdown(
         f'<div style="font-size:13px;font-weight:600;color:{c["on-surface"]};'
@@ -22,7 +32,7 @@ def render_past_sessions_panel(memory: ConversationMemory, user_email: str):
 
     search_term = st.text_input(
         "Search past conversations",
-        key="conv_search",
+        key=f"{key_prefix}_conv_search",
         placeholder="Search by topic or tag...",
         label_visibility="collapsed",
     )
@@ -68,7 +78,7 @@ def render_past_sessions_panel(memory: ConversationMemory, user_email: str):
             """,
             unsafe_allow_html=True,
         )
-        with st.expander("Preview summary", expanded=False):
+        with st.expander("Preview summary", expanded=False, key=f"{key_prefix}_preview_{conv['id']}"):
             summary = memory.get_conversation_summary(user_email, conv["id"])
             if summary:
                 st.markdown(
@@ -78,7 +88,7 @@ def render_past_sessions_panel(memory: ConversationMemory, user_email: str):
             else:
                 st.caption("No preview summary available.")
 
-        if st.button("Resume this session", key=f"resume_{conv['id']}", use_container_width=True):
+        if st.button("Resume this session", key=f"{key_prefix}_resume_{conv['id']}", use_container_width=True):
             loaded = memory.load_conversation(user_email, conv["id"])
             st.session_state.loaded_conversation = loaded
             st.session_state.chat_history = loaded.get("history", [])
