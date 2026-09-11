@@ -15,6 +15,8 @@ Usage:
                 unsafe_allow_html=True)
 """
 
+import textwrap
+
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -60,101 +62,99 @@ def inject_theme():
     no existing st.button/st.chat_message/st.radio/etc. calls need to
     change for this to take effect."""
     c = COLORS
-    st.markdown(
-        f"""
-        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
-              rel="stylesheet"/>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-              rel="stylesheet"/>
-        <style>
-        .material-symbols-outlined {{
-            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
-            vertical-align: -4px;
-        }}
+    css = f"""
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+          rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+          rel="stylesheet"/>
+    <style>
+    .material-symbols-outlined {{
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+        vertical-align: -4px;
+    }}
 
-        html, body, [class*="css"] {{
-            font-family: 'Inter', sans-serif;
-        }}
+    html, body, [class*="css"] {{
+        font-family: 'Inter', sans-serif;
+    }}
 
-        .stApp {{
-            background: {c['background']};
-        }}
+    .stApp {{
+        background: {c['background']};
+    }}
 
-        section[data-testid="stSidebar"] {{
-            background: {c['surface-container-lowest']};
-            border-right: 1px solid {c['surface-container-high']}66;
-        }}
+    section[data-testid="stSidebar"] {{
+        background: {c['surface-container-lowest']};
+        border-right: 1px solid {c['surface-container-high']}66;
+    }}
 
-        /* ---- Buttons ---- */
-        .stButton > button {{
-            border-radius: 10px !important;
-            border: 1px solid {c['surface-container-high']} !important;
-            background: {c['surface-container']} !important;
-            color: {c['on-surface']} !important;
-            font-weight: 500 !important;
-            transition: all 0.15s ease;
-        }}
-        .stButton > button:hover {{
-            background: {c['surface-container-high']} !important;
-            border-color: {c['primary-container']}88 !important;
-        }}
-        .stButton > button[kind="primary"] {{
-            background: {c['primary-container']} !important;
-            border-color: {c['primary-container']} !important;
-            color: {c['on-primary-container']} !important;
-            font-weight: 600 !important;
-        }}
+    /* ---- Buttons ---- */
+    .stButton > button {{
+        border-radius: 10px !important;
+        border: 1px solid {c['surface-container-high']} !important;
+        background: {c['surface-container']} !important;
+        color: {c['on-surface']} !important;
+        font-weight: 500 !important;
+        transition: all 0.15s ease;
+    }}
+    .stButton > button:hover {{
+        background: {c['surface-container-high']} !important;
+        border-color: {c['primary-container']}88 !important;
+    }}
+    .stButton > button[kind="primary"] {{
+        background: {c['primary-container']} !important;
+        border-color: {c['primary-container']} !important;
+        color: {c['on-primary-container']} !important;
+        font-weight: 600 !important;
+    }}
 
-        /* ---- Nav radio, restyled as a vertical module list ---- */
-        div[role="radiogroup"] {{
-            display: flex; flex-direction: column; gap: 2px;
-        }}
-        div[role="radiogroup"] label {{
-            border-radius: 10px !important;
-            padding: 8px 10px !important;
-            color: {c['on-surface-variant']} !important;
-        }}
-        div[role="radiogroup"] label:has(input:checked) {{
-            background: {c['primary-container']}26 !important;
-            color: {c['primary-fixed-dim']} !important;
-            font-weight: 600 !important;
-        }}
+    /* ---- Nav radio, restyled as a vertical module list ---- */
+    div[role="radiogroup"] {{
+        display: flex; flex-direction: column; gap: 2px;
+    }}
+    div[role="radiogroup"] label {{
+        border-radius: 10px !important;
+        padding: 8px 10px !important;
+        color: {c['on-surface-variant']} !important;
+    }}
+    div[role="radiogroup"] label:has(input:checked) {{
+        background: {c['primary-container']}26 !important;
+        color: {c['primary-fixed-dim']} !important;
+        font-weight: 600 !important;
+    }}
 
-        /* ---- Chat bubbles (st.chat_message) ---- */
-        div[data-testid="stChatMessage"] {{
-            background: {c['surface-container']} !important;
-            border: 1px solid {c['surface-container-high']}66 !important;
-            border-radius: 16px !important;
-            padding: 4px 6px !important;
-        }}
+    /* ---- Chat bubbles (st.chat_message) ---- */
+    div[data-testid="stChatMessage"] {{
+        background: {c['surface-container']} !important;
+        border: 1px solid {c['surface-container-high']}66 !important;
+        border-radius: 16px !important;
+        padding: 4px 6px !important;
+    }}
 
-        /* ---- Popovers (settings, photo, grading, mic, past chats) ---- */
-        div[data-testid="stPopoverBody"] {{
-            background: {c['surface-container']} !important;
-            border: 1px solid {c['surface-container-high']} !important;
-            border-radius: 14px !important;
-        }}
+    /* ---- Popovers (settings, photo, grading, mic, past chats) ---- */
+    div[data-testid="stPopoverBody"] {{
+        background: {c['surface-container']} !important;
+        border: 1px solid {c['surface-container-high']} !important;
+        border-radius: 14px !important;
+    }}
 
-        /* ---- Expanders ---- */
-        div[data-testid="stExpander"] {{
-            border: 1px solid {c['surface-container-high']}66 !important;
-            border-radius: 12px !important;
-            background: {c['surface-container-low']} !important;
-        }}
+    /* ---- Expanders ---- */
+    div[data-testid="stExpander"] {{
+        border: 1px solid {c['surface-container-high']}66 !important;
+        border-radius: 12px !important;
+        background: {c['surface-container-low']} !important;
+    }}
 
-        /* ---- Text inputs / selects ---- */
-        div[data-baseweb="select"] > div, .stTextInput input, .stTextArea textarea {{
-            background: {c['surface-container']} !important;
-            border-color: {c['surface-container-high']} !important;
-            color: {c['on-surface']} !important;
-            border-radius: 10px !important;
-        }}
+    /* ---- Text inputs / selects ---- */
+    div[data-baseweb="select"] > div, .stTextInput input, .stTextArea textarea {{
+        background: {c['surface-container']} !important;
+        border-color: {c['surface-container-high']} !important;
+        color: {c['on-surface']} !important;
+        border-radius: 10px !important;
+    }}
 
-        #MainMenu, footer {{ visibility: hidden; }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    #MainMenu, footer {{ visibility: hidden; }}
+    </style>
+    """
+    st.markdown(textwrap.dedent(css), unsafe_allow_html=True)
 
 
 def icon(name: str, size: int = 18, color: str = None) -> str:
