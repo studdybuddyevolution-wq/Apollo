@@ -4,7 +4,6 @@ import {
   Archive,
   ArrowUp,
   BookOpen,
-  Bot,
   BrainCircuit,
   ChevronDown,
   ChevronLeft,
@@ -25,13 +24,13 @@ import {
   Search,
   Settings,
   Sparkles,
-  Trash2,
   Upload,
   User,
   Video,
   WandSparkles,
   X,
 } from 'lucide-react'
+import { streamChat } from './api/apolloApi'
 
 const NAV_ITEMS = [
   { id: 'console', label: 'Console & Tools', icon: Sparkles },
@@ -153,7 +152,7 @@ function TopBar({ active, onMenu, onToggleSources, onToggleStudio }) {
   )
 }
 
-function MessageBubble({ message, onRegenerate }) {
+function MessageBubble({ message }) {
   const isUser = message.role === 'user'
   return (
     <article className={`message-row ${isUser ? 'user' : 'assistant'}`}>
@@ -163,17 +162,12 @@ function MessageBubble({ message, onRegenerate }) {
           <span>{isUser ? 'You' : 'Apollo'}</span>
           {!isUser && <span className="message-model">Qwen · Groq</span>}
         </div>
-        <div className="message-text">{message.content}</div>
+        <div className="message-text">
+          {message.content || (message.streaming && <span className="streaming-caret" />)}
+        </div>
         {!!message.sources?.length && (
           <div className="message-sources">
             {message.sources.map((source) => <span key={source} className="citation-pill"><BookOpen size={11} /> {source}</span>)}
-          </div>
-        )}
-        {!isUser && (
-          <div className="message-actions">
-            <button title="Copy"><FileText size={13} /></button>
-            <button title="Regenerate" onClick={onRegenerate}><Sparkles size={13} /></button>
-            <button title="More"><MoreHorizontal size={13} /></button>
           </div>
         )}
       </div>
@@ -205,7 +199,7 @@ function Composer({ onSend, disabled = false }) {
           placeholder="Message Apollo..."
           aria-label="Message Apollo"
         />
-        <button className={`composer-icon ${recording ? 'is-recording' : ''}`} title="Voice" onClick={() => setRecording((v) => !v)}>
+        <button className={`composer-icon ${recording ? 'is-recording' : ''}`} title="Voice" onClick={() => setRecording((v) => !v)} disabled={disabled}>
           <Mic size={18} />
         </button>
         <button className="send-button" title="Send" onClick={submit} disabled={disabled || !value.trim()}>
@@ -323,12 +317,12 @@ function ChatView({ messages, onSend, busy, activeNotebook }) {
 
         <div className="conversation">
           {messages.map((message) => <MessageBubble key={message.id} message={message} />)}
-          {busy && (
+          {busy && messages[messages.length - 1]?.role !== 'assistant' && (
             <article className="message-row assistant">
               <div className="message-avatar"><Sparkles size={15} /></div>
               <div className="message-content">
                 <div className="message-meta"><span>Apollo</span><span className="message-model">thinking</span></div>
-                <div className="thinking-line"><LoaderCircle size={14} className="spin" /> Searching your sources and preparing a response…</div>
+                <div className="thinking-line"><LoaderCircle size={14} className="spin" /> Connecting to Apollo backend…</div>
               </div>
             </article>
           )}
@@ -358,20 +352,57 @@ function ConsoleView({ sourcePanelOpen, studioPanelOpen, setSourcePanelOpen, set
     [activeNotebookId],
   )
 
-  const sendMessage = (text) => {
-    if (!text.trim() || busy) return
-    const userMessage = { id: Date.now(), role: 'user', content: text.trim(), sources: [] }
-    setMessages((current) => [...current, userMessage])
+  const sendMessage = async (text) => {
+    const trimmed = text.trim()
+    if (!trimmed || busy) return
+
+    const userMessage = { id: Date.now(), role: 'user', content: trimmed, sources: [] }
+    const assistantId = Date.now() + 1
+    const activeSourceNames = sources.filter((source) => source.active).map((source) => source.name)
+    const nextMessages = [...messages, userMessage]
+
+    setMessages([...nextMessages, {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      sources: [],
+      streaming: true,
+    }])
     setBusy(true)
-    window.setTimeout(() => {
-      setMessages((current) => [...current, {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: `Local preview response: I would answer “${text.trim()}” using ${sources.filter((source) => source.active).length} active sources from ${activeNotebook.title}. The Python backend will replace this fake response in Phase 3.`,
-        sources: sources.filter((source) => source.active).slice(0, 2).map((source) => source.name),
-      }])
+
+    try {
+      await streamChat({
+        messages: nextMessages.map(({ role, content }) => ({ role, content })),
+        notebookId: activeNotebook.id,
+        notebookTitle: activeNotebook.title,
+        activeSources: activeSourceNames,
+        onToken: (token) => {
+          setMessages((current) => current.map((message) => message.id === assistantId
+            ? { ...message, content: `${message.content}${token}`, streaming: true }
+            : message))
+        },
+        onDone: () => {
+          setMessages((current) => current.map((message) => message.id === assistantId
+            ? { ...message, streaming: false, sources: activeSourceNames.slice(0, 2) }
+            : message))
+        },
+        onError: (message) => {
+          setMessages((current) => current.map((item) => item.id === assistantId
+            ? { ...item, content: `Backend error: ${message}`, streaming: false }
+            : item))
+        },
+      })
+    } catch (error) {
+      setMessages((current) => current.map((item) => item.id === assistantId
+        ? {
+            ...item,
+            content: `Couldn't reach Apollo's Python backend. ${error instanceof Error ? error.message : 'Unknown error'}`,
+            streaming: false,
+          }
+        : item))
+    } finally {
       setBusy(false)
-    }, 700)
+    }
   }
 
   const toggleSource = (id) => setSources((current) => current.map((source) => source.id === id ? { ...source, active: !source.active } : source))
@@ -394,7 +425,7 @@ function PlaceholderPage({ active }) {
         <div className="page-icon"><Icon size={22} /></div>
         <div><div className="eyebrow">APOLLO MODULE</div><h1>{item.label}</h1><p>This module stays in the React shell for now. Its existing Python engine will be connected after the Console migration.</p></div>
       </div>
-      <div className="placeholder-card"><Sparkles size={20} /><div><strong>Phase 2 preview</strong><span>The Console is interactive with local fake data. Navigation remains available while the backend boundary is built.</span></div></div>
+      <div className="placeholder-card"><Sparkles size={20} /><div><strong>Phase 3 backend connected</strong><span>The Console now talks to a FastAPI streaming endpoint. The other modules remain UI-only until their backend endpoints are migrated.</span></div></div>
     </main>
   )
 }
