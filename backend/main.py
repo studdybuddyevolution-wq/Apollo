@@ -1,7 +1,8 @@
 """Apollo FastAPI backend.
 
-Phase 6 adds optional live web research through Groq's built-in browser_search
-on the same GPT-OSS 120B primary model. Phase 5 notebook/RAG remains active.
+Phase 6 web research uses Tavily for web retrieval so internet search is
+independent of Groq token quotas. Gemini 3.8 Flash synthesizes the retrieved
+web context when Web mode is enabled. Phase 5 notebook/RAG remains active.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
+from tavily import TavilyClient
 
 from rag_service import (
     add_source,
@@ -38,6 +40,7 @@ load_dotenv(_REPO_ROOT / ".env", override=False)
 PRIMARY_MODEL = os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b")
 GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
 GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
+WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.8-flash")
 MAX_OUTPUT_TOKENS = 650
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
@@ -47,7 +50,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.4.1")
+app = FastAPI(title="Apollo API", version="0.5.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -145,11 +148,10 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     )
     if request.web_enabled:
         content += (
-            " Live web research is enabled for this turn. Use browser search for current or changing information. "
-            "Prefer primary or authoritative sources. Give a concise answer with at most 6 key points. "
-            "Do not use Markdown tables, raw HTML, <br> tags, or internal citation markers such as 【2†L14-L19】. "
-            "Use short headings and bullets only when they improve readability. Do not paste search-result dumps. "
-            "Separate current web findings from notebook material when both are present."
+            " Live web research is enabled. Web results are supplied by Tavily. "
+            "Use those results as evidence, synthesize them into a direct answer, and do not paste search results. "
+            "Do not use Markdown tables, raw HTML, <br> tags, or internal citation markers. "
+            "Prefer authoritative sources and clearly distinguish web findings from notebook material."
         )
     if context:
         content += f"\n\nSOURCE CONTEXT:\n{context}"
@@ -163,58 +165,18 @@ def _conversation_text(messages: list[ChatMessage], system_content: str) -> str:
     return "\n\n".join(lines)
 
 
-def _plain(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if hasattr(value, "model_dump"):
-        try:
-            return value.model_dump()
-        except Exception:
-            pass
-    if hasattr(value, "dict"):
-        try:
-            return value.dict()
-        except Exception:
-            pass
-    if isinstance(value, list):
-        return [_plain(item) for item in value]
-    if isinstance(value, tuple):
-        return [_plain(item) for item in value]
-    if isinstance(value, dict):
-        return {str(k): _plain(v) for k, v in value.items()}
-    return str(value)
-
-
-def _extract_web_sources(message: Any) -> list[dict[str, str]]:
-    raw = _plain(getattr(message, "executed_tools", None) or [])
-    found: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            url = node.get("url") or node.get("link") or node.get("href")
-            title = node.get("title") or node.get("name") or node.get("source") or url
-            if isinstance(url, str) and url.startswith(("http://", "https://")):
-                key = url.strip()
-                if key not in seen:
-                    found.append({"title": str(title)[:180], "url": key})
-                    seen.add(key)
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(raw)
-    return found[:8]
-
-
 def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: str):
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
     client = Groq(api_key=api_key)
-    kwargs = {"model": model, "messages": messages, "temperature": 0.3, "max_tokens": MAX_OUTPUT_TOKENS, "stream": True}
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "stream": True,
+    }
     if model.startswith("openai/gpt-oss") or model.startswith("qwen/"):
         kwargs["reasoning_format"] = "hidden"
         if model.startswith("openai/gpt-oss"):
@@ -228,32 +190,87 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
     yield _event({"type": "done"})
 
 
-def _stream_groq_web(request: ChatRequest, messages: list[dict[str, str]], model: str):
-    if not model.startswith("openai/gpt-oss"):
-        raise RuntimeError("Live web search currently requires Apollo's GPT-OSS primary model")
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
+def _search_tavily(query: str, deep: bool = False) -> tuple[str, list[dict[str, str]]]:
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is not configured")
-    client = Groq(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.25,
-        max_completion_tokens=MAX_OUTPUT_TOKENS,
-        stream=False,
-        reasoning_effort="medium",
-        tool_choice="required",
-        tools=[{"type": "browser_search"}],
+        raise RuntimeError("TAVILY_API_KEY is not configured")
+    client = TavilyClient(api_key=api_key)
+    response = client.search(
+        query=query,
+        search_depth="advanced" if deep else "basic",
+        topic="general",
+        max_results=8 if deep else 5,
+        chunks_per_source=3,
+        include_answer=False,
+        include_raw_content=deep,
     )
-    message = response.choices[0].message
-    content = message.content or ""
-    sources = _extract_web_sources(message)
-    yield _event({"type": "start", "model": model, "provider": "groq", "web": True})
+    sources: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    context_parts: list[str] = []
+    total_chars = 0
+    max_chars = 16000 if deep else 11000
+    for index, item in enumerate(response.get("results", []) or [], start=1):
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or url).strip()
+        text = str(item.get("raw_content") or item.get("content") or "").strip()
+        if url and url not in seen_urls:
+            sources.append({"title": title[:180], "url": url})
+            seen_urls.add(url)
+        if not text:
+            continue
+        block = f"SOURCE {index}: {title}\nURL: {url}\n{text}"
+        remaining = max_chars - total_chars
+        if remaining <= 0:
+            break
+        block = block[:remaining]
+        context_parts.append(block)
+        total_chars += len(block)
+    return "\n\n---\n\n".join(context_parts), sources[:8]
+
+
+def _stream_web_with_tavily(request: ChatRequest, system_content: str, deep: bool = False):
+    query = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
+    if not query:
+        raise RuntimeError("No user query supplied for web research")
+
+    web_context, sources = _search_tavily(query, deep=deep)
+    if not web_context:
+        raise RuntimeError("Tavily returned no usable web results")
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured for web synthesis")
+    from google import genai
+    from google.genai import types
+
+    synthesis_instruction = (
+        system_content
+        + "\n\nYou are synthesizing live web research collected by Tavily. "
+        + "Write a concise, well-phrased answer based only on the supplied research context and relevant notebook context. "
+        + "Do not paste raw search snippets. Do not use internal citation syntax or raw HTML. "
+        + "Use short headings or bullets only when useful. Mention uncertainty or conflicting sources when present."
+    )
+    prompt = _conversation_text(request.messages, synthesis_instruction)
+    prompt += f"\n\nTAVILY WEB RESEARCH:\n{web_context}"
+
+    client = genai.Client(api_key=api_key)
+    stream = client.models.generate_content_stream(
+        model=WEB_SYNTHESIS_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.25,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            system_instruction=synthesis_instruction,
+        ),
+    )
+    yield _event({"type": "start", "model": WEB_SYNTHESIS_MODEL, "provider": "gemini+tavily", "web": True, "deep": deep})
     if sources:
         yield _event({"type": "sources", "sources": sources})
-    for start in range(0, len(content), 700):
-        yield _event({"type": "token", "text": content[start:start + 700]})
-    yield _event({"type": "done", "web": True})
+    for chunk in stream:
+        text = getattr(chunk, "text", None) or ""
+        if text:
+            yield _event({"type": "token", "text": text})
+    yield _event({"type": "done", "web": True, "deep": deep})
 
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
@@ -279,18 +296,16 @@ def _stream_gemini(request: ChatRequest, system_content: str, model: str):
 
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
-    groq_model = request.model or PRIMARY_MODEL
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
+    if request.web_enabled:
+        yield from _stream_web_with_tavily(request, system["content"], deep=False)
+        return
+
+    groq_model = request.model or PRIMARY_MODEL
     try:
-        if request.web_enabled:
-            yield from _stream_groq_web(request, messages, groq_model)
-        else:
-            yield from _stream_groq(request, messages, groq_model)
+        yield from _stream_groq(request, messages, groq_model)
         return
     except Exception as primary_exc:
-        if request.web_enabled:
-            yield _event({"type": "error", "message": f"Live web search failed: {primary_exc}"})
-            return
         if not os.getenv("GEMINI_API_KEY", "").strip():
             raise primary_exc
         yield _event({"type": "fallback", "from_model": groq_model, "to_model": GEMINI_FALLBACK_MODEL, "reason": str(primary_exc)})
@@ -322,13 +337,14 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.4.1",
+        "version": "0.5.0",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
         "primary_model": PRIMARY_MODEL,
         "vision_model": GROQ_VISION_MODEL,
         "fallback_model": GEMINI_FALLBACK_MODEL,
-        "web_search": True,
+        "web_search": "tavily",
     }
 
 
