@@ -3,7 +3,7 @@ import {
   ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
   CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
   LoaderCircle, Menu, Paperclip, Plus, Search, Settings, Sparkles, Upload, User,
-  Video, WandSparkles, X, Activity,
+  Video, WandSparkles, X, Activity, SlidersHorizontal,
 } from 'lucide-react'
 import { streamChat } from './api/apolloApi'
 import { createNotebook, listNotebooks, listSources, uploadSource } from './api/notebooksApi'
@@ -16,6 +16,13 @@ const NAV_ITEMS = [
   { id: 'planner', label: 'Study Planner', icon: Activity },
   { id: 'sessions', label: 'Past Sessions', icon: History },
   { id: 'settings', label: 'User Settings & Profile', icon: Settings },
+]
+
+const RESEARCH_MODES = [
+  { id: 'quick', label: 'Quick answer', icon: Sparkles, description: 'Fast answer from Apollo' },
+  { id: 'web', label: 'Web search', icon: Globe, description: 'Current information + sources' },
+  { id: 'deep', label: 'Deep Research', icon: SlidersHorizontal, description: 'Multi-step web research' },
+  { id: 'study', label: 'Study Research', icon: BookOpen, description: 'Notebook + web synthesis' },
 ]
 
 const STUDIO_TOOLS = [
@@ -78,8 +85,9 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
   )
 }
 
-function TopBar({ active, toggleSources, toggleStudio, webEnabled, setWebEnabled }) {
+function TopBar({ active, toggleSources, toggleStudio, researchMode, setResearchMode }) {
   const item = NAV_ITEMS.find((n) => n.id === active) || NAV_ITEMS[0]
+  const currentMode = RESEARCH_MODES.find((m) => m.id === researchMode) || RESEARCH_MODES[0]
   return (
     <header className="topbar">
       <div className="topbar-left"><div className="breadcrumb"><span className="breadcrumb-muted">Apollo</span><span>/</span><strong>{item.label}</strong></div></div>
@@ -87,9 +95,13 @@ function TopBar({ active, toggleSources, toggleStudio, webEnabled, setWebEnabled
         {active === 'console' && <>
           <button className="topbar-tool" onClick={toggleSources}><FolderOpen size={16} /> Sources</button>
           <button className="topbar-tool" onClick={toggleStudio}><WandSparkles size={16} /> Studio</button>
-          <button className={`topbar-tool ${webEnabled ? 'active' : ''}`} onClick={() => setWebEnabled((v) => !v)} title="Use live web search">
-            <Globe size={16} /> Web {webEnabled ? 'On' : 'Off'}
-          </button>
+          <label className="research-mode-select" title="Choose how Apollo researches this question">
+            <currentMode.icon size={15} />
+            <select value={researchMode} onChange={(e) => setResearchMode(e.target.value)} aria-label="Research mode">
+              {RESEARCH_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
+            </select>
+            <ChevronDown size={13} />
+          </label>
         </>}
         <button className="topbar-chip"><span className="status-dot" /> Online</button>
       </div>
@@ -113,8 +125,9 @@ function Bubble({ message }) {
   )
 }
 
-function Composer({ send, busy, webEnabled }) {
+function Composer({ send, busy, researchMode }) {
   const [value, setValue] = useState('')
+  const mode = RESEARCH_MODES.find((item) => item.id === researchMode) || RESEARCH_MODES[0]
   const submit = () => {
     if (!value.trim() || busy) return
     send(value.trim())
@@ -125,10 +138,10 @@ function Composer({ send, busy, webEnabled }) {
       <div className="composer composer-live">
         <button className="composer-icon" disabled><Paperclip size={18} /></button>
         <button className="composer-icon" disabled><ImagePlus size={18} /></button>
-        <input value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} placeholder={webEnabled ? 'Ask Apollo with live web search…' : 'Message Apollo…'} />
+        <input value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} placeholder={`${mode.label} — message Apollo…`} />
         <button className="send-button" onClick={submit} disabled={busy || !value.trim()}><ArrowUp size={18} /></button>
       </div>
-      <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{webEnabled ? 'Live web search enabled' : 'Apollo can make mistakes.'}</span></div>
+      <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{mode.description}</span></div>
     </div>
   )
 }
@@ -166,7 +179,7 @@ export default function AppPhase6() {
   const [collapsed, setCollapsed] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
   const [studioOpen, setStudioOpen] = useState(false)
-  const [webEnabled, setWebEnabled] = useState(false)
+  const [researchMode, setResearchMode] = useState('quick')
   const [notebooks, setNotebooks] = useState([])
   const [activeId, setActiveId] = useState('')
   const [sources, setSources] = useState([])
@@ -201,7 +214,9 @@ export default function AppPhase6() {
     const user = { id: `${Date.now()}u`, role: 'user', content: text }
     const assistantId = `${Date.now()}a`
     const history = [...messages.map((m) => ({ role: m.role, content: m.content })), user]
-    setMessages((v) => [...v, user, { id: assistantId, role: 'assistant', content: '', model, streaming: true, sources: [] }])
+    const needsWeb = researchMode === 'web' || researchMode === 'deep' || researchMode === 'study'
+    const requestMode = researchMode
+    setMessages((v) => [...v, user, { id: assistantId, role: 'assistant', content: '', model, streaming: true, sources: [], researchMode: requestMode }])
     setBusy(true)
     try {
       await streamChat({
@@ -211,10 +226,11 @@ export default function AppPhase6() {
         notebookTitle: notebook.title,
         activeSources,
         userId: uid,
-        webEnabled,
+        webEnabled: needsWeb,
+        researchMode: requestMode,
         onStart: (p) => { setModel(p.model || ''); setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, model: p.model } : m)) },
-        onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
+        onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onDone: () => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)); setBusy(false) },
         onError: (message) => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: message, streaming: false } : m)); setBusy(false) },
       })
@@ -230,8 +246,8 @@ export default function AppPhase6() {
   return <div className="apollo-app">
     <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} />
     <section className="app-shell">
-      <TopBar active={active} toggleSources={() => { setSourceOpen((v) => !v); setStudioOpen(false) }} toggleStudio={() => { setStudioOpen((v) => !v); setSourceOpen(false) }} webEnabled={webEnabled} setWebEnabled={setWebEnabled} />
-      {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll"><div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected` : 'Create a notebook to get started.'}</p></div></div><div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><Sparkles size={25} /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? 'Ask Apollo about your sources, or turn on Web for live internet research.' : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} />)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {webEnabled ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div></div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13} /> Explain a concept simply</button><button onClick={() => send(webEnabled ? 'Find the latest developments related to my notes' : 'Summarize my notes')} disabled={busy}><BookOpen size={13} /> {webEnabled ? 'Latest updates' : 'Summarize my notes'}</button></div><Composer send={send} busy={busy} webEnabled={webEnabled} /></div></main>{sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} activeSources={activeSources} setActiveId={(id) => { setActiveId(id); setMessages([]) }} toggleSource={toggleSource} create={create} upload={upload} close={() => setSourceOpen(false)} />}{studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} />}</div> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22} /></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find((n) => n.id === active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      <TopBar active={active} toggleSources={() => { setSourceOpen((v) => !v); setStudioOpen(false) }} toggleStudio={() => { setStudioOpen((v) => !v); setSourceOpen(false) }} researchMode={researchMode} setResearchMode={setResearchMode} />
+      {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll"><div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected` : 'Create a notebook to get started.'}</p></div></div><div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><Sparkles size={25} /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div></div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>{sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} activeSources={activeSources} setActiveId={(id) => { setActiveId(id); setMessages([]) }} toggleSource={toggleSource} create={create} upload={upload} close={() => setSourceOpen(false)} />}{studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} />}</div> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
