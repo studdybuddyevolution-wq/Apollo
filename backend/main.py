@@ -150,34 +150,26 @@ def _gemini_model_chain(primary: str) -> list[str]:
 
 def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any]):
     key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
+    if not key: raise RuntimeError("GEMINI_API_KEY is not configured")
     from google import genai
     from google.genai import types
     client = genai.Client(api_key=key)
     models = _gemini_model_chain(primary_model)
     last_error = None
     for index, model in enumerate(models):
-        emitted = False
+        is_last = index == len(models) - 1
         try:
             stream = client.models.generate_content_stream(model=model, contents=prompt, config=types.GenerateContentConfig(max_output_tokens=output_tokens, system_instruction=system_instruction))
             yield _event({"type": "start", "model": model, **event_meta})
             for chunk in stream:
                 text = getattr(chunk, "text", None) or ""
-                if text:
-                    emitted = True
-                    yield _event({"type": "token", "text": text})
-            yield _event({"type": "done", "model": model, **event_meta})
-            return
+                if text: yield _event({"type": "token", "text": text})
+            yield _event({"type": "done", "model": model, **event_meta}); return
         except Exception as exc:
             last_error = exc
-            if emitted:
-                yield _event({"type": "error", "message": f"Gemini {model} stream failed after output: {exc}"})
-                return
-            if index < len(models) - 1:
-                yield _event({"type": "fallback", "from_model": model, "to_model": models[index + 1], "reason": str(exc)})
-                continue
-            break
+            if is_last:
+                yield _event({"type": "error", "message": f"All Gemini synthesis models failed: {exc}"}); return
+            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(exc)}); continue
     raise RuntimeError(f"All Gemini synthesis models failed: {last_error}")
 
 
