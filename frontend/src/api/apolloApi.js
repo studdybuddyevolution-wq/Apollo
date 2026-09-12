@@ -27,6 +27,7 @@ async function openChat({
   onToken,
   onStart,
   onFallback,
+  onRestart,
   onSources,
   onDone,
   onError,
@@ -82,6 +83,7 @@ async function openChat({
       onStart?.(payload)
     }
     if (payload.type === 'fallback') onFallback?.(payload)
+    if (payload.type === 'restart') onRestart?.(payload)
     if (payload.type === 'token') {
       const token = serverResearch === 'quick' ? (payload.text || '') : cleanResearchText(payload.text || '')
       onToken?.(token)
@@ -122,6 +124,7 @@ export async function streamChat({
   onToken,
   onStart,
   onFallback,
+  onRestart,
   onSources,
   onDone,
   onError,
@@ -139,6 +142,7 @@ export async function streamChat({
     onToken,
     onStart,
     onFallback,
+    onRestart,
     onSources,
     onDone,
     onError,
