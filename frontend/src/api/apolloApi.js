@@ -6,9 +6,12 @@ export async function streamChat({
   notebookId,
   notebookTitle,
   activeSources = [],
+  userId = 'default',
+  webEnabled = false,
   onToken,
   onStart,
   onFallback,
+  onSources,
   onDone,
   onError,
   signal,
@@ -23,16 +26,23 @@ export async function streamChat({
       notebook_id: notebookId,
       notebook_title: notebookTitle,
       active_sources: activeSources,
+      user_id: userId,
+      web_enabled: webEnabled,
     }),
   })
 
   if (!response.ok) {
-    throw new Error(`Apollo API returned ${response.status}`)
+    let message = `Apollo API returned ${response.status}`
+    try {
+      const body = await response.json()
+      if (body?.detail) message = body.detail
+    } catch {
+      // Keep the HTTP status message when the backend does not return JSON.
+    }
+    throw new Error(message)
   }
 
-  if (!response.body) {
-    throw new Error('Apollo API did not return a streaming response')
-  }
+  if (!response.body) throw new Error('Apollo API did not return a streaming response')
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -44,13 +54,13 @@ export async function streamChat({
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trim())
       .join('')
-
     if (!data) return
 
     const payload = JSON.parse(data)
     if (payload.type === 'start') onStart?.(payload)
     if (payload.type === 'fallback') onFallback?.(payload)
     if (payload.type === 'token') onToken?.(payload.text || '')
+    if (payload.type === 'sources') onSources?.(payload.sources || [])
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
       onError?.(payload.message || 'Apollo backend error')
@@ -69,7 +79,6 @@ export async function streamChat({
       consumeEvent(event)
       separatorIndex = buffer.indexOf('\n\n')
     }
-
     if (done) break
   }
 
