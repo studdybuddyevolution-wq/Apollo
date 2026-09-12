@@ -99,12 +99,7 @@ def _event(payload: dict) -> str:
 
 
 def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks: int = 6) -> tuple[str, list[str]]:
-    """Return representative chunks when lexical search finds no direct hit.
-
-    Queries such as "what does my source talk about?" often contain no terms
-    that occur in the document. In that case we still give the model a small,
-    representative sample of the active sources so it can summarize them.
-    """
+    """Return representative chunks when lexical search finds no direct hit."""
     data_dir = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
     chunks_path = data_dir / "notebooks" / notebook_id / "chunks.json"
     if not chunks_path.exists():
@@ -116,18 +111,12 @@ def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks
         return "", source_names
 
     allowed = set(source_names or [])
-    filtered = [
-        chunk for chunk in chunks
-        if not allowed or chunk.get("source") in allowed
-    ]
+    filtered = [chunk for chunk in chunks if not allowed or chunk.get("source") in allowed]
     if not filtered:
         return "", source_names
 
     selected: list[dict] = []
     seen_sources: set[str] = set()
-
-    # Prefer the first chunk from every active source so a multi-source
-    # notebook overview represents each document at least once.
     for chunk in filtered:
         source = chunk.get("source", "unknown source")
         if source not in seen_sources:
@@ -135,8 +124,6 @@ def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks
             seen_sources.add(source)
             if len(selected) >= max_chunks:
                 break
-
-    # Fill any remaining slots with subsequent chunks from the active sources.
     if len(selected) < max_chunks:
         selected_ids = {chunk.get("id") for chunk in selected}
         for chunk in filtered:
@@ -147,17 +134,10 @@ def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks
                 break
 
     context = format_context(
-        [
-            {
-                "source": chunk.get("source", "unknown source"),
-                "text": chunk.get("text", ""),
-                "score": 0.0,
-            }
-            for chunk in selected
-        ],
+        [{"source": c.get("source", "unknown source"), "text": c.get("text", ""), "score": 0.0} for c in selected],
         max_chars=9000,
     )
-    return context, list(dict.fromkeys(chunk.get("source", "unknown source") for chunk in selected))
+    return context, list(dict.fromkeys(c.get("source", "unknown source") for c in selected))
 
 
 def _system_message(request: ChatRequest, context: str, source_names: list[str]) -> dict[str, str]:
@@ -181,8 +161,7 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
 def _conversation_text(messages: list[ChatMessage], system_content: str) -> str:
     lines = [f"SYSTEM:\n{system_content}"]
     for message in messages:
-        label = message.role.upper()
-        lines.append(f"{label}:\n{message.content}")
+        lines.append(f"{message.role.upper()}:\n{message.content}")
     return "\n\n".join(lines)
 
 
@@ -190,30 +169,18 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
-
     client = Groq(api_key=api_key)
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "stream": True,
-    }
-
-    # Groq supports hiding reasoning output for GPT-OSS and Qwen models.
+    kwargs = {"model": model, "messages": messages, "temperature": 0.3, "max_tokens": MAX_OUTPUT_TOKENS, "stream": True}
     if model.startswith("openai/gpt-oss") or model.startswith("qwen/"):
         kwargs["reasoning_format"] = "hidden"
         if model.startswith("openai/gpt-oss"):
             kwargs["reasoning_effort"] = "medium"
-
     stream = client.chat.completions.create(**kwargs)
     yield _event({"type": "start", "model": model, "provider": "groq"})
-
     for chunk in stream:
         token = chunk.choices[0].delta.content or ""
         if token:
             yield _event({"type": "token", "text": token})
-
     yield _event({"type": "done"})
 
 
@@ -221,22 +188,15 @@ def _stream_gemini(request: ChatRequest, system_content: str, model: str):
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
-
     from google import genai
     from google.genai import types
-
     client = genai.Client(api_key=api_key)
     prompt = _conversation_text(request.messages, system_content)
     stream = client.models.generate_content_stream(
         model=model,
         contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            system_instruction=system_content,
-        ),
+        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=MAX_OUTPUT_TOKENS, system_instruction=system_content),
     )
-
     yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True})
     for chunk in stream:
         text = getattr(chunk, "text", None) or ""
@@ -248,25 +208,14 @@ def _stream_gemini(request: ChatRequest, system_content: str, model: str):
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
     groq_model = request.model or PRIMARY_MODEL
-    messages = [system] + [
-        {"role": message.role, "content": message.content}
-        for message in request.messages
-    ]
-
+    messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
     try:
         yield from _stream_groq(request, messages, groq_model)
         return
     except Exception as primary_exc:
-        fallback_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not fallback_key:
+        if not os.getenv("GEMINI_API_KEY", "").strip():
             raise primary_exc
-
-        yield _event({
-            "type": "fallback",
-            "from_model": groq_model,
-            "to_model": GEMINI_FALLBACK_MODEL,
-            "reason": str(primary_exc),
-        })
+        yield _event({"type": "fallback", "from_model": groq_model, "to_model": GEMINI_FALLBACK_MODEL, "reason": str(primary_exc)})
         yield from _stream_gemini(request, system["content"], GEMINI_FALLBACK_MODEL)
 
 
@@ -275,31 +224,16 @@ def _stream_chat(request: ChatRequest):
         active_source_names = list(request.active_sources)
         context = ""
         if request.notebook_id:
-            last_user_message = next(
-                (message.content for message in reversed(request.messages) if message.role == "user"),
-                "",
-            )
+            last_user_message = next((message.content for message in reversed(request.messages) if message.role == "user"), "")
             if last_user_message:
-                results = retrieve(
-                    request.user_id,
-                    request.notebook_id,
-                    last_user_message,
-                    top_k=5,
-                    source_names=active_source_names,
-                )
+                results = retrieve(request.user_id, request.notebook_id, last_user_message, top_k=5, source_names=active_source_names)
                 context = format_context(results)
                 if results:
                     active_source_names = list(dict.fromkeys(result["source"] for result in results))
                 else:
-                    # Generic questions need representative source context even
-                    # when none of their query terms occur verbatim in the file.
-                    context, overview_sources = _load_overview_context(
-                        request.notebook_id,
-                        active_source_names,
-                    )
+                    context, overview_sources = _load_overview_context(request.notebook_id, active_source_names)
                     if overview_sources:
                         active_source_names = overview_sources
-
         yield from _stream_model(request, context, active_source_names)
     except Exception as exc:
         yield _event({"type": "error", "message": str(exc)})
@@ -307,16 +241,7 @@ def _stream_chat(request: ChatRequest):
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {
-        "status": "ok",
-        "service": "apollo-api",
-        "version": "0.3.1",
-        "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
-        "primary_model": PRIMARY_MODEL,
-        "vision_model": GROQ_VISION_MODEL,
-        "fallback_model": GEMINI_FALLBACK_MODEL,
-    }
+    return {"status": "ok", "service": "apollo-api", "version": "0.3.1", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL}
 
 
 @app.get("/api/notebooks")
@@ -389,24 +314,10 @@ def notebook_source_delete(notebook_id: str, source_name: str, user_id: str = "d
 def notebook_search(notebook_id: str, request: RAGQueryRequest):
     if get_notebook(request.user_id, notebook_id) is None:
         raise HTTPException(status_code=404, detail="Notebook not found")
-    results = retrieve(
-        request.user_id,
-        notebook_id,
-        request.query,
-        top_k=request.top_k,
-        source_names=request.source_names,
-    )
+    results = retrieve(request.user_id, notebook_id, request.query, top_k=request.top_k, source_names=request.source_names)
     return {"results": results}
 
 
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> StreamingResponse:
-    return StreamingResponse(
-        _stream_chat(request),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(_stream_chat(request), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
