@@ -1,0 +1,10 @@
+.empty-chat-state{min-height:360px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px 24px;color:var(--text-variant)}
+.empty-chat-mark{width:54px;height:54px;display:grid;place-items:center;border-radius:16px;background:rgba(249,115,22,.12);border:1px solid rgba(249,115,22,.24);color:var(--primary);margin-bottom:16px}
+.empty-chat-state h2{margin:0 0 8px;color:var(--text);font-size:22px;font-weight:600;letter-spacing:-.02em}
+.empty-chat-state p{max-width:520px;margin:0;font-size:12px;line-height:1.65;color:var(--outline)}
+.source-empty-state{min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;padding:20px;color:var(--outline)}
+.source-empty-state svg{color:var(--primary);margin-bottom:4px}
+.source-empty-state strong{color:var(--text);font-size:13px}
+.source-empty-state span{max-width:210px;font-size:10px;line-height:1.55}
+
+@media (max-width:700px){.empty-chat-state{min-height:300px;padding:24px 12px}.empty-chat-state h2{font-size:20px}}
