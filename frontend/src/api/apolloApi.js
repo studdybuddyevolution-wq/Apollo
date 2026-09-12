@@ -2,12 +2,13 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.
 
 export async function streamChat({
   messages,
-  model = 'qwen/qwen3.6-27b',
+  model = 'openai/gpt-oss-120b',
   notebookId,
   notebookTitle,
   activeSources = [],
   onToken,
   onStart,
+  onFallback,
   onDone,
   onError,
   signal,
@@ -48,6 +49,7 @@ export async function streamChat({
 
     const payload = JSON.parse(data)
     if (payload.type === 'start') onStart?.(payload)
+    if (payload.type === 'fallback') onFallback?.(payload)
     if (payload.type === 'token') onToken?.(payload.text || '')
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
