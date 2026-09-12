@@ -1,8 +1,9 @@
 """Apollo FastAPI backend.
 
 Phase 5 adds notebook/source/RAG APIs while keeping the streaming chat
-endpoint. The React frontend can now manage notebooks and upload source files
-through this backend instead of relying on Streamlit session state.
+endpoint. Model routing is provider-aware: Groq GPT-OSS 120B is the primary
+text model, with Gemini 3.8 Flash as an optional fallback. Qwen remains
+available as an override for future vision/multimodal requests.
 """
 
 from __future__ import annotations
@@ -36,7 +37,9 @@ from rag_service import (
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_REPO_ROOT / ".env", override=False)
 
-DEFAULT_MODEL = "qwen/qwen3.6-27b"
+PRIMARY_MODEL = os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b")
+GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
+GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
 MAX_OUTPUT_TOKENS = 900
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
@@ -49,7 +52,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.2.0")
+app = FastAPI(title="Apollo API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,7 +70,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
-    model: str = DEFAULT_MODEL
+    model: str | None = None
     notebook_id: str | None = None
     notebook_title: str | None = None
     active_sources: list[str] = Field(default_factory=list)
@@ -101,6 +104,8 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     content = (
         "You are Apollo Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
+        "Answer directly and naturally. Keep private chain-of-thought/reasoning hidden; "
+        "return only the answer, conclusions, and concise useful explanations. "
         "Use supplied source context when it is relevant, and distinguish it from your own knowledge. "
         "Do not claim to have searched or read a source unless the backend supplied that context."
     )
@@ -109,15 +114,99 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     return {"role": "system", "content": content}
 
 
-def _stream_groq(request: ChatRequest):
+def _conversation_text(messages: list[ChatMessage], system_content: str) -> str:
+    lines = [f"SYSTEM:\n{system_content}"]
+    for message in messages:
+        label = message.role.upper()
+        lines.append(f"{label}:\n{message.content}")
+    return "\n\n".join(lines)
+
+
+def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: str):
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
-        yield _event({
-            "type": "error",
-            "message": "GROQ_API_KEY is not configured for the FastAPI backend.",
-        })
-        return
+        raise RuntimeError("GROQ_API_KEY is not configured")
 
+    client = Groq(api_key=api_key)
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "stream": True,
+    }
+
+    # Groq supports hiding reasoning output for GPT-OSS and Qwen models.
+    if model.startswith("openai/gpt-oss") or model.startswith("qwen/"):
+        kwargs["reasoning_format"] = "hidden"
+        if model.startswith("openai/gpt-oss"):
+            kwargs["reasoning_effort"] = "medium"
+
+    stream = client.chat.completions.create(**kwargs)
+    yield _event({"type": "start", "model": model, "provider": "groq"})
+
+    for chunk in stream:
+        token = chunk.choices[0].delta.content or ""
+        if token:
+            yield _event({"type": "token", "text": token})
+
+    yield _event({"type": "done"})
+
+
+def _stream_gemini(request: ChatRequest, system_content: str, model: str):
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    prompt = _conversation_text(request.messages, system_content)
+    stream = client.models.generate_content_stream(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            system_instruction=system_content,
+        ),
+    )
+
+    yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True})
+    for chunk in stream:
+        text = getattr(chunk, "text", None) or ""
+        if text:
+            yield _event({"type": "token", "text": text})
+    yield _event({"type": "done"})
+
+
+def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
+    system = _system_message(request, context, source_names)
+    groq_model = request.model or PRIMARY_MODEL
+    messages = [system] + [
+        {"role": message.role, "content": message.content}
+        for message in request.messages
+    ]
+
+    try:
+        yield from _stream_groq(request, messages, groq_model)
+        return
+    except Exception as primary_exc:
+        fallback_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not fallback_key:
+            raise primary_exc
+
+        yield _event({
+            "type": "fallback",
+            "from_model": groq_model,
+            "to_model": GEMINI_FALLBACK_MODEL,
+            "reason": str(primary_exc),
+        })
+        yield from _stream_gemini(request, system["content"], GEMINI_FALLBACK_MODEL)
+
+
+def _stream_chat(request: ChatRequest):
     try:
         active_source_names = list(request.active_sources)
         context = ""
@@ -138,32 +227,7 @@ def _stream_groq(request: ChatRequest):
                 if results:
                     active_source_names = list(dict.fromkeys(result["source"] for result in results))
 
-        client = Groq(api_key=api_key)
-        messages = [_system_message(request, context, active_source_names)] + [
-            {"role": message.role, "content": message.content}
-            for message in request.messages
-        ]
-
-        stream = client.chat.completions.create(
-            model=request.model or DEFAULT_MODEL,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            stream=True,
-        )
-
-        yield _event({
-            "type": "start",
-            "model": request.model or DEFAULT_MODEL,
-            "sources": active_source_names,
-        })
-
-        for chunk in stream:
-            token = chunk.choices[0].delta.content or ""
-            if token:
-                yield _event({"type": "token", "text": token})
-
-        yield _event({"type": "done"})
+        yield from _stream_model(request, context, active_source_names)
     except Exception as exc:
         yield _event({"type": "error", "message": str(exc)})
 
@@ -173,8 +237,12 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "primary_model": PRIMARY_MODEL,
+        "vision_model": GROQ_VISION_MODEL,
+        "fallback_model": GEMINI_FALLBACK_MODEL,
     }
 
 
@@ -261,7 +329,7 @@ def notebook_search(notebook_id: str, request: RAGQueryRequest):
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
-        _stream_groq(request),
+        _stream_chat(request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
