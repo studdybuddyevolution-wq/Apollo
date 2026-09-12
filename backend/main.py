@@ -1,8 +1,9 @@
 """Apollo FastAPI backend.
 
-Phase 6 web research uses Tavily for web retrieval so internet search is
-independent of Groq token quotas. Gemini 3.8 Flash synthesizes the retrieved
-web context when Web mode is enabled. Phase 5 notebook/RAG remains active.
+Phase 6 web research uses Tavily for retrieval and Gemini 3.8 Flash for
+synthesis, keeping web research independent of Groq token quotas. Phase 5
+notebook/RAG remains active. Deep Research performs multiple independent web
+search passes server-side before Gemini synthesizes the final answer.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ PRIMARY_MODEL = os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b")
 GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
 GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
 WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.8-flash")
-MAX_OUTPUT_TOKENS = 650
+MAX_OUTPUT_TOKENS = 1000
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
 
@@ -50,7 +51,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.5.0")
+app = FastAPI(title="Apollo API", version="0.6.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -73,6 +74,7 @@ class ChatRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     user_id: str | None = None
     web_enabled: bool = False
+    research_mode: Literal["quick", "web", "deep", "study"] = "quick"
 
 
 class NotebookCreateRequest(BaseModel):
@@ -140,19 +142,29 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
         "You are Apollo Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
         "Answer directly and naturally. Keep private chain-of-thought/reasoning hidden; "
-        "return only the answer, conclusions, and concise useful explanations. "
+        "return only the answer, conclusions, and useful explanations. "
         "Use supplied source context when it is relevant, and distinguish it from your own knowledge. "
         "When the user asks what a source is about, summarize the supplied source context instead of "
         "saying you lack access to the file. "
         "Do not claim to have searched or read a source unless the backend supplied that context."
     )
     if request.web_enabled:
-        content += (
-            " Live web research is enabled. Web results are supplied by Tavily. "
-            "Use those results as evidence, synthesize them into a direct answer, and do not paste search results. "
-            "Do not use Markdown tables, raw HTML, <br> tags, or internal citation markers. "
-            "Prefer authoritative sources and clearly distinguish web findings from notebook material."
-        )
+        if request.research_mode in {"deep", "study"}:
+            content += (
+                " You are in Deep Research mode. Multiple independent web searches will be supplied. "
+                "Synthesize them into a comprehensive, well-structured answer rather than summarizing each search. "
+                "Resolve contradictions where possible, prefer primary or authoritative sources, and call out uncertainty. "
+                "For school-level questions, explain concepts clearly from foundations through important examples. "
+                "Use normal Markdown headings and bullets where helpful, but NEVER use Markdown tables, raw HTML, <br> tags, "
+                "search-engine citation syntax, or pasted search-result snippets."
+            )
+        else:
+            content += (
+                " Live web research is enabled. Web results are supplied by Tavily. "
+                "Use those results as evidence, synthesize them into a direct answer, and do not paste search results. "
+                "Do not use Markdown tables, raw HTML, <br> tags, or internal citation markers. "
+                "Prefer authoritative sources and clearly distinguish web findings from notebook material."
+            )
     if context:
         content += f"\n\nSOURCE CONTEXT:\n{context}"
     return {"role": "system", "content": content}
@@ -170,19 +182,13 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
     client = Groq(api_key=api_key)
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "stream": True,
-    }
+    kwargs = {"model": model, "messages": messages, "temperature": 0.3, "max_tokens": MAX_OUTPUT_TOKENS, "stream": True}
     if model.startswith("openai/gpt-oss") or model.startswith("qwen/"):
         kwargs["reasoning_format"] = "hidden"
         if model.startswith("openai/gpt-oss"):
             kwargs["reasoning_effort"] = "medium"
     stream = client.chat.completions.create(**kwargs)
-    yield _event({"type": "start", "model": model, "provider": "groq", "web": False})
+    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": "quick"})
     for chunk in stream:
         token = chunk.choices[0].delta.content or ""
         if token:
@@ -208,7 +214,7 @@ def _search_tavily(query: str, deep: bool = False) -> tuple[str, list[dict[str, 
     seen_urls: set[str] = set()
     context_parts: list[str] = []
     total_chars = 0
-    max_chars = 16000 if deep else 11000
+    max_chars = 15000 if deep else 11000
     for index, item in enumerate(response.get("results", []) or [], start=1):
         url = str(item.get("url") or "").strip()
         title = str(item.get("title") or url).strip()
@@ -228,14 +234,41 @@ def _search_tavily(query: str, deep: bool = False) -> tuple[str, list[dict[str, 
     return "\n\n---\n\n".join(context_parts), sources[:8]
 
 
-def _stream_web_with_tavily(request: ChatRequest, system_content: str, deep: bool = False):
-    query = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
-    if not query:
+def _deep_research_queries(question: str, study: bool) -> list[str]:
+    if study:
+        return [
+            f"{question} official sources and current evidence; focus on facts that complement or challenge a student's notes",
+            f"{question} authoritative explanation, examples, major dates or definitions, and common misconceptions",
+            f"{question} primary or institutional sources plus recent context and important caveats",
+        ]
+    return [
+        f"{question} authoritative overview primary sources current evidence",
+        f"{question} detailed explanation examples historical or technical context and important caveats",
+        f"{question} competing perspectives primary sources limitations and facts that would change the conclusion",
+    ]
+
+
+def _stream_web_with_tavily(request: ChatRequest, system_content: str):
+    question = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
+    if not question:
         raise RuntimeError("No user query supplied for web research")
 
-    web_context, sources = _search_tavily(query, deep=deep)
-    if not web_context:
+    deep = request.research_mode in {"deep", "study"}
+    queries = _deep_research_queries(question, request.research_mode == "study") if deep else [question]
+    dossiers: list[str] = []
+    all_sources: list[dict[str, str]] = []
+
+    for query in queries:
+        web_context, sources = _search_tavily(query, deep=deep)
+        if web_context:
+            dossiers.append(f"RESEARCH QUERY: {query}\n{web_context}")
+        all_sources.extend(sources)
+
+    if not dossiers:
         raise RuntimeError("Tavily returned no usable web results")
+
+    unique_sources = list({source["url"]: source for source in all_sources if source.get("url")}.values())[:12]
+    web_context = "\n\n========== RESEARCH PASS ==========\n\n".join(dossiers)
 
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -243,34 +276,45 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str, deep: boo
     from google import genai
     from google.genai import types
 
-    synthesis_instruction = (
-        system_content
-        + "\n\nYou are synthesizing live web research collected by Tavily. "
-        + "Write a concise, well-phrased answer based only on the supplied research context and relevant notebook context. "
-        + "Do not paste raw search snippets. Do not use internal citation syntax or raw HTML. "
-        + "Use short headings or bullets only when useful. Mention uncertainty or conflicting sources when present."
-    )
+    if deep:
+        synthesis_instruction = (
+            system_content
+            + "\n\nYou are Apollo's Deep Research synthesizer. The following dossier contains multiple independent web research passes. "
+            + "Write the final answer yourself. Do not mention the dossier or the research process. "
+            + "For a request for extreme detail, be thorough and educational: define the topic, build the explanation chronologically or logically, "
+            + "cover major events/ideas, explain causes and effects, provide concrete examples, and finish with key takeaways. "
+            + "Do not pad the answer with repetition. Use clean Markdown headings and bullet points. "
+            + "Never emit Markdown tables, raw HTML, <br>, pipe-separated tables, or search-result syntax."
+        )
+    else:
+        synthesis_instruction = (
+            system_content
+            + "\n\nYou are Apollo's web-answer synthesizer. Write the answer yourself from the Tavily evidence. "
+            + "Do not paste snippets. Use clean Markdown headings or bullets only where useful. "
+            + "Never emit Markdown tables, raw HTML, <br>, or search-result citation syntax."
+        )
+
     prompt = _conversation_text(request.messages, synthesis_instruction)
-    prompt += f"\n\nTAVILY WEB RESEARCH:\n{web_context}"
+    prompt += f"\n\nTAVILY RESEARCH DOSSIER:\n{web_context}"
 
     client = genai.Client(api_key=api_key)
     stream = client.models.generate_content_stream(
         model=WEB_SYNTHESIS_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
-            temperature=0.25,
+            temperature=0.2,
             max_output_tokens=MAX_OUTPUT_TOKENS,
             system_instruction=synthesis_instruction,
         ),
     )
-    yield _event({"type": "start", "model": WEB_SYNTHESIS_MODEL, "provider": "gemini+tavily", "web": True, "deep": deep})
-    if sources:
-        yield _event({"type": "sources", "sources": sources})
+    yield _event({"type": "start", "model": WEB_SYNTHESIS_MODEL, "provider": "gemini+tavily", "web": True, "deep": deep, "research": request.research_mode})
+    if unique_sources:
+        yield _event({"type": "sources", "sources": unique_sources})
     for chunk in stream:
         text = getattr(chunk, "text", None) or ""
         if text:
             yield _event({"type": "token", "text": text})
-    yield _event({"type": "done", "web": True, "deep": deep})
+    yield _event({"type": "done", "web": True, "deep": deep, "research": request.research_mode})
 
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
@@ -286,7 +330,7 @@ def _stream_gemini(request: ChatRequest, system_content: str, model: str):
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=MAX_OUTPUT_TOKENS, system_instruction=system_content),
     )
-    yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True, "web": False})
+    yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True, "web": False, "research": "quick"})
     for chunk in stream:
         text = getattr(chunk, "text", None) or ""
         if text:
@@ -298,7 +342,7 @@ def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
     if request.web_enabled:
-        yield from _stream_web_with_tavily(request, system["content"], deep=False)
+        yield from _stream_web_with_tavily(request, system["content"])
         return
 
     groq_model = request.model or PRIMARY_MODEL
@@ -337,7 +381,7 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
