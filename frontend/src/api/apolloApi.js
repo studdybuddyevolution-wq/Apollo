@@ -1,36 +1,21 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
-function cleanWebText(value) {
+function cleanResearchText(value) {
   return String(value || '')
     .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
     .replace(/【[^】]{1,160}】/g, '')
     .replace(/\[[0-9]+†L?[0-9]+(?:-L?[0-9]+)?\]/g, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/^\s*\|[-:| ]+\|\s*$/gm, '')
+    .replace(/^\s*\|\s*[-:| ]+\|\s*$/gm, '')
     .replace(/^\s*\|\s*(.+?)\s*\|\s*$/gm, (_, row) => row.split('|').map((cell) => cell.trim()).filter(Boolean).join('  •  '))
-    .replace(/^\s*#{1,3}\s*/gm, '')
-    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/^\s*#{1,4}\s*/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
     .replace(/\n{3,}/g, '\n\n')
-    .trim()
+    .trimStart()
 }
 
-async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, options)
-  if (!response.ok) {
-    let message = `Apollo API returned ${response.status}`
-    try {
-      const body = await response.json()
-      if (body?.detail) message = body.detail
-    } catch {
-      // Keep the HTTP status message when the backend does not return JSON.
-    }
-    throw new Error(message)
-  }
-  return response.json()
-}
-
-async function streamChatOnce({
+async function openChat({
   messages,
   model,
   notebookId,
@@ -38,6 +23,7 @@ async function streamChatOnce({
   activeSources,
   userId,
   webEnabled,
+  researchMode,
   onToken,
   onStart,
   onFallback,
@@ -52,14 +38,15 @@ async function streamChatOnce({
     signal,
     body: JSON.stringify({
       messages,
-      // Normal chat uses the 120B model. Live web work uses the smaller
-      // 20B bucket so research does not consume the 120B daily quota.
-      model: webEnabled ? 'openai/gpt-oss-20b' : model,
+      // Web/Deep/Study research is synthesized by Gemini after Tavily retrieval.
+      // Groq remains the normal-chat model only.
+      model,
       notebook_id: notebookId,
       notebook_title: notebookTitle,
       active_sources: activeSources,
       user_id: userId,
       web_enabled: webEnabled,
+      research_mode: researchMode,
     }),
   })
 
@@ -79,9 +66,7 @@ async function streamChatOnce({
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let serverWebMode = webEnabled
-  let collected = ''
-  const collectedSources = []
+  let serverResearch = researchMode
 
   const consumeEvent = (rawEvent) => {
     const data = rawEvent
@@ -93,19 +78,15 @@ async function streamChatOnce({
 
     const payload = JSON.parse(data)
     if (payload.type === 'start') {
-      serverWebMode = Boolean(payload.web)
+      serverResearch = payload.research || researchMode
       onStart?.(payload)
     }
     if (payload.type === 'fallback') onFallback?.(payload)
     if (payload.type === 'token') {
-      const token = serverWebMode ? cleanWebText(payload.text || '') : (payload.text || '')
-      collected += token
+      const token = serverResearch === 'quick' ? (payload.text || '') : cleanResearchText(payload.text || '')
       onToken?.(token)
     }
-    if (payload.type === 'sources') {
-      collectedSources.push(...(payload.sources || []))
-      onSources?.(payload.sources || [])
-    }
+    if (payload.type === 'sources') onSources?.(payload.sources || [])
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
       onError?.(payload.message || 'Apollo backend error')
@@ -127,7 +108,6 @@ async function streamChatOnce({
   }
 
   if (buffer.trim()) consumeEvent(buffer)
-  return { text: collected.trim(), sources: collectedSources }
 }
 
 export async function streamChat({
@@ -147,88 +127,23 @@ export async function streamChat({
   onError,
   signal,
 }) {
-  const isDeep = researchMode === 'deep' || researchMode === 'study'
-
-  if (!isDeep) {
-    return streamChatOnce({
-      messages,
-      model,
-      notebookId,
-      notebookTitle,
-      activeSources,
-      userId,
-      webEnabled,
-      onToken,
-      onStart,
-      onFallback,
-      onSources,
-      onDone,
-      onError,
-      signal,
-    })
-  }
-
-  // Deep Research is a two-pass workflow: two separate research angles are
-  // gathered first, then Apollo synthesizes them into one answer. Study mode
-  // keeps the active notebook/RAG context enabled during both passes.
-  const originalUser = [...messages].reverse().find((message) => message.role === 'user')?.content || ''
-  const angles = researchMode === 'study'
-    ? [
-        `Research this using the user's notebook context and live web sources. Find the strongest external evidence that complements or challenges the notebook. Question: ${originalUser}`,
-        `Research this independently using live web sources. Look for authoritative documentation, recent developments, and important caveats that another researcher might miss. Question: ${originalUser}`,
-      ]
-    : [
-        `Research this from a broad factual angle. Find authoritative sources, recent developments, and the most important evidence. Question: ${originalUser}`,
-        `Research this from a skeptical/comparative angle. Look for conflicting claims, primary sources, limitations, and details that would change the conclusion. Question: ${originalUser}`,
-      ]
-
-  let dossier = ''
-  const dossierSources = []
-
-  for (const angle of angles) {
-    const pass = await streamChatOnce({
-      messages: [{ role: 'user', content: angle }],
-      model,
-      notebookId,
-      notebookTitle,
-      activeSources,
-      userId,
-      webEnabled: true,
-      onSources: (sources) => dossierSources.push(...sources),
-      signal,
-    })
-    dossier += `\n\nRESEARCH PASS:\n${pass.text}`
-  }
-
-  const synthesisMessages = [
-    ...messages,
-    {
-      role: 'user',
-      content: `You are completing a Deep Research task. Use the research dossier below as evidence. Synthesize it into a clear, original answer to the user's question. Resolve contradictions where possible, prefer stronger/primary evidence, and do not mention the research workflow.\n\nRESEARCH DOSSIER:\n${dossier}`,
-    },
-  ]
-
-  onStart?.({ type: 'start', model: 'openai/gpt-oss-20b', provider: 'groq', web: false, research: researchMode })
-  if (dossierSources.length) {
-    const uniqueSources = [...new Map(dossierSources.map((source) => [source.url || source.title, source])).values()]
-    onSources?.(uniqueSources.slice(0, 8))
-  }
-
-  const result = await streamChatOnce({
-    messages: synthesisMessages,
-    model: 'openai/gpt-oss-20b',
+  return openChat({
+    messages,
+    model,
     notebookId,
     notebookTitle,
     activeSources,
     userId,
-    webEnabled: false,
+    webEnabled: webEnabled || researchMode !== 'quick',
+    researchMode,
     onToken,
+    onStart,
+    onFallback,
+    onSources,
+    onDone,
     onError,
     signal,
   })
-
-  onDone?.({ type: 'done', research: researchMode })
-  return result
 }
 
 export async function checkHealth() {
