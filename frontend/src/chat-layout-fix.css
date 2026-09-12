@@ -1,18 +1,11 @@
 /* Stable viewport layout: keep the composer pinned while the message list scrolls. */
-html, body, #root {
-  height: 100%;
-}
+html, body, #root { height: 100%; }
 
 .apollo-app,
 .app-shell,
-.main-panel {
-  height: 100vh;
-  min-height: 0;
-}
+.main-panel { height: 100vh; min-height: 0; }
 
-.app-shell {
-  overflow: hidden;
-}
+.app-shell { overflow: hidden; }
 
 .main-panel {
   height: calc(100vh - 64px);
@@ -41,27 +34,8 @@ html, body, #root {
   z-index: 10;
 }
 
-/* Keep the sidebar visible on desktop and reserve its width. */
+/* The sidebar and app shell are laid out by phase5-layout-fix.css. Do not add
+   another margin/width calculation here; doing so makes the main pane vanish. */
 @media (min-width: 851px) {
-  .apollo-sidebar {
-    transform: translateX(0) !important;
-    visibility: visible !important;
-  }
-
-  .app-shell {
-    margin-left: 278px !important;
-    width: calc(100% - 278px);
-  }
-
-  .apollo-sidebar.is-collapsed + .app-shell {
-    margin-left: 78px !important;
-    width: calc(100% - 78px);
-  }
-}
-
-/* Prevent the page itself from becoming the chat scroller. */
-@media (min-width: 851px) {
-  body {
-    overflow: hidden;
-  }
+  body { overflow: hidden; }
 }
