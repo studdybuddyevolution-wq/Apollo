@@ -38,7 +38,7 @@ load_dotenv(_REPO_ROOT / ".env", override=False)
 PRIMARY_MODEL = os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b")
 GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
 GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
-MAX_OUTPUT_TOKENS = 900
+MAX_OUTPUT_TOKENS = 650
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
 
@@ -47,7 +47,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.4.0")
+app = FastAPI(title="Apollo API", version="0.4.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -145,8 +145,11 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     )
     if request.web_enabled:
         content += (
-            " Live web research is enabled for this turn. Use the browser search tool for current or changing "
-            "information. Prefer primary or authoritative sources and distinguish web findings from notebook material."
+            " Live web research is enabled for this turn. Use browser search for current or changing information. "
+            "Prefer primary or authoritative sources. Give a concise answer with at most 6 key points. "
+            "Do not use Markdown tables, raw HTML, <br> tags, or internal citation markers such as 【2†L14-L19】. "
+            "Use short headings and bullets only when they improve readability. Do not paste search-result dumps. "
+            "Separate current web findings from notebook material when both are present."
         )
     if context:
         content += f"\n\nSOURCE CONTEXT:\n{context}"
@@ -235,7 +238,7 @@ def _stream_groq_web(request: ChatRequest, messages: list[dict[str, str]], model
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.3,
+        temperature=0.25,
         max_completion_tokens=MAX_OUTPUT_TOKENS,
         stream=False,
         reasoning_effort="medium",
@@ -319,7 +322,7 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.4.0",
+        "version": "0.4.1",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "primary_model": PRIMARY_MODEL,
