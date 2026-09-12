@@ -1,0 +1,22 @@
+.topbar-tool.active {
+  color: var(--primary);
+  border-color: rgba(249,115,22,.45);
+  background: rgba(249,115,22,.12);
+}
+
+.web-citation {
+  text-decoration: none;
+  max-width: 280px;
+}
+
+.web-citation:hover {
+  color: var(--text);
+  border-color: rgba(249,115,22,.42);
+}
+
+@media (max-width: 850px) {
+  .topbar-actions {
+    overflow-x: auto;
+    max-width: 70vw;
+  }
+}
