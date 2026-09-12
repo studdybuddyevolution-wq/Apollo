@@ -149,7 +149,6 @@ def _gemini_model_chain(primary: str) -> list[str]:
 
 
 def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any]):
-    """Stream through the same hook patched by backend/sitecustomize.py."""
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
@@ -186,51 +185,18 @@ def _stream_deep_research(request: ChatRequest, system_content: str, context: st
     question = next((m.content for m in reversed(request.messages) if m.role == "user"), "").strip()
     if not question:
         raise RuntimeError("No user query supplied for Deep Research")
-    plan = run_hybrid_research(
-        question=question,
-        user_id=request.user_id,
-        notebook_id=request.notebook_id,
-        source_names=source_names,
-        study=request.research_mode == "study",
-    )
-    instruction = build_synthesis_instruction(
-        topic=plan["topic"],
-        outline=plan["outline"],
-        verification=plan["verification"],
-        requested_detail=is_detailed_request(question),
-        study=request.research_mode == "study",
-    )
+    plan = run_hybrid_research(question=question, user_id=request.user_id, notebook_id=request.notebook_id, source_names=source_names, study=request.research_mode == "study")
+    instruction = build_synthesis_instruction(topic=plan["topic"], outline=plan["outline"], verification=plan["verification"], requested_detail=is_detailed_request(question), study=request.research_mode == "study")
     evidence = format_evidence(plan["evidence"])
     notebook_context = f"\n\nLEGACY ACTIVE NOTEBOOK CONTEXT:\n{context}" if context else ""
-    prompt = (
-        _conversation_text(request.messages, instruction)
-        + "\n\nRESEARCH PLAN:\n"
-        + json.dumps(plan["plan"], ensure_ascii=False, indent=2)
-        + "\n\nVERIFIED EVIDENCE:\n"
-        + evidence
-        + notebook_context
-    )
+    prompt = _conversation_text(request.messages, instruction) + "\n\nRESEARCH PLAN:\n" + json.dumps(plan["plan"], ensure_ascii=False, indent=2) + "\n\nVERIFIED EVIDENCE:\n" + evidence + notebook_context
     if plan["web_sources"]:
         yield _event({"type": "sources", "sources": plan["web_sources"]})
-    yield _stream_gemini_resilient(
-        prompt=prompt,
-        system_instruction=instruction,
-        output_tokens=DEEP_OUTPUT_TOKENS,
-        primary_model=WEB_SYNTHESIS_MODEL,
-        event_meta={
-            "provider": "gemini+hybrid-rag+tavily",
-            "web": True,
-            "deep": True,
-            "research": request.research_mode,
-            "topic": plan["topic"],
-            "evidence": {k: plan["verification"][k] for k in ("web_sources", "notebook_chunks", "high_authority_sources")},
-        },
-    )
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=DEEP_OUTPUT_TOKENS, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+hybrid-rag+tavily", "web": True, "deep": True, "research": request.research_mode, "topic": plan["topic"], "evidence": {k: plan["verification"][k] for k in ("web_sources", "notebook_chunks", "high_authority_sources")}})
 
 
 def _stream_web(request: ChatRequest, system_content: str):
     from tavily import TavilyClient
-
     question = next((m.content for m in reversed(request.messages) if m.role == "user"), "").strip()
     if not question:
         raise RuntimeError("No user query supplied for web research")
@@ -238,8 +204,7 @@ def _stream_web(request: ChatRequest, system_content: str):
     if not key:
         raise RuntimeError("TAVILY_API_KEY is not configured")
     response = TavilyClient(api_key=key).search(query=question, search_depth="advanced", topic="general", max_results=8, chunks_per_source=2, include_answer=False, include_raw_content=True)
-    sources, blocks = [], []
-    seen = set()
+    sources, blocks, seen = [], [], set()
     for item in response.get("results", []) or []:
         url = str(item.get("url") or "").strip()
         title = str(item.get("title") or url).strip()
@@ -251,20 +216,11 @@ def _stream_web(request: ChatRequest, system_content: str):
             blocks.append(f"SOURCE: {title}\nURL: {url}\n{text[:6000]}")
     if not blocks:
         raise RuntimeError("Tavily returned no usable web results")
-    instruction = system_content + (
-        "\n\nYou are Apollo's web-answer synthesizer. Write the answer from the Tavily evidence. "
-        "Do not paste snippets. Prefer authoritative sources. Use clean Markdown and finish naturally."
-    )
+    instruction = system_content + "\n\nYou are Apollo's web-answer synthesizer. Write the answer from the Tavily evidence. Do not paste snippets. Prefer authoritative sources. Use clean Markdown and finish naturally."
     prompt = _conversation_text(request.messages, instruction) + "\n\nTAVILY RESEARCH DOSSIER:\n" + "\n\n---\n\n".join(blocks)
     if sources:
         yield _event({"type": "sources", "sources": sources[:12]})
-    yield _stream_gemini_resilient(
-        prompt=prompt,
-        system_instruction=instruction,
-        output_tokens=WEB_OUTPUT_TOKENS,
-        primary_model=WEB_SYNTHESIS_MODEL,
-        event_meta={"provider": "gemini+tavily", "web": True, "deep": False, "research": "web"},
-    )
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=WEB_OUTPUT_TOKENS, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+tavily", "web": True, "deep": False, "research": "web"})
 
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
@@ -313,21 +269,7 @@ def _stream_chat(request: ChatRequest):
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {
-        "status": "ok",
-        "service": "apollo-api",
-        "version": "0.8.0",
-        "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
-        "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
-        "primary_model": PRIMARY_MODEL,
-        "vision_model": GROQ_VISION_MODEL,
-        "fallback_model": GEMINI_FALLBACK_MODEL,
-        "gemini_fallback_chain": GEMINI_FALLBACK_MODELS,
-        "deep_output_tokens": DEEP_OUTPUT_TOKENS,
-        "deep_research": "hybrid_rag_tavily",
-        "web_search": "tavily",
-    }
+    return {"status": "ok", "service": "apollo-api", "version": "0.8.0", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL, "gemini_fallback_chain": GEMINI_FALLBACK_MODELS, "deep_output_tokens": DEEP_OUTPUT_TOKENS, "deep_research": "hybrid_rag_tavily", "web_search": "tavily"}
 
 
 @app.get("/api/notebooks")
