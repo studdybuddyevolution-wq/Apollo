@@ -48,8 +48,7 @@ export function listSources(notebookId, userId = 'default') {
 export function uploadSource(notebookId, file, userId = 'default') {
   const form = new FormData()
   form.append('file', file)
-  form.append('user_id', userId)
-  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sources`, {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sources?user_id=${encodeURIComponent(userId)}`, {
     method: 'POST',
     body: form,
   })
