@@ -1,9 +1,9 @@
 """Apollo FastAPI backend.
 
-Phase 6 web research uses Tavily for retrieval and Gemini 3.8 Flash for
-synthesis, keeping web research independent of Groq token quotas. Phase 5
-notebook/RAG remains active. Deep Research performs multiple independent web
-search passes server-side before Gemini synthesizes the final answer.
+Phase 6 web research uses Tavily for retrieval and Gemini for synthesis,
+independent of Groq web-search token quotas. Gemini synthesis now has a
+resilient fallback chain: 3.8 Flash -> 3.5 Flash -> 3.1 Flash-Lite.
+Phase 5 notebook/RAG remains active.
 """
 
 from __future__ import annotations
@@ -42,6 +42,14 @@ PRIMARY_MODEL = os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b")
 GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
 GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
 WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.8-flash")
+GEMINI_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "APOLLO_GEMINI_FALLBACK_MODELS",
+        "gemini-3.8-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+    ).split(",")
+    if model.strip()
+]
 MAX_OUTPUT_TOKENS = 1000
 DEEP_OUTPUT_TOKENS = 3000
 WEB_OUTPUT_TOKENS = 1400
@@ -53,7 +61,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.6.1")
+app = FastAPI(title="Apollo API", version="0.7.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -184,7 +192,13 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
     client = Groq(api_key=api_key)
-    kwargs = {"model": model, "messages": messages, "temperature": 0.3, "max_tokens": MAX_OUTPUT_TOKENS, "stream": True}
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "stream": True,
+    }
     if model.startswith("openai/gpt-oss") or model.startswith("qwen/"):
         kwargs["reasoning_format"] = "hidden"
         if model.startswith("openai/gpt-oss"):
@@ -250,6 +264,72 @@ def _deep_research_queries(question: str, study: bool) -> list[str]:
     ]
 
 
+def _gemini_model_chain(primary: str) -> list[str]:
+    chain = [primary] + [model for model in GEMINI_FALLBACK_MODELS if model != primary]
+    return list(dict.fromkeys(chain))
+
+
+def _stream_gemini_resilient(
+    *,
+    prompt: str,
+    system_instruction: str,
+    output_tokens: int,
+    primary_model: str,
+    event_meta: dict[str, Any],
+):
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    models = _gemini_model_chain(primary_model)
+    last_error: Exception | None = None
+
+    for index, model in enumerate(models):
+        emitted = False
+        try:
+            stream = client.models.generate_content_stream(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=output_tokens,
+                    system_instruction=system_instruction,
+                ),
+            )
+            yield _event({
+                "type": "start",
+                "model": model,
+                **event_meta,
+            })
+            for chunk in stream:
+                text = getattr(chunk, "text", None) or ""
+                if text:
+                    emitted = True
+                    yield _event({"type": "token", "text": text})
+            yield _event({"type": "done", "model": model, **{k: v for k, v in event_meta.items() if k != "web" or v}})
+            return
+        except Exception as exc:
+            last_error = exc
+            if emitted:
+                yield _event({"type": "error", "message": f"Gemini {model} stream failed after output: {exc}"})
+                return
+            if index < len(models) - 1:
+                next_model = models[index + 1]
+                yield _event({
+                    "type": "fallback",
+                    "from_model": model,
+                    "to_model": next_model,
+                    "reason": str(exc),
+                })
+                continue
+            break
+
+    raise RuntimeError(f"All Gemini synthesis models failed: {last_error}")
+
+
 def _stream_web_with_tavily(request: ChatRequest, system_content: str):
     question = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
     if not question:
@@ -271,12 +351,6 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
 
     unique_sources = list({source["url"]: source for source in all_sources if source.get("url")}.values())[:12]
     web_context = "\n\n========== RESEARCH PASS ==========\n\n".join(dossiers)
-
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured for web synthesis")
-    from google import genai
-    from google.genai import types
 
     if deep:
         synthesis_instruction = (
@@ -302,49 +376,35 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
     prompt = _conversation_text(request.messages, synthesis_instruction)
     prompt += f"\n\nTAVILY RESEARCH DOSSIER:\n{web_context}"
 
-    client = genai.Client(api_key=api_key)
-    stream = client.models.generate_content_stream(
-        model=WEB_SYNTHESIS_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.2,
-            max_output_tokens=output_tokens,
-            system_instruction=synthesis_instruction,
-        ),
+    yield _event({"type": "sources", "sources": unique_sources}) if unique_sources else ""
+    yield from _stream_gemini_resilient(
+        prompt=prompt,
+        system_instruction=synthesis_instruction,
+        output_tokens=output_tokens,
+        primary_model=WEB_SYNTHESIS_MODEL,
+        event_meta={
+            "provider": "gemini+tavily",
+            "web": True,
+            "deep": deep,
+            "research": request.research_mode,
+        },
     )
-    yield _event({"type": "start", "model": WEB_SYNTHESIS_MODEL, "provider": "gemini+tavily", "web": True, "deep": deep, "research": request.research_mode})
-    if unique_sources:
-        yield _event({"type": "sources", "sources": unique_sources})
-    try:
-        for chunk in stream:
-            text = getattr(chunk, "text", None) or ""
-            if text:
-                yield _event({"type": "token", "text": text})
-    except Exception as exc:
-        yield _event({"type": "error", "message": f"Gemini research stream failed: {exc}"})
-        return
-    yield _event({"type": "done", "web": True, "deep": deep, "research": request.research_mode})
 
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-    from google import genai
-    from google.genai import types
-    client = genai.Client(api_key=api_key)
     prompt = _conversation_text(request.messages, system_content)
-    stream = client.models.generate_content_stream(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=MAX_OUTPUT_TOKENS, system_instruction=system_content),
+    yield from _stream_gemini_resilient(
+        prompt=prompt,
+        system_instruction=system_content,
+        output_tokens=MAX_OUTPUT_TOKENS,
+        primary_model=model,
+        event_meta={
+            "provider": "gemini",
+            "fallback": True,
+            "web": False,
+            "research": "quick",
+        },
     )
-    yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True, "web": False, "research": "quick"})
-    for chunk in stream:
-        text = getattr(chunk, "text", None) or ""
-        if text:
-            yield _event({"type": "token", "text": text})
-    yield _event({"type": "done"})
 
 
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
@@ -390,13 +450,14 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.6.1",
+        "version": "0.7.0",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
         "primary_model": PRIMARY_MODEL,
         "vision_model": GROQ_VISION_MODEL,
         "fallback_model": GEMINI_FALLBACK_MODEL,
+        "gemini_fallback_chain": GEMINI_FALLBACK_MODELS,
         "web_search": "tavily",
     }
 
