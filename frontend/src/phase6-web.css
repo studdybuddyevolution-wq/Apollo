@@ -5,59 +5,49 @@
 }
 
 .research-mode-select {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 34px;
-  min-width: 164px;
+  height: 36px;
+  min-width: 150px;
   padding: 0 10px;
-  border: 1px solid rgba(72,74,84,.9);
+  border: 1px solid rgba(72, 73, 84, .95);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(31,32,40,.96), rgba(22,23,29,.96));
+  background: linear-gradient(180deg, rgba(31,32,40,.96), rgba(22,23,30,.98));
   color: var(--text-variant);
   cursor: pointer;
-  overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.035);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 8px 20px rgba(0,0,0,.18);
+  color-scheme: dark;
 }
 
-.research-mode-select:hover {
-  color: var(--text);
-  border-color: rgba(249,115,22,.42);
-}
-
+.research-mode-select:hover,
 .research-mode-select:focus-within {
-  border-color: rgba(249,115,22,.55);
-  box-shadow: 0 0 0 2px rgba(249,115,22,.10), 0 8px 24px rgba(0,0,0,.25);
-}
-
-.research-mode-select svg {
-  flex: 0 0 auto;
+  color: var(--text);
+  border-color: rgba(249,115,22,.52);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.045), 0 8px 22px rgba(0,0,0,.22), 0 0 0 1px rgba(249,115,22,.10);
 }
 
 .research-mode-select select {
   appearance: none;
   -webkit-appearance: none;
-  flex: 1 1 auto;
-  min-width: 0;
   border: 0;
   outline: 0;
-  border-radius: 8px;
   background: transparent;
   color: inherit;
-  font-size: 10px;
+  color-scheme: dark;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: .01em;
   cursor: pointer;
-  color-scheme: dark;
-}
-
-.research-mode-select select:focus {
-  outline: none;
+  width: 100%;
+  padding: 0 20px 0 0;
 }
 
 .research-mode-select select option {
-  color: #f3f0ea;
-  background: #17181e;
+  color: #f3f4f6;
+  background: #171820;
+  border-radius: 8px;
 }
 
 .web-citation {
@@ -76,8 +66,7 @@
     max-width: 70vw;
   }
   .research-mode-select {
-    min-width: 148px;
-    border-radius: 11px;
+    min-width: 130px;
   }
   .research-mode-select select {
     max-width: 104px;
