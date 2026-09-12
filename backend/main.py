@@ -1,4 +1,3 @@
-"""Apollo FastAPI backend with Tavily web research and resilient Gemini synthesis."""
 from __future__ import annotations
 
 import json
@@ -25,11 +24,11 @@ GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-fl
 WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.8-flash")
 GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv("APOLLO_GEMINI_FALLBACK_MODELS", "gemini-3.8-flash,gemini-3.5-flash,gemini-3.1-flash-lite").split(",") if m.strip()]
 MAX_OUTPUT_TOKENS = 1000
-DEEP_OUTPUT_TOKENS = 3000
+DEEP_OUTPUT_TOKENS = 2500
 WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
-app = FastAPI(title="Apollo API", version="0.7.0")
+app = FastAPI(title="Apollo API", version="0.7.1")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class ChatMessage(BaseModel):
@@ -99,7 +98,8 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
             content += (" You are in Deep Research mode. Multiple independent web searches will be supplied. "
                 "Synthesize them into a comprehensive, well-structured answer. Resolve contradictions where possible, prefer primary or authoritative sources, and call out uncertainty. "
                 "For school-level questions, explain concepts clearly from foundations through important examples. "
-                "Use normal Markdown headings and bullets, but NEVER use Markdown tables, raw HTML, <br> tags, search-engine citation syntax, or pasted search-result snippets.")
+                "Aim for roughly 1,700-1,900 words and NEVER exceed 2,250 words. Finish naturally; do not stop mid-sentence or mid-section. "
+                "Use normal Markdown headings and bullets, but NEVER use Markdown tables, raw HTML, <br> tags, search-engine citation syntax, or pasted search-result snippets. Stay focused on the user's actual topic.")
         else:
             content += (" Live web research is enabled. Web results are supplied by Tavily. Use them as evidence and synthesize a direct answer. "
                 "Do not paste search results or use Markdown tables, raw HTML, <br>, or internal citation markers. Prefer authoritative sources.")
@@ -148,38 +148,6 @@ def _deep_research_queries(question: str, study: bool) -> list[str]:
 def _gemini_model_chain(primary: str) -> list[str]:
     return list(dict.fromkeys([primary] + [m for m in GEMINI_FALLBACK_MODELS if m != primary]))
 
-def _finish_reason(chunk: Any) -> str:
-    try:
-        candidates = getattr(chunk, "candidates", None) or []
-        if not candidates: return ""
-        reason = getattr(candidates[0], "finish_reason", None)
-        value = getattr(reason, "value", reason)
-        return str(value).upper() if value else ""
-    except Exception:
-        return ""
-
-def _stream_continuation(client: Any, models: list[str], prompt: str, system_instruction: str, partial: str, output_tokens: int):
-    from google.genai import types
-    continuation_prompt = (f"{prompt}\n\nPREVIOUS ANSWER THAT REACHED THE OUTPUT LIMIT:\n{partial}\n\n"
-        "CONTINUATION TASK: Continue the previous answer from exactly where it stopped. Do not restart, repeat earlier paragraphs, or add a new introduction. "
-        "Start with the next unfinished sentence or section and complete the explanation. Preserve the same structure and level of detail. "
-        "If the previous answer was already complete, return nothing. Return only the continuation.")
-    last_error = None
-    for index, model in enumerate(models):
-        emitted = False
-        try:
-            stream = client.models.generate_content_stream(model=model, contents=continuation_prompt, config=types.GenerateContentConfig(max_output_tokens=output_tokens, system_instruction=system_instruction))
-            for chunk in stream:
-                text = getattr(chunk, "text", None) or ""
-                if text: emitted = True; yield _event({"type": "token", "text": text})
-            return
-        except Exception as exc:
-            last_error = exc
-            if emitted: return
-            if index < len(models) - 1:
-                yield _event({"type": "fallback", "from_model": model, "to_model": models[index + 1], "reason": str(exc), "continuation": True})
-    if last_error: yield _event({"type": "continuation_error", "message": f"Gemini continuation failed: {last_error}"})
-
 def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any]):
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key: raise RuntimeError("GEMINI_API_KEY is not configured")
@@ -189,25 +157,18 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
     models = _gemini_model_chain(primary_model)
     last_error = None
     for index, model in enumerate(models):
-        emitted = False; generated = ""; finish_reason = ""
+        emitted = False
         try:
             stream = client.models.generate_content_stream(model=model, contents=prompt, config=types.GenerateContentConfig(max_output_tokens=output_tokens, system_instruction=system_instruction))
             yield _event({"type": "start", "model": model, **event_meta})
             for chunk in stream:
                 text = getattr(chunk, "text", None) or ""
-                if text: emitted = True; generated += text; yield _event({"type": "token", "text": text})
-                reason = _finish_reason(chunk)
-                if reason: finish_reason = reason
-            continued = False
-            if finish_reason == "MAX_TOKENS" and generated and event_meta.get("deep"):
-                continued = True
-                yield _event({"type": "continuation", "model": model, "reason": "MAX_TOKENS"})
-                yield from _stream_continuation(client, models, prompt, system_instruction, generated, output_tokens)
-            yield _event({"type": "done", "model": model, "continued": continued, **{k: v for k, v in event_meta.items() if k != "web" or v}})
-            return
+                if text: emitted = True; yield _event({"type": "token", "text": text})
+            yield _event({"type": "done", "model": model, **event_meta}); return
         except Exception as exc:
             last_error = exc
-            if emitted: yield _event({"type": "error", "message": f"Gemini {model} stream failed after output: {exc}"}); return
+            if emitted:
+                yield _event({"type": "error", "message": f"Gemini {model} stream failed after output: {exc}"}); return
             if index < len(models) - 1:
                 yield _event({"type": "fallback", "from_model": model, "to_model": models[index + 1], "reason": str(exc)}); continue
             break
@@ -229,7 +190,8 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
     if deep:
         instruction = (system_content + "\n\nYou are Apollo's Deep Research synthesizer. The dossier contains multiple independent web research passes. "
             "Write the final answer yourself. Do not mention the dossier or research process. Be thorough and educational: define the topic, build the explanation logically, cover major events or ideas, causes and effects, concrete examples, and key takeaways. "
-            "Aim for a substantial answer, not a brief summary. Do not stop after the introduction or pad with repetition. Use clean Markdown headings and bullets. Never emit Markdown tables, raw HTML, <br>, pipe-separated tables, or search-result syntax.")
+            "Aim for roughly 1,700-1,900 words and NEVER exceed 2,250 words. Finish naturally; do not stop mid-sentence or mid-section. Do not pad with repetition. "
+            "Use clean Markdown headings and bullets. Never emit Markdown tables, raw HTML, <br>, pipe-separated tables, or search-result syntax.")
         output_tokens = DEEP_OUTPUT_TOKENS
     else:
         instruction = system_content + "\n\nYou are Apollo's web-answer synthesizer. Write the answer yourself from the Tavily evidence. Do not paste snippets. Use clean Markdown headings or bullets only where useful. Never emit Markdown tables, raw HTML, <br>, or search-result citation syntax."
@@ -239,15 +201,17 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
     yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=output_tokens, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+tavily", "web": True, "deep": deep, "research": request.research_mode})
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
-    yield from _stream_gemini_resilient(prompt=_conversation_text(request.messages, system_content), system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": "quick"})
+    prompt = _conversation_text(request.messages, system_content)
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": "quick"})
 
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
-    messages = [system] + [{"role": m.role, "content": m.content} for m in request.messages]
+    messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
     if request.web_enabled:
         yield from _stream_web_with_tavily(request, system["content"]); return
     groq_model = request.model or PRIMARY_MODEL
-    try: yield from _stream_groq(request, messages, groq_model)
+    try:
+        yield from _stream_groq(request, messages, groq_model)
     except Exception as primary_exc:
         if not os.getenv("GEMINI_API_KEY", "").strip(): raise primary_exc
         yield _event({"type": "fallback", "from_model": groq_model, "to_model": GEMINI_FALLBACK_MODEL, "reason": str(primary_exc)})
@@ -255,51 +219,48 @@ def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
 
 def _stream_chat(request: ChatRequest):
     try:
-        active = list(request.active_sources); context = ""
+        active_source_names = list(request.active_sources)
+        context = ""
         if request.notebook_id:
-            question = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
-            if question:
-                results = retrieve(request.user_id, request.notebook_id, question, top_k=5, source_names=active)
+            last_user_message = next((message.content for message in reversed(request.messages) if message.role == "user"), "")
+            if last_user_message:
+                results = retrieve(request.user_id, request.notebook_id, last_user_message, top_k=5, source_names=active_source_names)
                 context = format_context(results)
-                if results: active = list(dict.fromkeys(r["source"] for r in results))
+                if results:
+                    active_source_names = list(dict.fromkeys(result["source"] for result in results))
                 else:
-                    context, overview = _load_overview_context(request.notebook_id, active)
-                    if overview: active = overview
-        yield from _stream_model(request, context, active)
-    except Exception as exc: yield _event({"type": "error", "message": str(exc)})
+                    context, overview_sources = _load_overview_context(request.notebook_id, active_source_names)
+                    if overview_sources: active_source_names = overview_sources
+        yield from _stream_model(request, context, active_source_names)
+    except Exception as exc:
+        yield _event({"type": "error", "message": str(exc)})
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {"status": "ok", "service": "apollo-api", "version": "0.7.0", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL, "gemini_fallback_chain": GEMINI_FALLBACK_MODELS, "web_search": "tavily"}
+    return {"status": "ok", "service": "apollo-api", "version": "0.7.1", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL, "gemini_fallback_chain": GEMINI_FALLBACK_MODELS, "deep_output_tokens": DEEP_OUTPUT_TOKENS, "web_search": "tavily"}
 
 @app.get("/api/notebooks")
 def notebooks(user_id: str = "default"): return {"notebooks": list_notebooks(user_id)}
-
 @app.post("/api/notebooks")
 def notebook_create(request: NotebookCreateRequest): return create_notebook(request.user_id, request.title)
-
 @app.get("/api/notebooks/{notebook_id}")
 def notebook_detail(notebook_id: str, user_id: str = "default"):
     notebook = get_notebook(user_id, notebook_id)
     if notebook is None: raise HTTPException(status_code=404, detail="Notebook not found")
     return notebook
-
 @app.patch("/api/notebooks/{notebook_id}")
 def notebook_rename(notebook_id: str, request: NotebookRenameRequest):
     notebook = rename_notebook(request.user_id, notebook_id, request.title)
     if notebook is None: raise HTTPException(status_code=404, detail="Notebook not found")
     return notebook
-
 @app.delete("/api/notebooks/{notebook_id}")
 def notebook_delete(notebook_id: str, user_id: str = "default"):
     if not delete_notebook(user_id, notebook_id): raise HTTPException(status_code=404, detail="Notebook not found")
     return {"deleted": True, "id": notebook_id}
-
 @app.get("/api/notebooks/{notebook_id}/sources")
 def notebook_sources(notebook_id: str, user_id: str = "default"):
     if get_notebook(user_id, notebook_id) is None: raise HTTPException(status_code=404, detail="Notebook not found")
     return {"sources": list_sources(user_id, notebook_id)}
-
 @app.post("/api/notebooks/{notebook_id}/sources")
 async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...), user_id: str = Query("default")):
     raw = await file.read()
@@ -307,18 +268,16 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     try: return add_source(user_id, notebook_id, file.filename or "source.txt", raw)
     except KeyError: raise HTTPException(status_code=404, detail="Notebook not found") from None
     except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
-
 @app.delete("/api/notebooks/{notebook_id}/sources/{source_name}")
 def notebook_source_delete(notebook_id: str, source_name: str, user_id: str = "default"):
     if get_notebook(user_id, notebook_id) is None: raise HTTPException(status_code=404, detail="Notebook not found")
     if not remove_source(user_id, notebook_id, source_name): raise HTTPException(status_code=404, detail="Source not found")
     return {"deleted": True, "name": source_name}
-
 @app.post("/api/notebooks/{notebook_id}/search")
 def notebook_search(notebook_id: str, request: RAGQueryRequest):
     if get_notebook(request.user_id, notebook_id) is None: raise HTTPException(status_code=404, detail="Notebook not found")
-    return {"results": retrieve(request.user_id, notebook_id, request.query, top_k=request.top_k, source_names=request.source_names)}
-
+    results = retrieve(request.user_id, notebook_id, request.query, top_k=request.top_k, source_names=request.source_names)
+    return {"results": results}
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(_stream_chat(request), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
