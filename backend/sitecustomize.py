@@ -1,11 +1,9 @@
 """Runtime patch loaded by Python before Uvicorn imports the Apollo app.
 
 Gemini can sometimes emit useful text and then terminate a streaming request with
-503 UNAVAILABLE. The original handler treated any post-output exception as fatal.
-This patch replaces that handler so Apollo keeps the partial answer and continues
-with the next Gemini model instead of surfacing an error to the user.
+503 UNAVAILABLE. Apollo keeps the text already emitted and continues with the next
+configured Gemini model instead of surfacing the transport failure to the user.
 """
-
 from __future__ import annotations
 
 import os
@@ -20,13 +18,27 @@ def _patch() -> None:
     except Exception:
         return
 
+    def _approx_tokens(text: str) -> int:
+        return max(0, len(text) // 4)
+
+    def _chain(primary: str) -> list[str]:
+        configured = os.getenv(
+            "APOLLO_GEMINI_FALLBACK_MODELS",
+            "gemini-3.8-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+        )
+        return list(dict.fromkeys([primary] + [m.strip() for m in configured.split(",") if m.strip()]))
+
+    def _retryable(exc: Exception) -> bool:
+        message = str(exc).upper()
+        return any(marker in message for marker in ("503", "UNAVAILABLE", "HIGH DEMAND", "RESOURCE_EXHAUSTED", "429"))
+
     def resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any]):
         key = os.getenv("GEMINI_API_KEY", "").strip()
         if not key:
             raise RuntimeError("GEMINI_API_KEY is not configured")
 
         client = genai.Client(api_key=key)
-        models = main._gemini_model_chain(primary_model)
+        models = _chain(primary_model)
         last_error: Exception | None = None
 
         for index, model in enumerate(models):
@@ -51,7 +63,7 @@ def _patch() -> None:
             except Exception as exc:
                 last_error = exc
                 next_index = index + 1
-                if generated and next_index < len(models):
+                if generated and next_index < len(models) and _retryable(exc):
                     next_model = models[next_index]
                     yield main._event({
                         "type": "fallback",
@@ -60,6 +72,11 @@ def _patch() -> None:
                         "reason": str(exc),
                         "after_output": True,
                     })
+
+                    used = _approx_tokens(generated)
+                    # Keep the combined Deep Research response around the agreed
+                    # 2500-token ceiling rather than issuing another full 2500-token request.
+                    continuation_tokens = max(400, min(1200, max(400, 2500 - used)))
                     continuation_prompt = (
                         f"{prompt}\n\n"
                         "PREVIOUS PARTIAL ANSWER:\n"
@@ -67,64 +84,45 @@ def _patch() -> None:
                         "CONTINUE TASK:\n"
                         "The previous model stopped unexpectedly after producing the partial answer above. "
                         "Continue exactly where it stopped. Do not restart, repeat earlier material, or mention the failure. "
-                        "Preserve the same topic, structure, tone, and level of detail. Complete the answer naturally. "
+                        "Preserve the same topic, structure, tone, and level of detail. Finish naturally. "
                         "Return only the continuation."
                     )
-                    try:
-                        continuation = client.models.generate_content_stream(
-                            model=next_model,
-                            contents=continuation_prompt,
-                            config=types.GenerateContentConfig(
-                                max_output_tokens=output_tokens,
-                                system_instruction=system_instruction,
-                            ),
-                        )
-                        for chunk in continuation:
-                            text = getattr(chunk, "text", None) or ""
-                            if text:
-                                yield main._event({"type": "token", "text": text})
-                        yield main._event({
-                            "type": "done",
-                            "model": next_model,
-                            **event_meta,
-                            "continued_after_fallback": True,
-                        })
-                        return
-                    except Exception as continuation_exc:
-                        last_error = continuation_exc
-                        if next_index + 1 < len(models):
-                            final_model = models[next_index + 1]
+
+                    for continuation_index in range(next_index, len(models)):
+                        continuation_model = models[continuation_index]
+                        try:
+                            continuation = client.models.generate_content_stream(
+                                model=continuation_model,
+                                contents=continuation_prompt,
+                                config=types.GenerateContentConfig(
+                                    max_output_tokens=continuation_tokens,
+                                    system_instruction=system_instruction,
+                                ),
+                            )
+                            for chunk in continuation:
+                                text = getattr(chunk, "text", None) or ""
+                                if text:
+                                    yield main._event({"type": "token", "text": text})
                             yield main._event({
-                                "type": "fallback",
-                                "from_model": next_model,
-                                "to_model": final_model,
-                                "reason": str(continuation_exc),
-                                "after_output": True,
+                                "type": "done",
+                                "model": continuation_model,
+                                **event_meta,
+                                "continued_after_fallback": True,
                             })
-                            try:
-                                continuation = client.models.generate_content_stream(
-                                    model=final_model,
-                                    contents=continuation_prompt,
-                                    config=types.GenerateContentConfig(
-                                        max_output_tokens=output_tokens,
-                                        system_instruction=system_instruction,
-                                    ),
-                                )
-                                for chunk in continuation:
-                                    text = getattr(chunk, "text", None) or ""
-                                    if text:
-                                        yield main._event({"type": "token", "text": text})
+                            return
+                        except Exception as continuation_exc:
+                            last_error = continuation_exc
+                            if continuation_index + 1 < len(models):
                                 yield main._event({
-                                    "type": "done",
-                                    "model": final_model,
-                                    **event_meta,
-                                    "continued_after_fallback": True,
+                                    "type": "fallback",
+                                    "from_model": continuation_model,
+                                    "to_model": models[continuation_index + 1],
+                                    "reason": str(continuation_exc),
+                                    "after_output": True,
                                 })
-                                return
-                            except Exception as final_exc:
-                                last_error = final_exc
-                        yield main._event({"type": "done", "model": model, **event_meta, "partial": True})
-                        return
+                                continue
+                            yield main._event({"type": "done", "model": model, **event_meta, "partial": True})
+                            return
 
                 if next_index < len(models):
                     yield main._event({
