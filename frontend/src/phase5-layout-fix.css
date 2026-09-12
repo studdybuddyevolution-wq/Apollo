@@ -1,0 +1,54 @@
+/* Phase 5 shell layout: keep the sidebar in normal document flow so it cannot
+   disappear behind the chat or be clipped by fixed-position offsets. */
+.apollo-app {
+  display: grid !important;
+  grid-template-columns: 278px minmax(0, 1fr) !important;
+  min-height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.apollo-sidebar {
+  position: relative !important;
+  inset: auto !important;
+  width: auto !important;
+  min-width: 0;
+  height: 100vh;
+  min-height: 100vh;
+  z-index: 30;
+  transform: none !important;
+}
+
+.apollo-sidebar.is-collapsed {
+  width: auto !important;
+}
+
+.apollo-app:has(.apollo-sidebar.is-collapsed) {
+  grid-template-columns: 78px minmax(0, 1fr) !important;
+}
+
+.app-shell {
+  min-width: 0;
+  width: auto !important;
+  min-height: 100vh;
+  margin-left: 0 !important;
+}
+
+.apollo-sidebar.is-collapsed + .app-shell {
+  margin-left: 0 !important;
+}
+
+.main-panel {
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 1000px) {
+  .apollo-app {
+    grid-template-columns: 235px minmax(0, 1fr) !important;
+  }
+
+  .apollo-app:has(.apollo-sidebar.is-collapsed) {
+    grid-template-columns: 72px minmax(0, 1fr) !important;
+  }
+}
