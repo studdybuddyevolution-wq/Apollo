@@ -27,10 +27,14 @@ load_dotenv(_REPO_ROOT / ".env", override=False)
 
 DEFAULT_MODEL = "qwen/qwen3.6-27b"
 MAX_OUTPUT_TOKENS = 900  # Keep below the current 1,000 OTPM free-tier limit.
+PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("APOLLO_CORS_ORIGINS", "http://localhost:5173")
+    raw = os.getenv(
+        "APOLLO_CORS_ORIGINS",
+        f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}",
+    )
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
