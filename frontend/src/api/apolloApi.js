@@ -30,14 +30,14 @@ async function request(path, options = {}) {
   return response.json()
 }
 
-export async function streamChat({
+async function streamChatOnce({
   messages,
-  model = 'openai/gpt-oss-120b',
+  model,
   notebookId,
   notebookTitle,
-  activeSources = [],
-  userId = 'default',
-  webEnabled = false,
+  activeSources,
+  userId,
+  webEnabled,
   onToken,
   onStart,
   onFallback,
@@ -52,8 +52,8 @@ export async function streamChat({
     signal,
     body: JSON.stringify({
       messages,
-      // Normal chat stays on GPT-OSS 120B. Web mode uses GPT-OSS 20B so a
-      // 120B daily token cap does not take live web search offline.
+      // Normal chat uses the 120B model. Live web work uses the smaller
+      // 20B bucket so research does not consume the 120B daily quota.
       model: webEnabled ? 'openai/gpt-oss-20b' : model,
       notebook_id: notebookId,
       notebook_title: notebookTitle,
@@ -80,6 +80,8 @@ export async function streamChat({
   const decoder = new TextDecoder()
   let buffer = ''
   let serverWebMode = webEnabled
+  let collected = ''
+  const collectedSources = []
 
   const consumeEvent = (rawEvent) => {
     const data = rawEvent
@@ -95,8 +97,15 @@ export async function streamChat({
       onStart?.(payload)
     }
     if (payload.type === 'fallback') onFallback?.(payload)
-    if (payload.type === 'token') onToken?.(serverWebMode ? cleanWebText(payload.text || '') : (payload.text || ''))
-    if (payload.type === 'sources') onSources?.(payload.sources || [])
+    if (payload.type === 'token') {
+      const token = serverWebMode ? cleanWebText(payload.text || '') : (payload.text || '')
+      collected += token
+      onToken?.(token)
+    }
+    if (payload.type === 'sources') {
+      collectedSources.push(...(payload.sources || []))
+      onSources?.(payload.sources || [])
+    }
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
       onError?.(payload.message || 'Apollo backend error')
@@ -118,6 +127,108 @@ export async function streamChat({
   }
 
   if (buffer.trim()) consumeEvent(buffer)
+  return { text: collected.trim(), sources: collectedSources }
+}
+
+export async function streamChat({
+  messages,
+  model = 'openai/gpt-oss-120b',
+  notebookId,
+  notebookTitle,
+  activeSources = [],
+  userId = 'default',
+  webEnabled = false,
+  researchMode = 'quick',
+  onToken,
+  onStart,
+  onFallback,
+  onSources,
+  onDone,
+  onError,
+  signal,
+}) {
+  const isDeep = researchMode === 'deep' || researchMode === 'study'
+
+  if (!isDeep) {
+    return streamChatOnce({
+      messages,
+      model,
+      notebookId,
+      notebookTitle,
+      activeSources,
+      userId,
+      webEnabled,
+      onToken,
+      onStart,
+      onFallback,
+      onSources,
+      onDone,
+      onError,
+      signal,
+    })
+  }
+
+  // Deep Research is a two-pass workflow: two separate research angles are
+  // gathered first, then Apollo synthesizes them into one answer. Study mode
+  // keeps the active notebook/RAG context enabled during both passes.
+  const originalUser = [...messages].reverse().find((message) => message.role === 'user')?.content || ''
+  const angles = researchMode === 'study'
+    ? [
+        `Research this using the user's notebook context and live web sources. Find the strongest external evidence that complements or challenges the notebook. Question: ${originalUser}`,
+        `Research this independently using live web sources. Look for authoritative documentation, recent developments, and important caveats that another researcher might miss. Question: ${originalUser}`,
+      ]
+    : [
+        `Research this from a broad factual angle. Find authoritative sources, recent developments, and the most important evidence. Question: ${originalUser}`,
+        `Research this from a skeptical/comparative angle. Look for conflicting claims, primary sources, limitations, and details that would change the conclusion. Question: ${originalUser}`,
+      ]
+
+  let dossier = ''
+  const dossierSources = []
+
+  for (const angle of angles) {
+    const pass = await streamChatOnce({
+      messages: [{ role: 'user', content: angle }],
+      model,
+      notebookId,
+      notebookTitle,
+      activeSources,
+      userId,
+      webEnabled: true,
+      onSources: (sources) => dossierSources.push(...sources),
+      signal,
+    })
+    dossier += `\n\nRESEARCH PASS:\n${pass.text}`
+  }
+
+  const synthesisMessages = [
+    ...messages,
+    {
+      role: 'user',
+      content: `You are completing a Deep Research task. Use the research dossier below as evidence. Synthesize it into a clear, original answer to the user's question. Resolve contradictions where possible, prefer stronger/primary evidence, and do not mention the research workflow.\n\nRESEARCH DOSSIER:\n${dossier}`,
+    },
+  ]
+
+  onStart?.({ type: 'start', model: 'openai/gpt-oss-20b', provider: 'groq', web: false, research: researchMode })
+  if (dossierSources.length) {
+    const uniqueSources = [...new Map(dossierSources.map((source) => [source.url || source.title, source])).values()]
+    onSources?.(uniqueSources.slice(0, 8))
+  }
+
+  const result = await streamChatOnce({
+    messages: synthesisMessages,
+    model: 'openai/gpt-oss-20b',
+    notebookId,
+    notebookTitle,
+    activeSources,
+    userId,
+    webEnabled: false,
+    onToken,
+    onError,
+    signal,
+  })
+
+  onDone?.({ type: 'done', research: researchMode })
+  return result
 }
 
 export async function checkHealth() {
