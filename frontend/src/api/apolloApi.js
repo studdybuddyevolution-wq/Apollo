@@ -52,7 +52,9 @@ export async function streamChat({
     signal,
     body: JSON.stringify({
       messages,
-      model,
+      // Normal chat stays on GPT-OSS 120B. Web mode uses GPT-OSS 20B so a
+      // 120B daily token cap does not take live web search offline.
+      model: webEnabled ? 'openai/gpt-oss-20b' : model,
       notebook_id: notebookId,
       notebook_title: notebookTitle,
       active_sources: activeSources,
