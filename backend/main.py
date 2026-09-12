@@ -1,9 +1,7 @@
 """Apollo FastAPI backend.
 
-Phase 5 adds notebook/source/RAG APIs while keeping the streaming chat
-endpoint. Model routing is provider-aware: Groq GPT-OSS 120B is the primary
-text model, with Gemini 3.8 Flash as an optional fallback. Qwen remains
-available as an override for future vision/multimodal requests.
+Phase 6 adds optional live web research through Groq's built-in browser_search
+on the same GPT-OSS 120B primary model. Phase 5 notebook/RAG remains active.
 """
 
 from __future__ import annotations
@@ -11,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -49,7 +47,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.3.1")
+app = FastAPI(title="Apollo API", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -71,6 +69,7 @@ class ChatRequest(BaseModel):
     notebook_title: str | None = None
     active_sources: list[str] = Field(default_factory=list)
     user_id: str | None = None
+    web_enabled: bool = False
 
 
 class NotebookCreateRequest(BaseModel):
@@ -90,7 +89,7 @@ class RAGQueryRequest(BaseModel):
     user_id: str | None = None
 
 
-def _event(payload: dict) -> str:
+def _event(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
@@ -107,7 +106,7 @@ def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks
     filtered = [chunk for chunk in chunks if not allowed or chunk.get("source") in allowed]
     if not filtered:
         return "", source_names
-    selected: list[dict] = []
+    selected: list[dict[str, Any]] = []
     seen_sources: set[str] = set()
     for chunk in filtered:
         source = chunk.get("source", "unknown source")
@@ -144,6 +143,11 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
         "saying you lack access to the file. "
         "Do not claim to have searched or read a source unless the backend supplied that context."
     )
+    if request.web_enabled:
+        content += (
+            " Live web research is enabled for this turn. Use the browser search tool for current or changing "
+            "information. Prefer primary or authoritative sources and distinguish web findings from notebook material."
+        )
     if context:
         content += f"\n\nSOURCE CONTEXT:\n{context}"
     return {"role": "system", "content": content}
@@ -154,6 +158,52 @@ def _conversation_text(messages: list[ChatMessage], system_content: str) -> str:
     for message in messages:
         lines.append(f"{message.role.upper()}:\n{message.content}")
     return "\n\n".join(lines)
+
+
+def _plain(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump()
+        except Exception:
+            pass
+    if hasattr(value, "dict"):
+        try:
+            return value.dict()
+        except Exception:
+            pass
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    if isinstance(value, tuple):
+        return [_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    return str(value)
+
+
+def _extract_web_sources(message: Any) -> list[dict[str, str]]:
+    raw = _plain(getattr(message, "executed_tools", None) or [])
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            url = node.get("url") or node.get("link") or node.get("href")
+            title = node.get("title") or node.get("name") or node.get("source") or url
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                key = url.strip()
+                if key not in seen:
+                    found.append({"title": str(title)[:180], "url": key})
+                    seen.add(key)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(raw)
+    return found[:8]
 
 
 def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: str):
@@ -167,12 +217,40 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
         if model.startswith("openai/gpt-oss"):
             kwargs["reasoning_effort"] = "medium"
     stream = client.chat.completions.create(**kwargs)
-    yield _event({"type": "start", "model": model, "provider": "groq"})
+    yield _event({"type": "start", "model": model, "provider": "groq", "web": False})
     for chunk in stream:
         token = chunk.choices[0].delta.content or ""
         if token:
             yield _event({"type": "token", "text": token})
     yield _event({"type": "done"})
+
+
+def _stream_groq_web(request: ChatRequest, messages: list[dict[str, str]], model: str):
+    if not model.startswith("openai/gpt-oss"):
+        raise RuntimeError("Live web search currently requires Apollo's GPT-OSS primary model")
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not configured")
+    client = Groq(api_key=api_key)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0.3,
+        max_completion_tokens=MAX_OUTPUT_TOKENS,
+        stream=False,
+        reasoning_effort="medium",
+        tool_choice="required",
+        tools=[{"type": "browser_search"}],
+    )
+    message = response.choices[0].message
+    content = message.content or ""
+    sources = _extract_web_sources(message)
+    yield _event({"type": "start", "model": model, "provider": "groq", "web": True})
+    if sources:
+        yield _event({"type": "sources", "sources": sources})
+    for start in range(0, len(content), 700):
+        yield _event({"type": "token", "text": content[start:start + 700]})
+    yield _event({"type": "done", "web": True})
 
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
@@ -188,7 +266,7 @@ def _stream_gemini(request: ChatRequest, system_content: str, model: str):
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=MAX_OUTPUT_TOKENS, system_instruction=system_content),
     )
-    yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True})
+    yield _event({"type": "start", "model": model, "provider": "gemini", "fallback": True, "web": False})
     for chunk in stream:
         text = getattr(chunk, "text", None) or ""
         if text:
@@ -201,9 +279,15 @@ def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     groq_model = request.model or PRIMARY_MODEL
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
     try:
-        yield from _stream_groq(request, messages, groq_model)
+        if request.web_enabled:
+            yield from _stream_groq_web(request, messages, groq_model)
+        else:
+            yield from _stream_groq(request, messages, groq_model)
         return
     except Exception as primary_exc:
+        if request.web_enabled:
+            yield _event({"type": "error", "message": f"Live web search failed: {primary_exc}"})
+            return
         if not os.getenv("GEMINI_API_KEY", "").strip():
             raise primary_exc
         yield _event({"type": "fallback", "from_model": groq_model, "to_model": GEMINI_FALLBACK_MODEL, "reason": str(primary_exc)})
@@ -232,7 +316,17 @@ def _stream_chat(request: ChatRequest):
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {"status": "ok", "service": "apollo-api", "version": "0.3.1", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL}
+    return {
+        "status": "ok",
+        "service": "apollo-api",
+        "version": "0.4.0",
+        "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "primary_model": PRIMARY_MODEL,
+        "vision_model": GROQ_VISION_MODEL,
+        "fallback_model": GEMINI_FALLBACK_MODEL,
+        "web_search": True,
+    }
 
 
 @app.get("/api/notebooks")
@@ -311,4 +405,8 @@ def notebook_search(notebook_id: str, request: RAGQueryRequest):
 
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> StreamingResponse:
-    return StreamingResponse(_stream_chat(request), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        _stream_chat(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
