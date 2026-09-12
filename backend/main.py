@@ -52,7 +52,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.3.0")
+app = FastAPI(title="Apollo API", version="0.3.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,6 +98,68 @@ def _event(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks: int = 6) -> tuple[str, list[str]]:
+    """Return representative chunks when lexical search finds no direct hit.
+
+    Queries such as "what does my source talk about?" often contain no terms
+    that occur in the document. In that case we still give the model a small,
+    representative sample of the active sources so it can summarize them.
+    """
+    data_dir = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
+    chunks_path = data_dir / "notebooks" / notebook_id / "chunks.json"
+    if not chunks_path.exists():
+        return "", source_names
+
+    try:
+        chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "", source_names
+
+    allowed = set(source_names or [])
+    filtered = [
+        chunk for chunk in chunks
+        if not allowed or chunk.get("source") in allowed
+    ]
+    if not filtered:
+        return "", source_names
+
+    selected: list[dict] = []
+    seen_sources: set[str] = set()
+
+    # Prefer the first chunk from every active source so a multi-source
+    # notebook overview represents each document at least once.
+    for chunk in filtered:
+        source = chunk.get("source", "unknown source")
+        if source not in seen_sources:
+            selected.append(chunk)
+            seen_sources.add(source)
+            if len(selected) >= max_chunks:
+                break
+
+    # Fill any remaining slots with subsequent chunks from the active sources.
+    if len(selected) < max_chunks:
+        selected_ids = {chunk.get("id") for chunk in selected}
+        for chunk in filtered:
+            if chunk.get("id") in selected_ids:
+                continue
+            selected.append(chunk)
+            if len(selected) >= max_chunks:
+                break
+
+    context = format_context(
+        [
+            {
+                "source": chunk.get("source", "unknown source"),
+                "text": chunk.get("text", ""),
+                "score": 0.0,
+            }
+            for chunk in selected
+        ],
+        max_chars=9000,
+    )
+    return context, list(dict.fromkeys(chunk.get("source", "unknown source") for chunk in selected))
+
+
 def _system_message(request: ChatRequest, context: str, source_names: list[str]) -> dict[str, str]:
     notebook = request.notebook_title or "the active notebook"
     sources = ", ".join(source_names) if source_names else "no active sources"
@@ -107,6 +169,8 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
         "Answer directly and naturally. Keep private chain-of-thought/reasoning hidden; "
         "return only the answer, conclusions, and concise useful explanations. "
         "Use supplied source context when it is relevant, and distinguish it from your own knowledge. "
+        "When the user asks what a source is about, summarize the supplied source context instead of "
+        "saying you lack access to the file. "
         "Do not claim to have searched or read a source unless the backend supplied that context."
     )
     if context:
@@ -226,6 +290,15 @@ def _stream_chat(request: ChatRequest):
                 context = format_context(results)
                 if results:
                     active_source_names = list(dict.fromkeys(result["source"] for result in results))
+                else:
+                    # Generic questions need representative source context even
+                    # when none of their query terms occur verbatim in the file.
+                    context, overview_sources = _load_overview_context(
+                        request.notebook_id,
+                        active_source_names,
+                    )
+                    if overview_sources:
+                        active_source_names = overview_sources
 
         yield from _stream_model(request, context, active_source_names)
     except Exception as exc:
@@ -237,7 +310,7 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "primary_model": PRIMARY_MODEL,
