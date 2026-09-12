@@ -7,4 +7,22 @@
 .source-empty-state strong{color:var(--text);font-size:13px}
 .source-empty-state span{max-width:210px;font-size:10px;line-height:1.55}
 
-@media (max-width:700px){.empty-chat-state{min-height:300px;padding:24px 12px}.empty-chat-state h2{font-size:20px}}
+/* AppReal uses .app-shell/.main-panel; keep the fixed sidebar from covering the app body. */
+.app-shell{width:100%;min-width:0;min-height:100vh;margin-left:278px;display:flex;flex-direction:column;transition:margin-left .2s ease}
+.apollo-sidebar.is-collapsed + .app-shell{margin-left:78px}
+.main-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.main-panel > .chat-main{flex:1;min-width:0;min-height:0}
+.console-layout{flex:1;min-width:0;min-height:0}
+.topbar{flex:0 0 64px}
+
+@media (max-width:900px){
+  .app-shell{margin-left:250px}
+  .apollo-sidebar.is-collapsed + .app-shell{margin-left:78px}
+}
+
+@media (max-width:700px){
+  .app-shell{margin-left:0}
+  .apollo-sidebar{transform:translateX(-100%)}
+  .apollo-sidebar.is-open{transform:translateX(0)}
+  .mobile-menu{display:grid}
+}
