@@ -231,8 +231,9 @@ export default function AppPhase6() {
         onStart: (p) => { setModel(p.model || ''); setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, model: p.model } : m)) },
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
+        onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
         onDone: () => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)); setBusy(false) },
-        onError: (message) => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: message, streaming: false } : m)); setBusy(false) },
+        onError: (message) => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m)); setBusy(false) },
       })
     } catch (error) {
       setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
