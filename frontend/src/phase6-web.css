@@ -4,6 +4,40 @@
   background: rgba(249,115,22,.12);
 }
 
+.research-mode-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid rgba(51,52,60,.9);
+  border-radius: 9px;
+  background: var(--surface-container);
+  color: var(--text-variant);
+  cursor: pointer;
+}
+
+.research-mode-select:hover {
+  color: var(--text);
+  border-color: rgba(249,115,22,.38);
+}
+
+.research-mode-select select {
+  appearance: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  max-width: 125px;
+}
+
+.research-mode-select select option {
+  color: #111;
+  background: #fff;
+}
+
 .web-citation {
   text-decoration: none;
   max-width: 280px;
@@ -18,5 +52,8 @@
   .topbar-actions {
     overflow-x: auto;
     max-width: 70vw;
+  }
+  .research-mode-select select {
+    max-width: 104px;
   }
 }
