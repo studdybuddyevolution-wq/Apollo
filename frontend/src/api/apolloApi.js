@@ -1,5 +1,35 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
+function cleanWebText(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/【[^】]{1,160}】/g, '')
+    .replace(/\[[0-9]+†L?[0-9]+(?:-L?[0-9]+)?\]/g, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/^\s*\|[-:| ]+\|\s*$/gm, '')
+    .replace(/^\s*\|\s*(.+?)\s*\|\s*$/gm, (_, row) => row.split('|').map((cell) => cell.trim()).filter(Boolean).join('  •  '))
+    .replace(/^\s*#{1,3}\s*/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, options)
+  if (!response.ok) {
+    let message = `Apollo API returned ${response.status}`
+    try {
+      const body = await response.json()
+      if (body?.detail) message = body.detail
+    } catch {
+      // Keep the HTTP status message when the backend does not return JSON.
+    }
+    throw new Error(message)
+  }
+  return response.json()
+}
+
 export async function streamChat({
   messages,
   model = 'openai/gpt-oss-120b',
@@ -47,6 +77,7 @@ export async function streamChat({
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let serverWebMode = webEnabled
 
   const consumeEvent = (rawEvent) => {
     const data = rawEvent
@@ -57,9 +88,12 @@ export async function streamChat({
     if (!data) return
 
     const payload = JSON.parse(data)
-    if (payload.type === 'start') onStart?.(payload)
+    if (payload.type === 'start') {
+      serverWebMode = Boolean(payload.web)
+      onStart?.(payload)
+    }
     if (payload.type === 'fallback') onFallback?.(payload)
-    if (payload.type === 'token') onToken?.(payload.text || '')
+    if (payload.type === 'token') onToken?.(serverWebMode ? cleanWebText(payload.text || '') : (payload.text || ''))
     if (payload.type === 'sources') onSources?.(payload.sources || [])
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
@@ -71,7 +105,6 @@ export async function streamChat({
   while (true) {
     const { value, done } = await reader.read()
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-
     let separatorIndex = buffer.indexOf('\n\n')
     while (separatorIndex !== -1) {
       const event = buffer.slice(0, separatorIndex)
