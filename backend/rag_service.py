@@ -1,37 +1,35 @@
 """Lightweight Apollo notebook/RAG service for the FastAPI backend.
 
-Phase 5 moves notebook state and source retrieval out of Streamlit. The service
-uses the same MiniLM embedding model family as the original Apollo app and
-FAISS for semantic retrieval. Storage is local to the backend instance for now;
-a durable database/object-store layer should be added before multi-user
-production persistence is required.
+This version intentionally avoids heavyweight ML/FAISS dependencies so the
+FastAPI service can run on a small/free Render instance. Retrieval uses a
+small BM25-style lexical ranker over stored chunks. A semantic embedding
+provider can be added later without changing the notebook API.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
+import math
 import os
 import re
 import shutil
 import threading
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import faiss
-import numpy as np
 from docx import Document as DocxDocument
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 
 
 DATA_DIR = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
 NOTEBOOKS_FILE = DATA_DIR / "notebooks.json"
-MODEL_NAME = os.getenv("APOLLO_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 _LOCK = threading.RLock()
-_MODEL: SentenceTransformer | None = None
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _now() -> str:
@@ -61,20 +59,12 @@ def _notebook_dir(notebook_id: str) -> Path:
     return DATA_DIR / "notebooks" / notebook_id
 
 
-def _index_path(notebook_id: str) -> Path:
-    return _notebook_dir(notebook_id) / "index.faiss"
-
-
 def _metadata_path(notebook_id: str) -> Path:
     return _notebook_dir(notebook_id) / "chunks.json"
 
 
-def _get_model() -> SentenceTransformer:
-    global _MODEL
-    with _LOCK:
-        if _MODEL is None:
-            _MODEL = SentenceTransformer(MODEL_NAME, device="cpu")
-        return _MODEL
+def _tokens(text: str) -> list[str]:
+    return [token.lower() for token in _TOKEN_RE.findall(text)]
 
 
 def _clean_text(text: str) -> str:
@@ -111,11 +101,9 @@ def _split_text(text: str, chunk_size: int = 1200, overlap: int = 180) -> list[s
 def _extract_text(filename: str, raw: bytes) -> str:
     lower = filename.lower()
     if lower.endswith(".pdf"):
-        reader = PdfReader(raw)
+        reader = PdfReader(io.BytesIO(raw))
         return "\n\n".join((page.extract_text() or "") for page in reader.pages)
     if lower.endswith(".docx"):
-        # python-docx requires a file-like object.
-        import io
         document = DocxDocument(io.BytesIO(raw))
         parts = [paragraph.text for paragraph in document.paragraphs]
         for table in document.tables:
@@ -139,23 +127,6 @@ def _save_chunks(notebook_id: str, chunks: list[dict[str, Any]]) -> None:
     notebook = _notebook_dir(notebook_id)
     notebook.mkdir(parents=True, exist_ok=True)
     _metadata_path(notebook_id).write_text(json.dumps(chunks, indent=2), encoding="utf-8")
-
-
-def _build_index(notebook_id: str, chunks: list[dict[str, Any]]) -> None:
-    notebook = _notebook_dir(notebook_id)
-    notebook.mkdir(parents=True, exist_ok=True)
-    if not chunks:
-        try:
-            _index_path(notebook_id).unlink()
-        except FileNotFoundError:
-            pass
-        return
-    texts = [chunk["text"] for chunk in chunks]
-    embeddings = _get_model().encode(texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
-    matrix = np.asarray(embeddings, dtype="float32")
-    index = faiss.IndexFlatIP(matrix.shape[1])
-    index.add(matrix)
-    faiss.write_index(index, str(_index_path(notebook_id)))
 
 
 def list_notebooks(user_id: str | None = None) -> list[dict[str, Any]]:
@@ -241,7 +212,6 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes)
             for chunk in chunks
         ]
         _save_chunks(notebook_id, new_chunks)
-        _build_index(notebook_id, new_chunks)
 
         key = _user_key(user_id)
         manifest = _load_manifest()
@@ -260,36 +230,81 @@ def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
     if not get_notebook(user_id, notebook_id):
         return False
     with _LOCK:
-        chunks = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
-        if len(chunks) == len(_load_chunks(notebook_id)):
+        existing = _load_chunks(notebook_id)
+        chunks = [c for c in existing if c.get("source") != filename]
+        if len(chunks) == len(existing):
             return False
         _save_chunks(notebook_id, chunks)
-        _build_index(notebook_id, chunks)
     return True
 
 
-def retrieve(user_id: str | None, notebook_id: str, query: str, top_k: int = 5, source_names: list[str] | None = None) -> list[dict[str, Any]]:
+def _bm25_scores(query: str, chunks: list[dict[str, Any]]) -> list[tuple[float, int]]:
+    if not chunks:
+        return []
+    query_terms = _tokens(query)
+    if not query_terms:
+        return []
+
+    document_terms = [_tokens(chunk.get("text", "")) for chunk in chunks]
+    doc_lengths = [len(tokens) for tokens in document_terms]
+    avgdl = sum(doc_lengths) / max(1, len(doc_lengths))
+    document_frequency: Counter[str] = Counter()
+    for terms in document_terms:
+        document_frequency.update(set(terms))
+
+    scores: list[tuple[float, int]] = []
+    k1 = 1.5
+    b = 0.75
+    n_docs = len(chunks)
+
+    for index, terms in enumerate(document_terms):
+        term_counts = Counter(terms)
+        dl = doc_lengths[index]
+        score = 0.0
+        for term in query_terms:
+            df = document_frequency.get(term, 0)
+            if not df:
+                continue
+            tf = term_counts.get(term, 0)
+            if not tf:
+                continue
+            idf = math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
+            denom = tf + k1 * (1 - b + b * dl / max(avgdl, 1.0))
+            score += idf * ((tf * (k1 + 1)) / max(denom, 1e-9))
+        scores.append((score, index))
+
+    scores.sort(reverse=True)
+    return scores
+
+
+def retrieve(
+    user_id: str | None,
+    notebook_id: str,
+    query: str,
+    top_k: int = 5,
+    source_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
     if not get_notebook(user_id, notebook_id):
         return []
     chunks = _load_chunks(notebook_id)
-    index_path = _index_path(notebook_id)
-    if not chunks or not index_path.exists():
+    if not chunks:
         return []
 
-    index = faiss.read_index(str(index_path))
-    query_vec = _get_model().encode([query], normalize_embeddings=True, convert_to_numpy=True)
-    scores, ids = index.search(np.asarray(query_vec, dtype="float32"), min(top_k * 3, len(chunks)))
     allowed = set(source_names or [])
+    filtered = [
+        chunk for chunk in chunks
+        if not allowed or chunk.get("source") in allowed
+    ]
+    ranked = _bm25_scores(query, filtered)
+
     results = []
-    for score, idx in zip(scores[0], ids[0]):
-        if idx < 0:
-            continue
-        chunk = chunks[int(idx)]
-        if allowed and chunk["source"] not in allowed:
-            continue
-        results.append({"source": chunk["source"], "text": chunk["text"], "score": float(score)})
-        if len(results) >= top_k:
-            break
+    for score, index in ranked[:top_k]:
+        chunk = filtered[index]
+        results.append({
+            "source": chunk["source"],
+            "text": chunk["text"],
+            "score": float(score),
+        })
     return results
 
 
