@@ -7,4 +7,36 @@
 .source-empty-state strong{color:var(--text);font-size:13px}
 .source-empty-state span{max-width:210px;font-size:10px;line-height:1.55}
 
-/* Content-only styles. The shell geometry lives in phase5-layout-fix.css so there is one source of truth. */
+/* Content-only styles. The shell geometry is handled by the Phase 5 layout files. */
+
+/* Sources/Studio are real drawers, not grid children. This keeps the controls
+   clickable and visible regardless of the main chat grid sizing. */
+.context-panel {
+  position: fixed !important;
+  top: 64px !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 360px !important;
+  height: calc(100vh - 64px) !important;
+  z-index: 60 !important;
+  background: var(--surface-lowest) !important;
+  border-left: 1px solid rgba(51,52,60,.9) !important;
+  box-shadow: -24px 0 55px rgba(0,0,0,.3) !important;
+  overflow-y: auto !important;
+}
+
+.context-header {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 2 !important;
+  background: rgba(13,14,21,.96) !important;
+  backdrop-filter: blur(14px) !important;
+}
+
+@media (max-width: 700px) {
+  .context-panel {
+    top: 56px !important;
+    width: min(92vw, 360px) !important;
+    height: calc(100vh - 56px) !important;
+  }
+}
