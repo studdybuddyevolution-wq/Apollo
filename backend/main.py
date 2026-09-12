@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
@@ -45,15 +45,11 @@ PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv(
-        "APOLLO_CORS_ORIGINS",
-        f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}",
-    )
+    raw = os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}")
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
 app = FastAPI(title="Apollo API", version="0.3.1")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -99,22 +95,18 @@ def _event(payload: dict) -> str:
 
 
 def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks: int = 6) -> tuple[str, list[str]]:
-    """Return representative chunks when lexical search finds no direct hit."""
     data_dir = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
     chunks_path = data_dir / "notebooks" / notebook_id / "chunks.json"
     if not chunks_path.exists():
         return "", source_names
-
     try:
         chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
     except Exception:
         return "", source_names
-
     allowed = set(source_names or [])
     filtered = [chunk for chunk in chunks if not allowed or chunk.get("source") in allowed]
     if not filtered:
         return "", source_names
-
     selected: list[dict] = []
     seen_sources: set[str] = set()
     for chunk in filtered:
@@ -132,7 +124,6 @@ def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks
             selected.append(chunk)
             if len(selected) >= max_chunks:
                 break
-
     context = format_context(
         [{"source": c.get("source", "unknown source"), "text": c.get("text", ""), "score": 0.0} for c in selected],
         max_chars=9000,
@@ -288,7 +279,7 @@ def notebook_sources(notebook_id: str, user_id: str = "default"):
 async def notebook_source_upload(
     notebook_id: str,
     file: UploadFile = File(...),
-    user_id: str = Form("default"),
+    user_id: str = Query("default"),
 ):
     raw = await file.read()
     if not raw:
