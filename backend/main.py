@@ -43,6 +43,8 @@ GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
 GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
 WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.8-flash")
 MAX_OUTPUT_TOKENS = 1000
+DEEP_OUTPUT_TOKENS = 3000
+WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 
 
@@ -51,7 +53,7 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-app = FastAPI(title="Apollo API", version="0.6.0")
+app = FastAPI(title="Apollo API", version="0.6.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -283,9 +285,11 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
             + "Write the final answer yourself. Do not mention the dossier or the research process. "
             + "For a request for extreme detail, be thorough and educational: define the topic, build the explanation chronologically or logically, "
             + "cover major events/ideas, explain causes and effects, provide concrete examples, and finish with key takeaways. "
+            + "Aim for a substantial answer, not a brief summary. Do not stop after the introduction. "
             + "Do not pad the answer with repetition. Use clean Markdown headings and bullet points. "
             + "Never emit Markdown tables, raw HTML, <br>, pipe-separated tables, or search-result syntax."
         )
+        output_tokens = DEEP_OUTPUT_TOKENS
     else:
         synthesis_instruction = (
             system_content
@@ -293,6 +297,7 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
             + "Do not paste snippets. Use clean Markdown headings or bullets only where useful. "
             + "Never emit Markdown tables, raw HTML, <br>, or search-result citation syntax."
         )
+        output_tokens = WEB_OUTPUT_TOKENS
 
     prompt = _conversation_text(request.messages, synthesis_instruction)
     prompt += f"\n\nTAVILY RESEARCH DOSSIER:\n{web_context}"
@@ -303,17 +308,21 @@ def _stream_web_with_tavily(request: ChatRequest, system_content: str):
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0.2,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
+            max_output_tokens=output_tokens,
             system_instruction=synthesis_instruction,
         ),
     )
     yield _event({"type": "start", "model": WEB_SYNTHESIS_MODEL, "provider": "gemini+tavily", "web": True, "deep": deep, "research": request.research_mode})
     if unique_sources:
         yield _event({"type": "sources", "sources": unique_sources})
-    for chunk in stream:
-        text = getattr(chunk, "text", None) or ""
-        if text:
-            yield _event({"type": "token", "text": text})
+    try:
+        for chunk in stream:
+            text = getattr(chunk, "text", None) or ""
+            if text:
+                yield _event({"type": "token", "text": text})
+    except Exception as exc:
+        yield _event({"type": "error", "message": f"Gemini research stream failed: {exc}"})
+        return
     yield _event({"type": "done", "web": True, "deep": deep, "research": request.research_mode})
 
 
@@ -381,7 +390,7 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "service": "apollo-api",
-        "version": "0.6.0",
+        "version": "0.6.1",
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
