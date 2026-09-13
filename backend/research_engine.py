@@ -104,7 +104,7 @@ def decompose_query(question: str, topic: str, study: bool = False) -> list[dict
     """Create focused, topic-adaptive sub-questions without hardcoding one subject."""
     focus = " ".join(_importance_terms(question))
     template = TOPIC_TEMPLATES.get(topic, TOPIC_TEMPLATES["conceptual"])
-    limit = 5 if study else 6
+    limit = 5
     result: list[dict[str, str]] = []
     for item in template[:limit]:
         prefix = "For study notes, prioritize clear facts and examples: " if study else ""
@@ -226,9 +226,9 @@ def format_evidence(evidence: list[dict[str, Any]], max_chars: int = 36000) -> s
     used = 0
     for i, item in enumerate(evidence, 1):
         if item.get("kind") == "notebook":
-            head = f"EVIDENCE {i} | NOTEBOOK SOURCE: {item.get('source', 'unknown')}"
+            head = f"[{i}] NOTEBOOK SOURCE: {item.get('source', 'unknown')}"
         else:
-            head = f"EVIDENCE {i} | WEB SOURCE: {item.get('title', 'untitled')} | URL: {item.get('url', '')} | published: {item.get('published_date', 'unknown')}"
+            head = f"[{i}] WEB SOURCE: {item.get('title', 'untitled')} | URL: {item.get('url', '')} | published: {item.get('published_date', 'unknown')}"
         block = f"{head}\n{item.get('text', '')}"
         if used + len(block) > max_chars:
             break
@@ -244,13 +244,23 @@ def build_synthesis_instruction(
     requested_detail: bool,
     study: bool,
 ) -> str:
-    sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline))
+    sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline[:5]))
     detail = "The user explicitly requested detailed/exhaustive coverage, so use the available budget for substantive detail." if requested_detail else "Match the requested depth; do not inflate a simple question just to fill the budget."
     study_note = "Optimize explanations for studying: definitions, examples, memory-friendly distinctions, and exam-relevant takeaways." if study else ""
-    return f"""You are Apollo Omni AI's universal Deep Research synthesizer.
+    return f"""You are Apollo Omni AI's universal Deep Search synthesizer.
+
+Deep Search format — follow this exact contract:
+1. Research plan: list 3-5 concrete sub-questions you will answer.
+2. Direct answer: 1-2 sentences immediately after the plan.
+3. Structured sections: use one `###` heading per sub-question; each section should contain 2-4 substantive paragraphs or equivalent detailed bullets.
+4. Use inline numeric citations like [1], [2], [3] for claims supported by the numbered evidence below.
+5. If the evidence contains meaningful disagreement, include a `### Conflicting sources` section and explain the disagreement rather than flattening it.
+6. Use a comparison table only when the user's question genuinely compares two or more things. Otherwise do not use tables.
+7. End with exactly 3 concise bullet points under `### Summary`.
+8. Target 500+ words when the question warrants that depth, while NEVER exceeding the 2500-token output ceiling.
 
 Topic classification: {topic}.
-Planned coverage:
+Planned coverage candidates:
 {sections}
 
 Evidence verification summary: {verification}
@@ -260,14 +270,15 @@ Evidence verification summary: {verification}
 
 Synthesis rules:
 - Reason over the supplied evidence, combining Apollo notebook evidence with Tavily web evidence.
-- Use specific source references for source-backed claims, e.g. [Notebook: filename] or [Web: site/title]. Never fabricate a citation.
+- Numeric citations [1], [2], etc. must refer to the numbered evidence blocks supplied to you. Never invent a citation or source.
 - Do not claim a source supports something that is not present in its supplied evidence.
 - Prefer authoritative, recent, and corroborated evidence. Mention uncertainty or conflicting evidence where material.
 - Complete the planned coverage rather than stopping after an introduction.
-- Use the topic-appropriate structure, but adapt it to the exact user request rather than blindly forcing every heading.
-- Use clean Markdown headings and bullets. Avoid Markdown tables, raw HTML, <br>, pipe-delimited tables, and search-result syntax.
-- Keep the final response within the 2500-token ceiling. Aim for about 1700-1900 words only when the request warrants that depth.
-- Perform a private self-check before finalizing: confirm that the planned coverage is substantially addressed, important claims are evidence-grounded, contradictions are not hidden, the response stays within budget, and the ending is complete.
+- Adapt the five planned sub-questions to the exact user request; do not force irrelevant headings.
+- Use clean Markdown headings, paragraphs, bullets, and comparison tables only when warranted.
+- Never output raw HTML, `<br>`, search-result syntax, or pipe-delimited pseudo-tables.
+- Use normal spacing and punctuation. Do not concatenate words or headings.
+- Perform a private self-check before finalizing: confirm that the research plan is present, the direct answer is present, every relevant sub-question is substantially addressed, important claims are evidence-grounded, contradictions are explicit, citations map to supplied evidence, the response stays within budget, and the final Summary has exactly 3 bullets.
 - Output only the polished final answer, never the private reasoning or self-check notes.
 """
 
@@ -304,7 +315,8 @@ def run_hybrid_research(
     merged = merge_evidence(evidence_by_pass)
     verification = verify_evidence(merged)
     outline = build_outline(topic, question)
-    unique_sources = list({s["url"]: s for s in web_sources if s.get("url")}.values())[:18]
+    unique = list({s["url"]: s for s in web_sources if s.get("url")}.values())[:18]
+    unique_sources = [{"index": i, **source} for i, source in enumerate(unique, 1)]
     return {
         "topic": topic,
         "plan": plan,
