@@ -6,13 +6,7 @@ function cleanResearchText(value) {
     .replace(/<[^>]+>/g, '')
     .replace(/【[^】]{1,160}】/g, '')
     .replace(/\[[0-9]+†L?[0-9]+(?:-L?[0-9]+)?\]/g, '')
-    .replace(/^\s*\|\s*[-:| ]+\|\s*$/gm, '')
-    .replace(/^\s*\|\s*(.+?)\s*\|\s*$/gm, (_, row) => row.split('|').map((cell) => cell.trim()).filter(Boolean).join('  •  '))
-    .replace(/^\s*#{1,4}\s*/gm, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
     .replace(/\n{3,}/g, '\n\n')
-    .trimStart()
 }
 
 async function openChat({
