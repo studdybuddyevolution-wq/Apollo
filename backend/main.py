@@ -153,7 +153,7 @@ def _gemini_model_chain(primary: str) -> list[str]:
     return list(dict.fromkeys([primary] + [m for m in GEMINI_FALLBACK_MODELS if m != primary]))
 
 
-def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any]):
+def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any], min_chars: int = 0):
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key: raise RuntimeError("GEMINI_API_KEY is not configured")
     from google import genai
@@ -166,9 +166,36 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
         try:
             stream = client.models.generate_content_stream(model=model, contents=prompt, config=types.GenerateContentConfig(max_output_tokens=output_tokens, system_instruction=system_instruction))
             yield _event({"type": "start", "model": model, **event_meta})
+            generated = ""
+            finish_reason = None
             for chunk in stream:
                 text = getattr(chunk, "text", None) or ""
-                if text: yield _event({"type": "token", "text": text})
+                if text:
+                    generated += text
+                    yield _event({"type": "token", "text": text})
+                candidates = getattr(chunk, "candidates", None) or []
+                if candidates:
+                    candidate_reason = getattr(candidates[0], "finish_reason", None)
+                    if candidate_reason is not None:
+                        finish_reason = candidate_reason
+
+            reason_name = "" if finish_reason is None else (getattr(finish_reason, "name", None) or str(finish_reason).split(".")[-1]).upper()
+            abnormal_finish = bool(reason_name) and reason_name not in {"STOP", "UNSPECIFIED"}
+            short_response = min_chars > 0 and len(generated.strip()) < min_chars
+            if abnormal_finish or short_response:
+                reasons = []
+                if abnormal_finish:
+                    reasons.append(f"finish_reason={reason_name}")
+                if short_response:
+                    reasons.append(f"response_too_short={len(generated.strip())}<{min_chars}")
+                reason = "; ".join(reasons)
+                last_error = RuntimeError(f"Gemini {model} returned an incomplete response: {reason}")
+                if is_last:
+                    yield _event({"type": "error", "message": str(last_error)})
+                    return
+                yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(last_error)})
+                continue
+
             yield _event({"type": "done", "model": model, **event_meta}); return
         except Exception as exc:
             last_error = exc
@@ -182,14 +209,15 @@ def _stream_deep_research(request: ChatRequest, system_content: str, context: st
     question = next((m.content for m in reversed(request.messages) if m.role == "user"), "").strip()
     if not question:
         raise RuntimeError("No user query supplied for Deep Research")
+    requested_detail = is_detailed_request(question)
     plan = run_hybrid_research(question=question, user_id=request.user_id, notebook_id=request.notebook_id, source_names=source_names, study=request.research_mode == "study")
-    instruction = build_synthesis_instruction(topic=plan["topic"], outline=plan["outline"], verification=plan["verification"], requested_detail=is_detailed_request(question), study=request.research_mode == "study")
+    instruction = build_synthesis_instruction(topic=plan["topic"], outline=plan["outline"], verification=plan["verification"], requested_detail=requested_detail, study=request.research_mode == "study")
     evidence = format_evidence(plan["evidence"])
     notebook_context = f"\n\nLEGACY ACTIVE NOTEBOOK CONTEXT:\n{context}" if context else ""
     prompt = _conversation_text(request.messages, instruction) + "\n\nRESEARCH PLAN:\n" + json.dumps(plan["plan"], ensure_ascii=False, indent=2) + "\n\nVERIFIED EVIDENCE:\n" + evidence + notebook_context
     if plan["web_sources"]:
         yield _event({"type": "sources", "sources": plan["web_sources"]})
-    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=DEEP_OUTPUT_TOKENS, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+hybrid-rag+tavily", "web": True, "deep": True, "research": request.research_mode, "topic": plan["topic"], "evidence": {k: plan["verification"][k] for k in ("web_sources", "notebook_chunks", "high_authority_sources")}})
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=DEEP_OUTPUT_TOKENS, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+hybrid-rag+tavily", "web": True, "deep": True, "research": request.research_mode, "topic": plan["topic"], "evidence": {k: plan["verification"][k] for k in ("web_sources", "notebook_chunks", "high_authority_sources")}}, min_chars=1200 if requested_detail else 400)
 
 
 def _stream_web(request: ChatRequest, system_content: str):
