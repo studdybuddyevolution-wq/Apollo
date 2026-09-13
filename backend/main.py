@@ -180,7 +180,7 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
                         finish_reason = candidate_reason
 
             reason_name = "" if finish_reason is None else (getattr(finish_reason, "name", None) or str(finish_reason).split(".")[-1]).upper()
-            abnormal_finish = bool(reason_name) and reason_name not in {"STOP", "UNSPECIFIED"}
+            abnormal_finish = bool(reason_name) and reason_name != "STOP"
             short_response = min_chars > 0 and len(generated.strip()) < min_chars
             if abnormal_finish or short_response:
                 reasons = []
