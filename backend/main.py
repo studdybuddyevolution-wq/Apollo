@@ -111,10 +111,15 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
         "When the user asks what a source is about, summarize supplied source context. "
         "Do not claim to have searched or read a source unless the backend supplied that context."
     )
-    if request.web_enabled and request.research_mode == "web":
+    if request.research_mode == "quick":
         content += (
-            " Live web research is enabled. Web results are supplied by Tavily. Use them as evidence and synthesize a direct answer. "
-            "Do not paste search results or use Markdown tables, raw HTML, <br>, or internal citation markers. Prefer authoritative sources."
+            " Use Apollo Quick Search format: answer directly in 1-2 sentences, then use 1-3 inline numeric citations like [1] or [2]. "
+            "Do not use headings or bullet lists. Stay under 80 words. If uncertain, state that uncertainty in one line."
+        )
+    elif request.web_enabled and request.research_mode == "web":
+        content += (
+            " Use Apollo Medium Search format: begin with a 1-sentence direct answer, then provide 2-4 short paragraphs or bullet points with supporting detail, using inline numeric citations like [1], [2], [3]. "
+            "End with one short Key takeaway line. Keep the total response between 150 and 300 words."
         )
     if context:
         content += f"\n\nSOURCE CONTEXT:\n{context}"
@@ -197,19 +202,21 @@ def _stream_web(request: ChatRequest, system_content: str):
         raise RuntimeError("TAVILY_API_KEY is not configured")
     response = TavilyClient(api_key=key).search(query=question, search_depth="advanced", topic="general", max_results=8, chunks_per_source=2, include_answer=False, include_raw_content=True)
     sources, blocks, seen = [], [], set()
-    for item in response.get("results", []) or []:
+    for index, item in enumerate(response.get("results", []) or [], 1):
         url = str(item.get("url") or "").strip()
         title = str(item.get("title") or url).strip()
         text = str(item.get("raw_content") or item.get("content") or "").strip()
         if url and url not in seen:
-            sources.append({"title": title[:180], "url": url})
+            sources.append({"title": title[:180], "url": url, "index": index})
             seen.add(url)
         if text:
-            blocks.append(f"SOURCE: {title}\nURL: {url}\n{text[:6000]}")
+            blocks.append(f"SOURCE [{index}]: {title}\nURL: {url}\n{text[:6000]}")
     if not blocks:
         raise RuntimeError("Tavily returned no usable web results")
-    instruction = system_content + "\n\nYou are Apollo's web-answer synthesizer. Write the answer from the Tavily evidence. Do not paste snippets. Prefer authoritative sources. Use clean Markdown and finish naturally."
-    prompt = _conversation_text(request.messages, instruction) + "\n\nTAVILY RESEARCH DOSSIER:\n" + "\n\n---\n\n".join(blocks)
+    instruction = system_content + (
+        "\n\nYou are Apollo's Medium Search synthesizer. Follow the Medium Search format exactly: begin with a 1-sentence direct answer; then use 2-4 short paragraphs or bullet points with supporting detail; cite supporting claims inline as [1], [2], [3] using the numbered sources supplied below; finish with a single 'Key takeaway:' line. Keep the entire response between 150 and 300 words. Do not add extra sections."
+    )
+    prompt = _conversation_text(request.messages, instruction) + "\n\nTAVILY SOURCES:\n" + "\n\n---\n\n".join(blocks)
     if sources:
         yield _event({"type": "sources", "sources": sources[:12]})
     yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=WEB_OUTPUT_TOKENS, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+tavily", "web": True, "deep": False, "research": "web"})
