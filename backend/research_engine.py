@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -286,14 +287,19 @@ def run_hybrid_research(
 ) -> dict[str, Any]:
     topic = classify_query(question)
     plan = decompose_query(question, topic, study=study)
-    evidence_by_pass: list[list[dict[str, Any]]] = []
-    web_sources: list[dict[str, str]] = []
 
-    for item in plan:
+    def run_pass(item: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
         notebook = retrieve_notebook_evidence(user_id, notebook_id, item["query"], source_names)
         web, sources = retrieve_tavily_evidence(item["query"], deep=True)
-        evidence_by_pass.append(merge_evidence([notebook, web]))
-        web_sources.extend(sources)
+        return merge_evidence([notebook, web]), sources
+
+    evidence_by_pass: list[list[dict[str, Any]]] = []
+    web_sources: list[dict[str, str]] = []
+    max_workers = min(3, len(plan)) or 1
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="apollo-research") as executor:
+        for evidence, sources in executor.map(run_pass, plan):
+            evidence_by_pass.append(evidence)
+            web_sources.extend(sources)
 
     merged = merge_evidence(evidence_by_pass)
     verification = verify_evidence(merged)
