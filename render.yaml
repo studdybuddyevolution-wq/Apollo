@@ -11,5 +11,11 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: APOLLO_CORS_ORIGINS
         sync: false
