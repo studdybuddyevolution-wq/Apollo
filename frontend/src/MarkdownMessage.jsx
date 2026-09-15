@@ -6,9 +6,10 @@ const stripWebArtifacts = (value) => value
   .replace(/\s+\.{3,}\s+/g, ' ')
   .replace(/[ \t]{2,}/g, ' ')
 
-function inlineParts(text) {
+function inlineParts(text, sources = []) {
   const parts = []
-  const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\))/g
+  const sourceByIndex = new Map((sources || []).map((source, index) => [Number(source.index ?? index + 1), source]))
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\)|\[(\d+)\])/g
   let last = 0
   let match
   while ((match = re.exec(text)) !== null) {
@@ -18,6 +19,14 @@ function inlineParts(text) {
       parts.push(<strong key={`${match.index}-b`}>{token.slice(2, -2)}</strong>)
     } else if (token.startsWith('`')) {
       parts.push(<code key={`${match.index}-c`}>{token.slice(1, -1)}</code>)
+    } else if (match[2]) {
+      const index = Number(match[2])
+      const source = sourceByIndex.get(index)
+      if (source?.url) {
+        parts.push(<a className="md-citation" key={`${match.index}-cite`} href={source.url} target="_blank" rel="noreferrer" title={source.title || source.url}>[{index}]</a>)
+      } else {
+        parts.push(<span className="md-citation md-citation-unresolved" key={`${match.index}-cite`}>[{index}]</span>)
+      }
     } else {
       const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/)
       if (link) parts.push(<a key={`${match.index}-a`} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>)
@@ -53,7 +62,7 @@ function parseTable(lines, start) {
   return { headers, rows, end }
 }
 
-export default function MarkdownMessage({ content }) {
+export default function MarkdownMessage({ content, sources = [] }) {
   const text = stripWebArtifacts(content || '')
   const lines = text.split(/\r?\n/)
   const blocks = []
@@ -69,8 +78,8 @@ export default function MarkdownMessage({ content }) {
       blocks.push(
         <div className="md-table-wrap" key={`table-${i}`}>
           <table className="md-table">
-            <thead><tr>{table.headers.map((h, idx) => <th key={idx}>{inlineParts(cleanLine(h))}</th>)}</tr></thead>
-            <tbody>{table.rows.map((row, ridx) => <tr key={ridx}>{table.headers.map((_, cidx) => <td key={cidx}>{inlineParts(cleanLine(row[cidx] || ''))}</td>)}</tr>)}</tbody>
+            <thead><tr>{table.headers.map((h, idx) => <th key={idx}>{inlineParts(cleanLine(h), sources)}</th>)}</tr></thead>
+            <tbody>{table.rows.map((row, ridx) => <tr key={ridx}>{table.headers.map((_, cidx) => <td key={cidx}>{inlineParts(cleanLine(row[cidx] || ''), sources)}</td>)}</tr>)}</tbody>
           </table>
         </div>,
       )
@@ -80,7 +89,7 @@ export default function MarkdownMessage({ content }) {
 
     if (/^#{1,3}\s+/.test(line)) {
       const level = line.match(/^#+/)?.[0].length || 2
-      blocks.push(React.createElement(`h${Math.min(level + 1, 4)}`, { key: `h-${i}` }, inlineParts(line.replace(/^#{1,3}\s+/, ''))))
+      blocks.push(React.createElement(`h${Math.min(level + 1, 4)}`, { key: `h-${i}` }, inlineParts(line.replace(/^#{1,3}\s+/, ''), sources)))
       i += 1
       continue
     }
@@ -92,7 +101,7 @@ export default function MarkdownMessage({ content }) {
       while (cursor < lines.length) {
         const match = cleanLine(lines[cursor]).match(/^\d+[.)]\s+(.*)$/)
         if (!match) break
-        items.push(<li key={cursor}>{inlineParts(match[1])}</li>)
+        items.push(<li key={cursor}>{inlineParts(match[1], sources)}</li>)
         cursor += 1
       }
       blocks.push(<ol className="md-list" key={`ol-${i}`}>{items}</ol>)
@@ -106,7 +115,7 @@ export default function MarkdownMessage({ content }) {
       while (cursor < lines.length) {
         const match = cleanLine(lines[cursor]).match(/^[-*]\s+(.*)$/)
         if (!match) break
-        items.push(<li key={cursor}>{inlineParts(match[1])}</li>)
+        items.push(<li key={cursor}>{inlineParts(match[1], sources)}</li>)
         cursor += 1
       }
       blocks.push(<ul className="md-list" key={`ul-${i}`}>{items}</ul>)
@@ -122,7 +131,7 @@ export default function MarkdownMessage({ content }) {
       paragraph.push(next)
       cursor += 1
     }
-    blocks.push(<p key={`p-${i}`}>{inlineParts(paragraph.join(' '))}</p>)
+    blocks.push(<p key={`p-${i}`}>{inlineParts(paragraph.join(' '), sources)}</p>)
     i = cursor
   }
 
