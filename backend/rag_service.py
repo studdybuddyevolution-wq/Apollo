@@ -1,10 +1,4 @@
-"""Lightweight Apollo notebook/RAG service for the FastAPI backend.
-
-This version intentionally avoids heavyweight ML/FAISS dependencies so the
-FastAPI service can run on a small/free Render instance. Retrieval uses a
-small BM25-style lexical ranker over stored chunks. A semantic embedding
-provider can be added later without changing the notebook API.
-"""
+"""Lightweight Apollo notebook/RAG service for the FastAPI backend."""
 
 from __future__ import annotations
 
@@ -24,10 +18,10 @@ from typing import Any
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 
+from storage import STORE
 
 DATA_DIR = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
 NOTEBOOKS_FILE = DATA_DIR / "notebooks.json"
-
 _LOCK = threading.RLock()
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
@@ -131,6 +125,8 @@ def _save_chunks(notebook_id: str, chunks: list[dict[str, Any]]) -> None:
 
 def list_notebooks(user_id: str | None = None) -> list[dict[str, Any]]:
     key = _user_key(user_id)
+    if STORE:
+        return STORE.list_notebooks(key)
     with _LOCK:
         return list(_load_manifest().get(key, []))
 
@@ -147,6 +143,9 @@ def create_notebook(user_id: str | None, title: str) -> dict[str, Any]:
         "source_count": 0,
         "node_count": 0,
     }
+    if STORE:
+        STORE.create_notebook(record, key)
+        return record
     with _LOCK:
         manifest = _load_manifest()
         manifest.setdefault(key, []).append(record)
@@ -155,16 +154,22 @@ def create_notebook(user_id: str | None, title: str) -> dict[str, Any]:
 
 
 def get_notebook(user_id: str | None, notebook_id: str) -> dict[str, Any] | None:
+    key = _user_key(user_id)
+    if STORE:
+        return STORE.get_notebook(key, notebook_id)
     return next((nb for nb in list_notebooks(user_id) if nb["id"] == notebook_id), None)
 
 
 def rename_notebook(user_id: str | None, notebook_id: str, title: str) -> dict[str, Any] | None:
     key = _user_key(user_id)
+    clean_title = title.strip()
+    if STORE:
+        return STORE.rename_notebook(key, notebook_id, clean_title or "Untitled Notebook", _now())
     with _LOCK:
         manifest = _load_manifest()
         for notebook in manifest.get(key, []):
             if notebook["id"] == notebook_id:
-                notebook["title"] = title.strip() or notebook["title"]
+                notebook["title"] = clean_title or notebook["title"]
                 notebook["updated"] = _now()
                 _save_manifest(manifest)
                 return notebook
@@ -173,6 +178,8 @@ def rename_notebook(user_id: str | None, notebook_id: str, title: str) -> dict[s
 
 def delete_notebook(user_id: str | None, notebook_id: str) -> bool:
     key = _user_key(user_id)
+    if STORE:
+        return STORE.delete_notebook(key, notebook_id)
     with _LOCK:
         manifest = _load_manifest()
         notebooks = manifest.get(key, [])
@@ -185,9 +192,10 @@ def delete_notebook(user_id: str | None, notebook_id: str) -> bool:
 
 
 def list_sources(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]:
-    notebook = get_notebook(user_id, notebook_id)
-    if not notebook:
+    if not get_notebook(user_id, notebook_id):
         return []
+    if STORE:
+        return STORE.list_sources(notebook_id)
     chunks = _load_chunks(notebook_id)
     grouped: dict[str, dict[str, Any]] = {}
     for chunk in chunks:
@@ -204,31 +212,38 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes)
     chunks = _split_text(text)
     if not chunks:
         raise ValueError("No readable text found in source")
-
+    new_chunks = [
+        {"id": uuid.uuid4().hex, "source": filename, "kind": "file", "text": chunk}
+        for chunk in chunks
+    ]
+    if STORE:
+        STORE.replace_source(notebook_id, filename, new_chunks)
+        STORE.update_counts(notebook_id, _now(), len(STORE.list_sources(notebook_id)), len(STORE.list_chunks(notebook_id)))
+        return {"name": filename, "kind": "file", "chunks": len(chunks), "characters": len(text)}
     with _LOCK:
         existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
-        new_chunks = existing + [
-            {"id": uuid.uuid4().hex, "source": filename, "kind": "file", "text": chunk}
-            for chunk in chunks
-        ]
-        _save_chunks(notebook_id, new_chunks)
-
+        all_chunks = existing + new_chunks
+        _save_chunks(notebook_id, all_chunks)
         key = _user_key(user_id)
         manifest = _load_manifest()
         for notebook in manifest.get(key, []):
             if notebook["id"] == notebook_id:
                 notebook["updated"] = _now()
                 notebook["source_count"] = len(list_sources(user_id, notebook_id))
-                notebook["node_count"] = len(new_chunks)
+                notebook["node_count"] = len(all_chunks)
                 break
         _save_manifest(manifest)
-
     return {"name": filename, "kind": "file", "chunks": len(chunks), "characters": len(text)}
 
 
 def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
     if not get_notebook(user_id, notebook_id):
         return False
+    if STORE:
+        removed = STORE.delete_source(notebook_id, filename)
+        if removed:
+            STORE.update_counts(notebook_id, _now(), len(STORE.list_sources(notebook_id)), len(STORE.list_chunks(notebook_id)))
+        return removed
     with _LOCK:
         existing = _load_chunks(notebook_id)
         chunks = [c for c in existing if c.get("source") != filename]
@@ -244,19 +259,16 @@ def _bm25_scores(query: str, chunks: list[dict[str, Any]]) -> list[tuple[float, 
     query_terms = _tokens(query)
     if not query_terms:
         return []
-
     document_terms = [_tokens(chunk.get("text", "")) for chunk in chunks]
     doc_lengths = [len(tokens) for tokens in document_terms]
     avgdl = sum(doc_lengths) / max(1, len(doc_lengths))
     document_frequency: Counter[str] = Counter()
     for terms in document_terms:
         document_frequency.update(set(terms))
-
     scores: list[tuple[float, int]] = []
     k1 = 1.5
     b = 0.75
     n_docs = len(chunks)
-
     for index, terms in enumerate(document_terms):
         term_counts = Counter(terms)
         dl = doc_lengths[index]
@@ -272,40 +284,20 @@ def _bm25_scores(query: str, chunks: list[dict[str, Any]]) -> list[tuple[float, 
             denom = tf + k1 * (1 - b + b * dl / max(avgdl, 1.0))
             score += idf * ((tf * (k1 + 1)) / max(denom, 1e-9))
         scores.append((score, index))
-
     scores.sort(reverse=True)
     return scores
 
 
-def retrieve(
-    user_id: str | None,
-    notebook_id: str,
-    query: str,
-    top_k: int = 5,
-    source_names: list[str] | None = None,
-) -> list[dict[str, Any]]:
+def retrieve(user_id: str | None, notebook_id: str, query: str, top_k: int = 5, source_names: list[str] | None = None) -> list[dict[str, Any]]:
     if not get_notebook(user_id, notebook_id):
         return []
-    chunks = _load_chunks(notebook_id)
+    chunks = STORE.list_chunks(notebook_id) if STORE else _load_chunks(notebook_id)
     if not chunks:
         return []
-
     allowed = set(source_names or [])
-    filtered = [
-        chunk for chunk in chunks
-        if not allowed or chunk.get("source") in allowed
-    ]
+    filtered = [chunk for chunk in chunks if not allowed or chunk.get("source") in allowed]
     ranked = _bm25_scores(query, filtered)
-
-    results = []
-    for score, index in ranked[:top_k]:
-        chunk = filtered[index]
-        results.append({
-            "source": chunk["source"],
-            "text": chunk["text"],
-            "score": float(score),
-        })
-    return results
+    return [{"source": filtered[index]["source"], "text": filtered[index]["text"], "score": float(score)} for score, index in ranked[:top_k]]
 
 
 def format_context(results: list[dict[str, Any]], max_chars: int = 9000) -> str:
