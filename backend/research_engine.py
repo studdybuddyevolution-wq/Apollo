@@ -104,7 +104,7 @@ def decompose_query(question: str, topic: str, study: bool = False) -> list[dict
     """Create focused, topic-adaptive sub-questions without hardcoding one subject."""
     focus = " ".join(_importance_terms(question))
     template = TOPIC_TEMPLATES.get(topic, TOPIC_TEMPLATES["conceptual"])
-    limit = 5
+    limit = 6
     result: list[dict[str, str]] = []
     for item in template[:limit]:
         prefix = "For study notes, prioritize clear facts and examples: " if study else ""
@@ -244,7 +244,7 @@ def build_synthesis_instruction(
     requested_detail: bool,
     study: bool,
 ) -> str:
-    sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline[:5]))
+    sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline[:6]))
     detail = "The user explicitly requested detailed/exhaustive coverage, so use the available budget for substantive detail." if requested_detail else "Match the requested depth; do not inflate a simple question just to fill the budget."
     study_note = "Optimize explanations for studying: definitions, examples, memory-friendly distinctions, and exam-relevant takeaways." if study else ""
     return f"""You are Apollo Omni AI's universal Deep Search synthesizer.
