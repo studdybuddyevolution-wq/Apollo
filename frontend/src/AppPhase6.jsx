@@ -47,7 +47,7 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
   return (
     <aside className={`apollo-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="sidebar-brand">
-        <div className="brand-mark"><Sparkles size={18} /></div>
+        <div className="brand-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="28" height="28" /></div>
         {!collapsed && <div><div className="brand-name">APOLLO</div><div className="brand-subtitle">OMNI AI</div></div>}
         <button className="icon-button sidebar-toggle" onClick={() => setCollapsed((v) => !v)} aria-label="Toggle sidebar">
           {collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
