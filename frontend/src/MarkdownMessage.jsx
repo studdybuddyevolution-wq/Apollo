@@ -9,7 +9,7 @@ const stripWebArtifacts = (value) => value
 function inlineParts(text, sources = []) {
   const parts = []
   const sourceByIndex = new Map((sources || []).map((source, index) => [Number(source.index ?? index + 1), source]))
-  const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\)|\[(\d+)\])/g
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\)|\[(\d+(?:,\s*\d+)*)\])/g
   let last = 0
   let match
   while ((match = re.exec(text)) !== null) {
@@ -20,13 +20,18 @@ function inlineParts(text, sources = []) {
     } else if (token.startsWith('`')) {
       parts.push(<code key={`${match.index}-c`}>{token.slice(1, -1)}</code>)
     } else if (match[2]) {
-      const index = Number(match[2])
-      const source = sourceByIndex.get(index)
-      if (source?.url) {
-        parts.push(<a className="md-citation" key={`${match.index}-cite`} href={source.url} target="_blank" rel="noreferrer" title={source.title || source.url}>[{index}]</a>)
-      } else {
-        parts.push(<span className="md-citation md-citation-unresolved" key={`${match.index}-cite`}>[{index}]</span>)
-      }
+      const indices = match[2].split(',').map((n) => Number(n.trim()))
+      parts.push(
+        <span key={`${match.index}-cite`} className="md-citation-group">
+          [{indices.map((index, i) => {
+            const source = sourceByIndex.get(index)
+            const el = source?.url
+              ? <a className="md-citation" href={source.url} target="_blank" rel="noreferrer" title={source.title || source.url} key={index}>{index}</a>
+              : <span className="md-citation md-citation-unresolved" key={index}>{index}</span>
+            return i === 0 ? el : <React.Fragment key={`sep-${index}`}>, {el}</React.Fragment>
+          })}]
+        </span>
+      )
     } else {
       const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/)
       if (link) parts.push(<a key={`${match.index}-a`} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>)
