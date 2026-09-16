@@ -8,7 +8,7 @@ from typing import Any
 
 
 class PostgresStore:
-    """Optional Postgres store for Apollo notebooks and source chunks."""
+    """Optional Postgres store for Apollo notebook and source persistence."""
 
     def __init__(self, url: str):
         try:
@@ -18,10 +18,11 @@ class PostgresStore:
         self._psycopg = psycopg
         self._url = url
         self._lock = threading.RLock()
+        self._connect_timeout = int(os.getenv("APOLLO_DB_CONNECT_TIMEOUT", "5"))
         self._ensure_schema()
 
     def _connect(self):
-        return self._psycopg.connect(self._url)
+        return self._psycopg.connect(self._url, connect_timeout=self._connect_timeout)
 
     def _ensure_schema(self) -> None:
         with self._lock, self._connect() as conn:
@@ -157,4 +158,13 @@ class PostgresStore:
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-STORE = PostgresStore(DATABASE_URL) if DATABASE_URL else None
+if DATABASE_URL:
+    try:
+        STORE = PostgresStore(DATABASE_URL)
+        print("[Apollo storage] PostgreSQL store connected")
+    except Exception as exc:
+        STORE = None
+        print(f"[Apollo storage] PostgreSQL unavailable; using filesystem fallback: {exc}")
+else:
+    STORE = None
+    print("[Apollo storage] DATABASE_URL not configured; using filesystem storage")
