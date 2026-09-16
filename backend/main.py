@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
@@ -27,6 +30,24 @@ MAX_OUTPUT_TOKENS = 1000
 DEEP_OUTPUT_TOKENS = 2500
 WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
+RATE_LIMIT_MAX = int(os.getenv("APOLLO_RATE_LIMIT_MAX", "20"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "600"))
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits: dict[str, list[float]] = defaultdict(list)
+
+def _check_rate_limit(key: str) -> tuple[bool, int]:
+    """Sliding-window limiter. Returns (allowed, retry_after_seconds)."""
+    now = time.time()
+    with _rate_limit_lock:
+        hits = _rate_limit_hits[key]
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+        while hits and hits[0] < cutoff:
+            hits.pop(0)
+        if len(hits) >= RATE_LIMIT_MAX:
+            retry_after = int(hits[0] + RATE_LIMIT_WINDOW_SECONDS - now) + 1
+            return False, max(retry_after, 1)
+        hits.append(now)
+        return True, 0
 
 app = FastAPI(title="Apollo API", version="0.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -370,5 +391,9 @@ def notebook_search(notebook_id: str, request: RAGQueryRequest):
 
 
 @app.post("/api/chat")
-def chat(request: ChatRequest) -> StreamingResponse:
+def chat(request: ChatRequest, http_request: Request) -> StreamingResponse:
+    rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
+    allowed, retry_after = _check_rate_limit(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
     return StreamingResponse(_stream_chat(request), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no-cache"})
