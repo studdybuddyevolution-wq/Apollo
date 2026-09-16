@@ -247,6 +247,10 @@ def build_synthesis_instruction(
     sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline[:6]))
     detail = "The user explicitly requested detailed/exhaustive coverage, so use the available budget for substantive detail." if requested_detail else "Match the requested depth; do not inflate a simple question just to fill the budget."
     study_note = "Optimize explanations for studying: definitions, examples, memory-friendly distinctions, and exam-relevant takeaways." if study else ""
+    if requested_detail or study:
+        closing_contract = "7. End with `### Key Terms` (a short glossary of the most important terms, names, or dates from this answer) followed by `### Exam-Oriented Takeaways` (5-8 concise bullet points on what is most likely to be tested or asked)."
+    else:
+        closing_contract = "7. End with exactly 3 concise bullet points under `### Summary`."
     return f"""You are Apollo Omni AI's universal Deep Search synthesizer.
 
 Deep Search format — follow this exact contract:
@@ -256,7 +260,7 @@ Deep Search format — follow this exact contract:
 4. Use inline numeric citations like [1], [2], [3] for claims supported by the numbered evidence below.
 5. If the evidence contains meaningful disagreement, include a `### Conflicting sources` section and explain the disagreement rather than flattening it.
 6. Use a comparison table only when the user's question genuinely compares two or more things. Otherwise do not use tables.
-7. End with exactly 3 concise bullet points under `### Summary`.
+{closing_contract}
 8. Target 500+ words when the question warrants that depth, while NEVER exceeding the 2500-token output ceiling.
 
 Topic classification: {topic}.
@@ -278,7 +282,7 @@ Synthesis rules:
 - Use clean Markdown headings, paragraphs, bullets, and comparison tables only when warranted.
 - Never output raw HTML, `<br>`, search-result syntax, or pipe-delimited pseudo-tables.
 - Use normal spacing and punctuation. Do not concatenate words or headings.
-- Perform a private self-check before finalizing: confirm that the research plan is present, the direct answer is present, every relevant sub-question is substantially addressed, important claims are evidence-grounded, contradictions are explicit, citations map to supplied evidence, the response stays within budget, and the final Summary has exactly 3 bullets.
+- Perform a private self-check before finalizing: confirm that the research plan is present, the direct answer is present, every relevant sub-question is substantially addressed, important claims are evidence-grounded, contradictions are explicit, citations map to supplied evidence, the response stays within budget, and the closing section(s) match the contract above (either the 3-bullet Summary, or the Key Terms + Exam-Oriented Takeaways sections when the request is detailed/study-mode).
 - Output only the polished final answer, never the private reasoning or self-check notes.
 """
 
