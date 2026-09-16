@@ -210,7 +210,7 @@ def _stream_deep_research(request: ChatRequest, system_content: str, context: st
     if not question:
         raise RuntimeError("No user query supplied for Deep Research")
     requested_detail = is_detailed_request(question)
-    plan = run_hybrid_research(question=question, user_id=request.user_id, notebook_id=request.notebook_id, source_names=source_names, study=request.research_mode == "study")
+    plan = run_hybrid_research(question=question, user_id=request.user_id, notebook_id=request.notebook_id, source_names=source_names, study=request.research_mode == "study", deep=request.research_mode in ("deep", "study"))
     instruction = build_synthesis_instruction(topic=plan["topic"], outline=plan["outline"], verification=plan["verification"], requested_detail=requested_detail, study=request.research_mode == "study")
     evidence = format_evidence(plan["evidence"])
     notebook_context = f"\n\nLEGACY ACTIVE NOTEBOOK CONTEXT:\n{context}" if context else ""
