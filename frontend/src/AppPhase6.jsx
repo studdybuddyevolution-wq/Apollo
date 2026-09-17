@@ -5,7 +5,7 @@ import {
   LoaderCircle, Menu, Paperclip, Plus, Search, Settings, Sparkles, Upload, User,
   Video, WandSparkles, X, Activity, SlidersHorizontal,
 } from 'lucide-react'
-import { generatePortfolioDiagram, streamChat } from './api/apolloApi'
+import { generateNotebookDiagram, streamChat } from './api/apolloApi'
 import { createNotebook, listNotebooks, listSources, uploadSource } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import './console-clean.css'
@@ -163,49 +163,58 @@ function SourcePanel({ notebooks, activeId, sources, activeSources, setActiveId,
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input placeholder="Search sources..." /></div>
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
-      <div className="source-list">{sources.map((s) => { const on = activeSources.includes(s.name); return <button key={s.name} className={`source-card ${on ? 'selected' : ''}`} onClick={() => toggleSource(s.name)}><div className="source-icon"><FileText size={16} /></div><div className="source-card-copy"><strong>{s.name}</strong><span>{s.chunks} chunks · {s.kind || 'file'}</span></div><span className={`source-check ${on ? 'on' : ''}`}>{on ? '✓' : ''}</span></button> })}{!sources.length && <div className="source-empty-state"><FolderOpen size={22} /><strong>No sources connected</strong><span>Upload a PDF, DOCX, TXT, Markdown or CSV file.</span></div>}</div>
+      <div className="source-list">{sources.map((s) => { const on = activeSources.includes(s.name); return <button key={s.name} className={`source-card ${on ? 'selected' : ''}`} onClick={() => toggleSource(s.name)}><div className="source-icon"><FileText size={16} /></div><div className="source-card-copy"><strong>{s.name}</strong><span>{s.chunks} chunks · {s.kind || 'file'}{s.processing_status && s.processing_status !== 'indexed' ? ` · ${s.processing_status}` : ''}</span></div><span className={`source-check ${on ? 'on' : ''}`}>{on ? '✓' : ''}</span></button> })}{!sources.length && <div className="source-empty-state"><FolderOpen size={22} /><strong>No sources connected</strong><span>Upload a PDF, DOCX, TXT, Markdown or CSV file.</span></div>}</div>
       <div className="source-footer"><div className="source-stats"><span><strong>{activeSources.length}</strong> active</span><span><strong>{sources.length}</strong> total</span></div><button className="upload-button" disabled={!nb || uploading} onClick={() => input.current?.click()}><Upload size={15} /> {uploading ? 'Indexing…' : 'Add sources'}</button></div>
       <button className="new-notebook" onClick={create}><Plus size={15} /> New Notebook</button>
     </aside>
   )
 }
 
-function StudioPanel({ close, tool, setTool }) {
+function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, userId, openSources }) {
   const current = STUDIO_TOOLS.find((x) => x.id === tool) || STUDIO_TOOLS[0]
-  const [portfolioContent, setPortfolioContent] = useState('')
   const [diagram, setDiagram] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
 
   const generate = async () => {
-    const content = portfolioContent.trim()
-    if (tool !== 'mindmap' || !content || generating) return
+    if (tool !== 'mindmap' || !activeId || sources.length === 0 || generating) return
     setGenerating(true)
     setError('')
     setDiagram(null)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 60000)
     try {
-      const result = await generatePortfolioDiagram(content)
+      const result = await generateNotebookDiagram(activeId, activeSources, null, userId, controller.signal)
       setDiagram(result)
     } catch (err) {
-      setError(err?.message || 'Diagram generation failed')
+      setError(err?.name === 'AbortError' ? 'Diagram generation timed out. Please try again.' : (err?.message || 'Diagram generation failed'))
     } finally {
+      clearTimeout(timer)
       setGenerating(false)
     }
   }
 
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
-    <p className="context-description">Studio generation will use the connected notebook once those tools are migrated.</p>
+    <p className="context-description">Studio generation uses the indexed sources in the active notebook.</p>
     {tool === 'mindmap' && <div style={{ marginBottom: 16 }}>
-      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 7, color: 'var(--text)' }}>Your own content</label>
-      <textarea value={portfolioContent} onChange={(e) => { setPortfolioContent(e.target.value); setError(''); setDiagram(null) }} placeholder="Paste your own story, notes, or ideas here…" rows={8} style={{ width: '100%', resize: 'vertical', border: '1px solid var(--surface-high)', borderRadius: 10, padding: 10, background: 'var(--surface-container)', color: 'var(--text)', outline: 'none', font: '12px Inter, system-ui, sans-serif', lineHeight: 1.5 }} />
-      {error && <div role="alert" style={{ marginTop: 9, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11 }}>{error}</div>}
-      {diagram?.warning && <div role="alert" style={{ marginTop: 10, padding: 11, borderRadius: 9, background: 'rgba(127,29,29,.45)', border: '2px solid #ef4444', color: '#fee2e2', fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}><strong>⚠ Review this diagram:</strong> {diagram.warning}</div>}
-      {diagram?.svg && <div style={{ marginTop: 12, padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />}
-      {diagram && !diagram.warning && <div style={{ marginTop: 8, color: 'var(--tertiary)', fontSize: 10 }}>Verified against your original content ({Math.round((diagram.overlap_ratio || 0) * 100)}% label overlap).</div>}
+      {sources.length === 0 ? <div>
+        <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', color: 'var(--text)', fontSize: 12, lineHeight: 1.5 }}>
+          <strong>Upload a source to build a mind map from it</strong>
+          <button className="upload-button" style={{ marginTop: 10, width: '100%' }} onClick={openSources}><FolderOpen size={15} /> Open Sources</button>
+        </div>
+      </div> : <>
+        <div style={{ padding: 11, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', color: 'var(--text)', fontSize: 11, lineHeight: 1.5 }}>
+          Mind map will be built from: {sources.map((s) => s.name).join(', ')}
+        </div>
+        {error && <div role="alert" style={{ marginTop: 9, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11 }}>{error}</div>}
+        {diagram?.warning && <div role="alert" style={{ marginTop: 10, padding: 11, borderRadius: 9, background: 'rgba(127,29,29,.45)', border: '2px solid #ef4444', color: '#fee2e2', fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}><strong>⚠ Review this diagram:</strong> {diagram.warning}</div>}
+        {diagram?.svg && <div style={{ marginTop: 12, padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />}
+        {diagram && !diagram.warning && <div style={{ marginTop: 8, color: 'var(--tertiary)', fontSize: 10 }}>Verified against indexed notebook content ({Math.round((diagram.overlap_ratio || 0) * 100)}% label overlap).</div>}
+      </>}
     </div>}
     <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => setTool(id)}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
-    <div className="studio-footer"><div><strong>{current.label}</strong><span>{tool === 'mindmap' ? (generating ? 'Generating…' : 'Ready') : 'Waiting for backend'}</span></div><button className="studio-generate" disabled={tool !== 'mindmap' || !portfolioContent.trim() || generating} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
+    <div className="studio-footer"><div><strong>{current.label}</strong><span>{tool === 'mindmap' ? (generating ? 'Generating…' : sources.length ? 'Ready' : 'Upload a source') : 'Waiting for backend'}</span></div><button className="studio-generate" disabled={tool !== 'mindmap' || !activeId || sources.length === 0 || generating} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
 
@@ -283,7 +292,7 @@ export default function AppPhase6() {
     <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} />
     <section className="app-shell">
       <TopBar active={active} toggleSources={() => { setSourceOpen((v) => !v); setStudioOpen(false) }} toggleStudio={() => { setStudioOpen((v) => !v); setSourceOpen(false) }} researchMode={researchMode} setResearchMode={setResearchMode} />
-      {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll"><div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected` : 'Create a notebook to get started.'}</p></div></div><div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div></div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>{sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} activeSources={activeSources} setActiveId={(id) => { setActiveId(id); setMessages([]) }} toggleSource={toggleSource} create={create} upload={upload} close={() => setSourceOpen(false)} />}{studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} />}</div> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll"><div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected` : 'Create a notebook to get started.'}</p></div></div><div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div></div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>{sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} activeSources={activeSources} setActiveId={(id) => { setActiveId(id); setMessages([]) }} toggleSource={toggleSource} create={create} upload={upload} close={() => setSourceOpen(false)} />}{studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} activeId={activeId} sources={sources} activeSources={activeSources} userId={uid} openSources={() => { setStudioOpen(false); setSourceOpen(true) }} />}</div> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
