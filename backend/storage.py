@@ -21,8 +21,13 @@ class PostgresStore:
         self._connect_timeout = int(os.getenv("APOLLO_DB_CONNECT_TIMEOUT", "5"))
         self._vector_available = False
         self._ensure_schema()
-        self.run_migrations()
+        migrated = self.run_migrations()
         self._vector_available = self._detect_vector()
+        if migrated:
+            try:
+                self._migrate_filesystem()
+            except Exception as exc:
+                print(f"[Apollo storage] filesystem migration warning: {exc}")
 
     def _connect(self):
         return self._psycopg.connect(self._url, connect_timeout=self._connect_timeout)
@@ -54,7 +59,7 @@ class PostgresStore:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_apollo_chunks_notebook ON apollo_chunks(notebook_id)")
 
     def run_migrations(self) -> bool:
-        """Apply additive SQL migrations; failures degrade to legacy BM25 behavior."""
+        """Apply additive SQL migrations; failures degrade to the legacy schema."""
         migration_path = Path(__file__).resolve().parent / "migrations" / "001_add_chunking_fields.sql"
         if not migration_path.exists():
             return False
@@ -189,11 +194,17 @@ class PostgresStore:
                     )
 
     def list_chunks(self, notebook_id: str) -> list[dict[str, Any]]:
+        if self._vector_available:
+            query = "SELECT id,source,kind,text,chunk_index,content_type,embedding IS NOT NULL FROM apollo_chunks WHERE notebook_id=%s ORDER BY source,chunk_index,id"
+        else:
+            query = "SELECT id,source,kind,text,chunk_index,content_type FROM apollo_chunks WHERE notebook_id=%s ORDER BY source,chunk_index,id"
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT id,source,kind,text,chunk_index,content_type,embedding IS NOT NULL FROM apollo_chunks WHERE notebook_id=%s ORDER BY source,chunk_index,id", (notebook_id,))
+                cur.execute(query, (notebook_id,))
                 rows = cur.fetchall()
-        return [{"id": row[0], "source": row[1], "kind": row[2], "text": row[3], "chunk_index": row[4], "content_type": row[5], "has_embedding": row[6]} for row in rows]
+        if self._vector_available:
+            return [{"id": row[0], "source": row[1], "kind": row[2], "text": row[3], "chunk_index": row[4], "content_type": row[5], "has_embedding": row[6]} for row in rows]
+        return [{"id": row[0], "source": row[1], "kind": row[2], "text": row[3], "chunk_index": row[4], "content_type": row[5], "has_embedding": False} for row in rows]
 
     def list_unembedded_chunks(self, notebook_id: str | None = None, source_name: str | None = None) -> list[dict[str, Any]]:
         if not self._vector_available:
@@ -240,8 +251,6 @@ class PostgresStore:
             ORDER BY embedding <=> %s::vector
             LIMIT %s
         """
-        # The vector is intentionally repeated because PostgreSQL parameter
-        # binding does not reuse positional placeholders.
         if allowed:
             params = [vector_literal, notebook_id, allowed, vector_literal, params[-1]]
         else:
