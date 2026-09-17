@@ -33,8 +33,6 @@ async function openChat({
     signal,
     body: JSON.stringify({
       messages,
-      // Web/Deep/Study research is synthesized by Gemini after Tavily retrieval.
-      // Groq remains the normal-chat model only.
       model,
       notebook_id: notebookId,
       notebook_title: notebookTitle,
@@ -150,15 +148,61 @@ export async function checkHealth() {
   return response.json()
 }
 
-export async function generatePortfolioDiagram(content, diagramHint, userId = 'default') {
+async function parseError(response, fallback) {
+  const err = await response.json().catch(() => ({}))
+  return err?.detail || fallback
+}
+
+export async function generatePortfolioDiagram(content, diagramHint, userId = 'default', signal) {
   const response = await fetch(`${API_BASE}/api/portfolio/diagram`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({ content, diagram_hint: diagramHint || null, user_id: userId }),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.detail || 'Diagram generation failed')
-  }
+  if (!response.ok) throw new Error(await parseError(response, 'Diagram generation failed'))
   return response.json()
+}
+
+export async function generateNotebookDiagram(notebookId, activeSources = [], diagramHint = null, userId = 'default', signal) {
+  if (!notebookId) throw new Error('No active notebook selected')
+  const response = await fetch(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/mindmap`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ active_sources: activeSources, diagram_hint: diagramHint || null, user_id: userId }),
+  })
+  if (!response.ok) throw new Error(await parseError(response, 'Diagram generation failed'))
+  return response.json()
+}
+
+export async function getJob(jobId, signal) {
+  const response = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, { signal })
+  if (!response.ok) throw new Error(await parseError(response, 'Job lookup failed'))
+  return response.json()
+}
+
+export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
+  while (true) {
+    const job = await getJob(jobId, signal)
+    onProgress?.(job)
+    if (job.status === 'completed') return job
+    if (job.status === 'failed') throw new Error(job.error || 'Background job failed')
+    await new Promise((resolve, reject) => {
+      let settled = false
+      const onAbort = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(new DOMException('Aborted', 'AbortError'))
+      }
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, intervalMs)
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+  }
 }
