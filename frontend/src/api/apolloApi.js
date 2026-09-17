@@ -15,10 +15,13 @@ async function openChat({
   notebookId,
   notebookTitle,
   activeSources,
+  sourceModes,
+  sessionId,
   userId,
   webEnabled,
   researchMode,
   onToken,
+  onSession,
   onStart,
   onFallback,
   onRestart,
@@ -27,7 +30,8 @@ async function openChat({
   onError,
   signal,
 }) {
-  const response = await fetch(`${API_BASE}/api/chat`, {
+  const workspace = Boolean(notebookId)
+  const response = await fetch(`${API_BASE}${workspace ? '/api/chat/workspace' : '/api/chat'}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -37,6 +41,8 @@ async function openChat({
       notebook_id: notebookId,
       notebook_title: notebookTitle,
       active_sources: activeSources,
+      source_modes: sourceModes || {},
+      session_id: sessionId || null,
       user_id: userId,
       web_enabled: webEnabled,
       research_mode: researchMode,
@@ -70,6 +76,7 @@ async function openChat({
     if (!data) return
 
     const payload = JSON.parse(data)
+    if (payload.type === 'session') onSession?.(payload.session)
     if (payload.type === 'start') {
       serverResearch = payload.research || researchMode
       onStart?.(payload)
@@ -110,10 +117,13 @@ export async function streamChat({
   notebookId,
   notebookTitle,
   activeSources = [],
+  sourceModes = {},
+  sessionId = null,
   userId = 'default',
   webEnabled = false,
   researchMode = 'quick',
   onToken,
+  onSession,
   onStart,
   onFallback,
   onRestart,
@@ -128,10 +138,13 @@ export async function streamChat({
     notebookId,
     notebookTitle,
     activeSources,
+    sourceModes,
+    sessionId,
     userId,
     webEnabled: webEnabled || researchMode !== 'quick',
     researchMode,
     onToken,
+    onSession,
     onStart,
     onFallback,
     onRestart,
