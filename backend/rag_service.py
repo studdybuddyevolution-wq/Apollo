@@ -312,6 +312,7 @@ def retrieve_hybrid(
             "id": chunk.get("id"),
             "source": chunk.get("source", "unknown source"),
             "text": chunk.get("text", ""),
+            "score": 1.0 / (rrf_k + rank),
             "bm25_score": float(score),
             "vector_score": 0.0,
             "rrf_score": 1.0 / (rrf_k + rank),
@@ -335,6 +336,7 @@ def retrieve_hybrid(
                 "id": item.get("id"),
                 "source": item.get("source", chunk.get("source") if chunk else "unknown source"),
                 "text": item.get("text", chunk.get("text", "") if chunk else ""),
+                "score": 0.0,
                 "bm25_score": 0.0,
                 "vector_score": 0.0,
                 "rrf_score": 0.0,
@@ -343,6 +345,7 @@ def retrieve_hybrid(
             fused[key] = current
         current["vector_score"] = float(item.get("vector_score", 0.0))
         current["rrf_score"] += 1.0 / (rrf_k + rank)
+        current["score"] = current["rrf_score"]
         current["retrieval_method"] = "hybrid" if current["bm25_score"] > 0 else "vector"
 
     results = sorted(fused.values(), key=lambda item: (item["rrf_score"], item["vector_score"], item["bm25_score"]), reverse=True)
