@@ -189,11 +189,20 @@ export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
     if (job.status === 'completed') return job
     if (job.status === 'failed') throw new Error(job.error || 'Background job failed')
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(resolve, intervalMs)
-      signal?.addEventListener('abort', () => {
+      let settled = false
+      const onAbort = () => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
         reject(new DOMException('Aborted', 'AbortError'))
-      }, { once: true })
+      }
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, intervalMs)
+      signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
 }
