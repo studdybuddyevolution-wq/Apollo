@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from context_builder import build_context
 from diagrams import build_diagram_prompt, content_overlap_ratio, generate_and_render
+from main import _check_rate_limit
 from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text, gemini_model_chain
 from rag_service import get_notebook, get_notebook_chunks
 from storage import STORE
@@ -39,6 +40,17 @@ class StudioGenerateRequest(BaseModel):
 
 def _now() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _enforce_rate_limit(request: Request, user_id: str | None) -> None:
+    rate_key = user_id or (request.client.host if request.client else "anonymous")
+    allowed, retry_after = _check_rate_limit(rate_key)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def _persist_output(notebook_id: str, insight_type: str, content: str, model_used: str, source_name: str = "__studio__") -> dict[str, Any]:
@@ -105,6 +117,7 @@ def _mindmap_attempt(prompt: str, context: str, model_chain: list[str]) -> tuple
 
 
 async def notebook_mindmap_phase3(notebook_id: str, request: Phase3MindMapRequest, http_request: Request):
+    _enforce_rate_limit(http_request, request.user_id)
     context, source_names = _context_or_400(request.user_id, notebook_id, request.active_sources, token_budget=4500, top_k=18)
     topic = request.diagram_hint or "the main concepts, relationships, events, and structure in these notebook sources"
     prompt = build_diagram_prompt(topic, context=context) + (
@@ -275,7 +288,7 @@ def register(app: FastAPI) -> None:
 
     @app.post("/api/notebooks/{notebook_id}/studio/generate")
     async def studio_generate(notebook_id: str, request: StudioGenerateRequest, http_request: Request):
-        _ = http_request
+        _enforce_rate_limit(http_request, request.user_id)
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(_studio_generate, request, notebook_id),
