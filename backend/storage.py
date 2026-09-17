@@ -170,16 +170,22 @@ class PostgresStore:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT s.name, s.kind, s.processing_status, s.error_message,
+                    SELECT COALESCE(s.name, c.source) AS name,
+                           COALESCE(s.kind, c.kind, 'file') AS kind,
+                           COALESCE(s.processing_status, 'indexed') AS processing_status,
+                           s.error_message,
                            COALESCE(c.chunks, 0) AS chunks
-                    FROM apollo_sources s
-                    LEFT JOIN (
-                      SELECT source, COUNT(*) AS chunks
-                      FROM apollo_chunks WHERE notebook_id=%s GROUP BY source
-                    ) c ON c.source=s.name
-                    WHERE s.notebook_id=%s
-                    ORDER BY s.name
-                """, (notebook_id, notebook_id))
+                    FROM (
+                      SELECT source, MIN(kind) AS kind, COUNT(*) AS chunks
+                      FROM apollo_chunks
+                      WHERE notebook_id=%s
+                      GROUP BY source
+                    ) c
+                    FULL OUTER JOIN apollo_sources s
+                      ON s.notebook_id=%s AND s.name=c.source
+                    WHERE s.notebook_id=%s OR c.source IS NOT NULL
+                    ORDER BY name
+                """, (notebook_id, notebook_id, notebook_id))
                 rows = cur.fetchall()
         return [{"name": n, "kind": k, "status": status, "error": error, "chunks": chunks} for n, k, status, error, chunks in rows]
 
