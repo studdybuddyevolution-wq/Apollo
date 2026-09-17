@@ -337,10 +337,6 @@ def _stream_chat(request: ChatRequest):
         yield _event({"type": "error", "message": str(exc)})
 
 
-def _portfolio_diagram_rate_key(request: PortfolioDiagramRequest, http_request: Request) -> str:
-    return request.user_id or (http_request.client.host if http_request.client else "anonymous")
-
-
 @app.get("/api/health")
 def health() -> dict[str, object]:
     return {"status": "ok", "service": "apollo-api", "version": "0.8.0", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL, "gemini_fallback_chain": GEMINI_FALLBACK_MODELS, "deep_output_tokens": DEEP_OUTPUT_TOKENS, "deep_research": "hybrid_rag_tavily", "web_search": "tavily"}
@@ -396,7 +392,7 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     except KeyError:
         raise HTTPException(status_code=404, detail="Notebook not found") from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from value_error
 
 
 @app.delete("/api/notebooks/{notebook_id}/sources/{source_name}")
