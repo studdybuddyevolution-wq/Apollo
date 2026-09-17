@@ -392,7 +392,7 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     except KeyError:
         raise HTTPException(status_code=404, detail="Notebook not found") from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from value_error
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/notebooks/{notebook_id}/sources/{source_name}")
