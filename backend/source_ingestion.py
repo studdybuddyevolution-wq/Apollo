@@ -14,6 +14,7 @@ from rag_service import add_source
 
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = 15
+MAX_REDIRECTS = 4
 USER_AGENT = "Apollo Omni AI/Phase2"
 
 
@@ -68,13 +69,31 @@ def _validate_public_url(url: str) -> str:
 
 
 def _download(url: str) -> tuple[bytes, str]:
-    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-    response.raise_for_status()
-    _validate_public_url(response.url)
-    content = response.content
-    if len(content) > MAX_DOWNLOAD_BYTES:
-        raise ValueError("Source is larger than Apollo's 8 MB URL ingestion limit")
-    return content, response.headers.get("content-type", "").lower()
+    current = _validate_public_url(url)
+    with requests.Session() as session:
+        session.headers.update({"User-Agent": USER_AGENT})
+        for _ in range(MAX_REDIRECTS + 1):
+            response = session.get(current, timeout=REQUEST_TIMEOUT, allow_redirects=False, stream=True)
+            if response.is_redirect:
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError("URL redirect did not provide a destination")
+                current = _validate_public_url(requests.compat.urljoin(current, location))
+                response.close()
+                continue
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_DOWNLOAD_BYTES:
+                    response.close()
+                    raise ValueError("Source is larger than Apollo's 8 MB URL ingestion limit")
+                chunks.append(chunk)
+            return b"".join(chunks), response.headers.get("content-type", "").lower()
+    raise ValueError("Too many URL redirects")
 
 
 def _html_to_text(raw: bytes) -> tuple[str, str]:
