@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import weakref
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from rag_service import get_notebook
-from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, list_messages, list_notes, list_sessions, rename_session
+from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, list_messages, list_notes, list_sessions, rename_session, update_note
 
 
 class Phase1ChatMessage(BaseModel):
@@ -50,7 +51,7 @@ class NoteUpdateRequest(BaseModel):
     user_id: str | None = None
 
 
-_REGISTERED = False
+_REGISTERED_APPS: weakref.WeakSet[FastAPI] = weakref.WeakSet()
 
 
 def _check_notebook(user_id: str | None, notebook_id: str) -> None:
@@ -66,7 +67,7 @@ def _register_chat(app: FastAPI) -> None:
     @app.post("/api/chat/workspace")
     def workspace_chat(request: Phase1ChatRequest, http_request: Request) -> StreamingResponse:
         from context_builder import build_context
-        from main import _stream_model
+        from main import _check_rate_limit, _stream_model
 
         if not request.notebook_id:
             raise HTTPException(status_code=400, detail="A notebook is required for workspace chat")
@@ -77,6 +78,11 @@ def _register_chat(app: FastAPI) -> None:
         last_user = next((message.content for message in reversed(request.messages) if message.role == "user"), "").strip()
         if not last_user:
             raise HTTPException(status_code=400, detail="No user message supplied")
+
+        rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
+        allowed, retry_after = _check_rate_limit(rate_key)
+        if not allowed:
+            raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
 
         def stream():
             if not request.session_id:
@@ -94,24 +100,26 @@ def _register_chat(app: FastAPI) -> None:
             )
             context = built["context"]
             source_names = built["full_sources"]
-            main_request = type("WorkspaceChat", (), {**request.model_dump(), "messages": [type("Msg", (), item)() for item in request.model_dump()["messages"]]})()
+            raw = request.model_dump()
+            raw["messages"] = [type("Msg", (), item.model_dump())() for item in request.messages]
+            main_request = type("WorkspaceChat", (), raw)()
             generated: list[str] = []
             sources: list[dict[str, Any]] = []
             model_name: str | None = None
             try:
-                for raw in _stream_model(main_request, context, source_names):
-                    yield raw
-                    if raw.startswith("data: "):
+                for event in _stream_model(main_request, context, source_names):
+                    if event.startswith("data: "):
                         try:
-                            payload = json.loads(raw[6:].strip())
+                            payload = json.loads(event[6:].strip())
                         except Exception:
-                            continue
+                            payload = {}
                         if payload.get("type") == "token":
                             generated.append(payload.get("text", ""))
                         elif payload.get("type") == "sources":
                             sources = payload.get("sources") or []
                         elif payload.get("type") == "start":
                             model_name = payload.get("model")
+                    yield event
                 if generated:
                     append_message(request.user_id, request.notebook_id, session["id"], "assistant", "".join(generated), model_name, sources)
             except Exception as exc:
@@ -119,12 +127,6 @@ def _register_chat(app: FastAPI) -> None:
                     append_message(request.user_id, request.notebook_id, session["id"], "assistant", "".join(generated), model_name, sources)
                 yield _event({"type": "error", "message": str(exc)})
 
-        rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
-        # Reuse the existing main.py rate limiter for this endpoint without changing its configuration.
-        from main import _check_rate_limit
-        allowed, retry_after = _check_rate_limit(rate_key)
-        if not allowed:
-            raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no-cache"})
 
 
@@ -177,10 +179,10 @@ def _register_notes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/api/notebooks/{notebook_id}/notes/{note_id}")
-    def note_update(notebook_id: str, note_id: str, request: NoteUpdateRequest):
+    def note_update_route(notebook_id: str, note_id: str, request: NoteUpdateRequest):
         _check_notebook(request.user_id, notebook_id)
         try:
-            note = __import__("workspace_service", fromlist=["update_note"]).update_note(request.user_id, notebook_id, note_id, request.title, request.content)
+            note = update_note(request.user_id, notebook_id, note_id, request.title, request.content)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if note is None:
@@ -196,10 +198,9 @@ def _register_notes(app: FastAPI) -> None:
 
 
 def register(app: FastAPI) -> None:
-    global _REGISTERED
-    if _REGISTERED:
+    if app in _REGISTERED_APPS:
         return
     _register_chat(app)
     _register_sessions(app)
     _register_notes(app)
-    _REGISTERED = True
+    _REGISTERED_APPS.add(app)
