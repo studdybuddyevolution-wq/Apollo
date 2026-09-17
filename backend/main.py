@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
+from diagrams import build_diagram_prompt, generate_and_render, content_overlap_ratio
 from rag_service import add_source, create_notebook, delete_notebook, format_context, get_notebook, list_notebooks, list_sources, remove_source, rename_notebook, retrieve
 from research_engine import build_synthesis_instruction, format_evidence, is_detailed_request, run_hybrid_research
 
@@ -83,6 +84,12 @@ class RAGQueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=10)
     source_names: list[str] = Field(default_factory=list)
+    user_id: str | None = None
+
+
+class PortfolioDiagramRequest(BaseModel):
+    content: str = Field(min_length=1)
+    diagram_hint: str | None = None
     user_id: str | None = None
 
 
@@ -172,6 +179,21 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
 
 def _gemini_model_chain(primary: str) -> list[str]:
     return list(dict.fromkeys([primary] + [m for m in GEMINI_FALLBACK_MODELS if m != primary]))
+
+
+def _generate_gemini_once(prompt: str) -> str:
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=key)
+    response = client.models.generate_content(
+        model=WEB_SYNTHESIS_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(max_output_tokens=DEEP_OUTPUT_TOKENS),
+    )
+    return response.text or ""
 
 
 def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any], min_chars: int = 0):
@@ -315,6 +337,10 @@ def _stream_chat(request: ChatRequest):
         yield _event({"type": "error", "message": str(exc)})
 
 
+def _portfolio_diagram_rate_key(request: PortfolioDiagramRequest, http_request: Request) -> str:
+    return request.user_id or (http_request.client.host if http_request.client else "anonymous")
+
+
 @app.get("/api/health")
 def health() -> dict[str, object]:
     return {"status": "ok", "service": "apollo-api", "version": "0.8.0", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL, "gemini_fallback_chain": GEMINI_FALLBACK_MODELS, "deep_output_tokens": DEEP_OUTPUT_TOKENS, "deep_research": "hybrid_rag_tavily", "web_search": "tavily"}
@@ -397,3 +423,47 @@ def chat(request: ChatRequest, http_request: Request) -> StreamingResponse:
     if not allowed:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
     return StreamingResponse(_stream_chat(request), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no-cache"})
+
+
+@app.post("/api/portfolio/diagram")
+def portfolio_diagram(request: PortfolioDiagramRequest, http_request: Request):
+    rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
+    allowed, retry_after = _check_rate_limit(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+
+    instruction = (
+        "You are formatting a student's OWN work into a diagram. "
+        "Use ONLY the ideas, events, and details already present in the "
+        "student's content below. Do NOT invent new plot points, facts, "
+        "steps, or ideas that are not already there -- your only job is "
+        "structuring and labeling what they already wrote."
+    )
+    topic = request.diagram_hint or "the student's content below"
+    prompt = build_diagram_prompt(topic, context=request.content) + f"\n\n{instruction}"
+
+    def _attempt(p: str):
+        text = _generate_gemini_once(p)
+        parsed_render = generate_and_render(text)
+        return parsed_render
+
+    rendered = _attempt(prompt)
+    overlap = content_overlap_ratio(rendered.kind, rendered.source_code, request.content) if rendered else 0.0
+    if rendered and overlap < 0.5:
+        stricter = prompt + "\n\nYour previous attempt used words not found in the student's own content. Regenerate using ONLY the student's own words and ideas."
+        retry = _attempt(stricter)
+        if retry:
+            retry_overlap = content_overlap_ratio(retry.kind, retry.source_code, request.content)
+            if retry_overlap > overlap:
+                rendered, overlap = retry, retry_overlap
+
+    if not rendered or not rendered.svg_bytes:
+        raise HTTPException(status_code=502, detail=rendered.error if rendered else "Diagram generation failed")
+
+    return {
+        "kind": rendered.kind,
+        "svg": rendered.svg_bytes.decode("utf-8"),
+        "verified": overlap >= 0.5,
+        "overlap_ratio": round(overlap, 2),
+        "warning": None if overlap >= 0.5 else "This diagram may include wording not found in your original content -- please review it before submitting.",
+    }
