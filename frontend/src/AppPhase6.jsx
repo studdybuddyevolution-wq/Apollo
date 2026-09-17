@@ -3,9 +3,10 @@ import {
   ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
   CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
   LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
-  Video, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus,
+  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus,
 } from 'lucide-react'
-import { generateNotebookDiagram, streamChat } from './api/apolloApi'
+import { streamChat } from './api/apolloApi'
+import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
@@ -31,10 +32,12 @@ const RESEARCH_MODES = [
 ]
 
 const STUDIO_TOOLS = [
-  { id: 'slides', label: 'Slide Deck', description: 'Turn selected sources into slides', icon: FileText },
-  { id: 'report', label: 'Study Report', description: 'Generate structured revision notes', icon: FileText },
+  { id: 'slides', label: 'Slide Deck', description: 'Build a grounded presentation', icon: FileText },
+  { id: 'report', label: 'Study Report', description: 'Create structured revision notes', icon: FileText },
   { id: 'mindmap', label: 'Mind Map', description: 'Build a visual concept structure', icon: BrainCircuit },
-  { id: 'video', label: 'Video Overview', description: 'Create an explainer storyboard', icon: Video },
+  { id: 'transform', label: 'Transformations', description: 'Extract reusable study insights', icon: WandSparkles },
+  { id: 'podcast', label: 'Podcast / Audio', description: 'Create a narrated source overview', icon: Mic },
+  { id: 'video', label: 'Video Overview', description: 'Storyboard support coming next', icon: Video },
 ]
 
 const SOURCE_MODES = [
@@ -231,27 +234,60 @@ function NotesPanel({ notes, remove, close }) {
 function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, userId, openSources }) {
   const current = STUDIO_TOOLS.find((x) => x.id === tool) || STUDIO_TOOLS[0]
   const [diagram, setDiagram] = useState(null)
+  const [output, setOutput] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  const [transformation, setTransformation] = useState('summary')
+  const [customPrompt, setCustomPrompt] = useState('')
+  const [speaking, setSpeaking] = useState(false)
   const abortRef = useRef(null)
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  const transformations = [
+    ['summary', 'Summary'],
+    ['key_concepts', 'Key concepts'],
+    ['faq', 'FAQ'],
+    ['outline', 'Outline'],
+    ['glossary', 'Glossary'],
+    ['quiz', 'Quiz'],
+    ['study_guide', 'Study guide'],
+    ['timeline', 'Timeline'],
+    ['compare_contrast', 'Compare / contrast'],
+    ['explain_simply', 'Explain simply'],
+    ['misconceptions', 'Misconceptions'],
+    ['custom', 'Custom'],
+  ]
+
+  useEffect(() => () => {
+    abortRef.current?.abort()
+    window.speechSynthesis?.cancel()
+  }, [])
 
   const generate = async () => {
-    if (tool !== 'mindmap' || !activeId || sources.length === 0 || generating) return
+    if (!activeId || !activeSources.length || generating || tool === 'video') return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
-    const timeout = window.setTimeout(() => controller.abort(), 60000)
+    const timeout = window.setTimeout(() => controller.abort(), 65000)
     setGenerating(true)
     setError('')
     setDiagram(null)
+    setOutput(null)
     try {
-      const result = await generateNotebookDiagram(activeId, activeSources, null, userId, controller.signal)
-      setDiagram(result)
+      if (tool === 'mindmap') {
+        const result = await generateNotebookMindMap(activeId, activeSources, null, userId, controller.signal)
+        setDiagram(result)
+      } else {
+        const result = await generateStudioOutput(activeId, tool, activeSources, {
+          transformationType: tool === 'transform' ? transformation : null,
+          customPrompt: tool === 'transform' && transformation === 'custom' ? customPrompt : null,
+          userId,
+          signal: controller.signal,
+        })
+        setOutput(result)
+      }
     } catch (err) {
-      if (err?.name === 'AbortError') setError('Diagram generation timed out. Please try again.')
-      else setError(err?.message || 'Diagram generation failed')
+      if (err?.name === 'AbortError') setError('Studio generation timed out before Apollo returned a complete result.')
+      else setError(err?.message || 'Studio generation failed')
     } finally {
       window.clearTimeout(timeout)
       if (abortRef.current === controller) abortRef.current = null
@@ -259,26 +295,83 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     }
   }
 
+  const playPodcast = () => {
+    const script = output?.script
+    if (!script || !('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(script)
+    utterance.rate = 0.96
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => setSpeaking(false)
+    setSpeaking(true)
+    window.speechSynthesis.speak(utterance)
+  }
+
+  const stopPodcast = () => {
+    window.speechSynthesis?.cancel()
+    setSpeaking(false)
+  }
+
+  const activeNames = sources.filter((source) => activeSources.includes(source.name)).map((source) => source.name)
+  const canGenerate = Boolean(activeId && activeSources.length && !generating && tool !== 'video')
+
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
-    <p className="context-description">Studio generation uses the connected notebook sources.</p>
-    {tool === 'mindmap' && <div style={{ marginBottom: 16 }}>
-      {sources.length === 0 ? <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 12, lineHeight: 1.5 }}>
-        <strong style={{ display: 'block', marginBottom: 8, color: 'var(--text)' }}>Upload a source to build a mind map from it</strong>
-        <button className="upload-button" onClick={openSources}><FolderOpen size={15} /> Open Sources</button>
-      </div> : <>
-        <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5 }}>
-          <strong style={{ display: 'block', marginBottom: 6, color: 'var(--text)' }}>Mind map will be built from:</strong>
-          <span style={{ color: 'var(--tertiary)' }}>{sources.filter((s) => activeSources.includes(s.name)).map((source) => source.name).join(', ') || 'no active sources'}</span>
+    <p className="context-description">Every Studio output is generated from the selected Apollo notebook sources and saved as a reusable insight.</p>
+
+    {!sources.length ? <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+      <strong style={{ display: 'block', marginBottom: 8, color: 'var(--text)' }}>Connect a source first</strong>
+      <button className="upload-button" onClick={openSources}><FolderOpen size={15} /> Open Sources</button>
+    </div> : <>
+      <div style={{ padding: 11, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}>
+        <strong style={{ display: 'block', marginBottom: 5, color: 'var(--text)' }}>Grounded in</strong>
+        <span style={{ color: 'var(--tertiary)' }}>{activeNames.join(', ') || 'no active sources'}</span>
+      </div>
+
+      {tool === 'transform' && <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+        <label className="muted-label" htmlFor="apollo-transformation">TRANSFORMATION</label>
+        <select id="apollo-transformation" value={transformation} onChange={(e) => setTransformation(e.target.value)} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
+          {transformations.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {transformation === 'custom' && <textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} placeholder="Describe the transformation you want…" rows={4} style={{ width: '100%', resize: 'vertical', padding: 9, borderRadius: 8 }} />}
+      </div>}
+
+      {error && <div role="alert" style={{ marginBottom: 10, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11, lineHeight: 1.45 }}>{error}</div>}
+
+      {diagram?.svg && <div style={{ marginBottom: 12 }}>
+        {diagram.warning && <div role="alert" style={{ marginBottom: 8, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.45)', border: '1px solid #ef4444', color: '#fee2e2', fontSize: 11, lineHeight: 1.45 }}><strong>Review:</strong> {diagram.warning}</div>}
+        <div style={{ padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />
+        <div style={{ marginTop: 7, color: 'var(--tertiary)', fontSize: 10 }}>Model: {diagram.model_used || 'Gemini'} · {Math.round((diagram.overlap_ratio || 0) * 100)}% source-label overlap</div>
+      </div>}
+
+      {output?.tool === 'slides' && <div style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto', marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>{output.data?.title || 'Slide Deck'}</div>
+        {(output.data?.slides || []).map((slide, index) => <article key={`${slide.title}-${index}`} style={{ padding: 10, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+          <strong style={{ display: 'block', marginBottom: 6 }}>{index + 1}. {slide.title}</strong>
+          {(slide.bullets || []).map((bullet, bulletIndex) => <div key={bulletIndex} style={{ fontSize: 11, lineHeight: 1.45, marginBottom: 3 }}>• {bullet}</div>)}
+          {slide.speaker_notes && <div style={{ marginTop: 6, fontSize: 10, color: 'var(--tertiary)' }}>Notes: {slide.speaker_notes}</div>}
+        </article>)}
+      </div>}
+
+      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre></div>}
+
+      {output?.tool === 'transform' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.content}</pre></div>}
+
+      {output?.tool === 'podcast' && <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 7, marginBottom: 8 }}>
+          <button className="upload-button" onClick={speaking ? stopPodcast : playPodcast}>{speaking ? 'Stop audio' : 'Play audio'}</button>
         </div>
-        {error && <div role="alert" style={{ marginTop: 9, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11 }}>{error}</div>}
-        {diagram?.warning && <div role="alert" style={{ marginTop: 10, padding: 11, borderRadius: 9, background: 'rgba(127,29,29,.45)', border: '2px solid #ef4444', color: '#fee2e2', fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}><strong>⚠ Review this diagram:</strong> {diagram.warning}</div>}
-        {diagram?.svg && <div style={{ marginTop: 12, padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />}
-        {diagram && !diagram.warning && <div style={{ marginTop: 8, color: 'var(--tertiary)', fontSize: 10 }}>Verified against indexed notebook content ({Math.round((diagram.overlap_ratio || 0) * 100)}% label overlap).</div>}
-      </>}
-    </div>}
-    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => setTool(id)}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
-    <div className="studio-footer"><div><strong>{current.label}</strong><span>{tool === 'mindmap' ? (generating ? 'Generating…' : 'Ready') : 'Waiting for backend'}</span></div><button className="studio-generate" disabled={tool !== 'mindmap' || !activeId || !activeSources.length || generating} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
+        <div style={{ maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}>
+          <strong style={{ fontSize: 14 }}>{output.data?.title || 'Apollo Audio Overview'}</strong>
+          {(output.data?.segments || []).map((segment, index) => <article key={index} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ fontSize: 10, textTransform: 'uppercase' }}>{segment.speaker}</strong><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45 }}>{segment.text}</div></article>)}
+        </div>
+      </div>}
+
+      {tool === 'video' && <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}><strong style={{ display: 'block', marginBottom: 5 }}>Video Overview</strong>Storyboard generation is intentionally deferred until the Slide Deck and Podcast pipelines are stable. The selected source context is already ready for that next step.</div>}
+    </>}
+
+    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
+    <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : tool === 'video' ? 'Planned' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
 
