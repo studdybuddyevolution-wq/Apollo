@@ -170,18 +170,30 @@ export async function getJob(jobId, signal) {
   return response.json()
 }
 
+function waitForPollInterval(intervalMs, signal) {
+  return new Promise((resolve, reject) => {
+    let timer = null
+    const onAbort = () => {
+      if (timer !== null) clearTimeout(timer)
+      reject(new DOMException('The operation was aborted.', 'AbortError'))
+    }
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, intervalMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
   while (true) {
     const job = await getJob(jobId, signal)
     onProgress?.(job)
     if (job.status === 'completed' || job.status === 'failed') return job
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(resolve, intervalMs)
-      const abort = () => {
-        clearTimeout(timer)
-        reject(new DOMException('The operation was aborted.', 'AbortError'))
-      }
-      signal?.addEventListener('abort', abort, { once: true })
-    })
+    await waitForPollInterval(intervalMs, signal)
   }
 }
