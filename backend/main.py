@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -15,9 +16,13 @@ from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
+from context_builder import build_context
 from diagrams import build_diagram_prompt, generate_and_render, content_overlap_ratio
-from rag_service import add_source, create_notebook, delete_notebook, format_context, get_notebook, list_notebooks, list_sources, remove_source, rename_notebook, retrieve
+from jobs import enqueue_job, enqueue_embedding_job, get_job
+from rag_service import add_source, create_notebook, delete_notebook, format_context, get_notebook, get_notebook_chunks, list_notebooks, list_sources, remove_source, rename_notebook, retrieve
 from research_engine import build_synthesis_instruction, format_evidence, is_detailed_request, run_hybrid_research
+from transformations import run_transformation
+from storage import STORE
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_REPO_ROOT / ".env", override=False)
@@ -36,6 +41,7 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "6
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: dict[str, list[float]] = defaultdict(list)
 
+
 def _check_rate_limit(key: str) -> tuple[bool, int]:
     """Sliding-window limiter. Returns (allowed, retry_after_seconds)."""
     now = time.time()
@@ -50,7 +56,8 @@ def _check_rate_limit(key: str) -> tuple[bool, int]:
         hits.append(now)
         return True, 0
 
-app = FastAPI(title="Apollo API", version="0.8.0")
+
+app = FastAPI(title="Apollo API", version="0.9.0")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -93,39 +100,26 @@ class PortfolioDiagramRequest(BaseModel):
     user_id: str | None = None
 
 
+class MindMapRequest(BaseModel):
+    active_sources: list[str] = Field(default_factory=list)
+    diagram_hint: str | None = None
+    user_id: str | None = None
+
+
+class InsightRequest(BaseModel):
+    insight_type: str = Field(min_length=1, max_length=50)
+    user_id: str | None = None
+
+
+class JobRequest(BaseModel):
+    type: Literal["embed_source", "embed_notebook"]
+    notebook_id: str = Field(min_length=1)
+    source_name: str | None = None
+    user_id: str | None = None
+
+
 def _event(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-def _load_overview_context(notebook_id: str, source_names: list[str], max_chunks: int = 6) -> tuple[str, list[str]]:
-    data_dir = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
-    path = data_dir / "notebooks" / notebook_id / "chunks.json"
-    if not path.exists():
-        return "", source_names
-    try:
-        chunks = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return "", source_names
-    allowed = set(source_names or [])
-    filtered = [c for c in chunks if not allowed or c.get("source") in allowed]
-    if not filtered:
-        return "", source_names
-    selected, seen = [], set()
-    for chunk in filtered:
-        src = chunk.get("source", "unknown source")
-        if src not in seen:
-            selected.append(chunk)
-            seen.add(src)
-            if len(selected) >= max_chunks:
-                break
-    selected_ids = {c.get("id") for c in selected}
-    for chunk in filtered:
-        if len(selected) >= max_chunks:
-            break
-        if chunk.get("id") not in selected_ids:
-            selected.append(chunk)
-    context = format_context([{"source": c.get("source", "unknown source"), "text": c.get("text", ""), "score": 0.0} for c in selected], max_chars=9000)
-    return context, list(dict.fromkeys(c.get("source", "unknown source") for c in selected))
 
 
 def _system_message(request: ChatRequest, context: str, source_names: list[str]) -> dict[str, str]:
@@ -187,7 +181,7 @@ def _generate_gemini_once(prompt: str) -> str:
         raise RuntimeError("GEMINI_API_KEY is not configured")
     from google import genai
     from google.genai import types
-    client = genai.Client(api_key=key)
+    client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=30000))
     response = client.models.generate_content(
         model=WEB_SYNTHESIS_MODEL,
         contents=prompt,
@@ -198,7 +192,8 @@ def _generate_gemini_once(prompt: str) -> str:
 
 def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tokens: int, primary_model: str, event_meta: dict[str, Any], min_chars: int = 0):
     key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not key: raise RuntimeError("GEMINI_API_KEY is not configured")
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
     from google import genai
     from google.genai import types
     client = genai.Client(api_key=key)
@@ -239,12 +234,15 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
                 yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(last_error)})
                 continue
 
-            yield _event({"type": "done", "model": model, **event_meta}); return
+            yield _event({"type": "done", "model": model, **event_meta})
+            return
         except Exception as exc:
             last_error = exc
             if is_last:
-                yield _event({"type": "error", "message": f"All Gemini synthesis models failed: {exc}"}); return
-            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(exc)}); continue
+                yield _event({"type": "error", "message": f"All Gemini synthesis models failed: {exc}"})
+                return
+            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(exc)})
+            continue
     raise RuntimeError(f"All Gemini synthesis models failed: {last_error}")
 
 
@@ -256,7 +254,7 @@ def _stream_deep_research(request: ChatRequest, system_content: str, context: st
     plan = run_hybrid_research(question=question, user_id=request.user_id, notebook_id=request.notebook_id, source_names=source_names, study=request.research_mode == "study", deep=request.research_mode in ("deep", "study"))
     instruction = build_synthesis_instruction(topic=plan["topic"], outline=plan["outline"], verification=plan["verification"], requested_detail=requested_detail, study=request.research_mode == "study")
     evidence = format_evidence(plan["evidence"])
-    notebook_context = f"\n\nLEGACY ACTIVE NOTEBOOK CONTEXT:\n{context}" if context else ""
+    notebook_context = f"\n\nNOTEBOOK CONTEXT:\n{context}" if context else ""
     prompt = _conversation_text(request.messages, instruction) + "\n\nRESEARCH PLAN:\n" + json.dumps(plan["plan"], ensure_ascii=False, indent=2) + "\n\nVERIFIED EVIDENCE:\n" + evidence + notebook_context
     if plan["web_sources"]:
         yield _event({"type": "sources", "sources": plan["web_sources"]})
@@ -323,15 +321,10 @@ def _stream_chat(request: ChatRequest):
         context = ""
         if request.notebook_id:
             last_user_message = next((message.content for message in reversed(request.messages) if message.role == "user"), "")
-            if last_user_message:
-                results = retrieve(request.user_id, request.notebook_id, last_user_message, top_k=5, source_names=active_source_names)
-                context = format_context(results)
-                if results:
-                    active_source_names = list(dict.fromkeys(result["source"] for result in results))
-                else:
-                    context, overview_sources = _load_overview_context(request.notebook_id, active_source_names)
-                    if overview_sources:
-                        active_source_names = overview_sources
+            built = build_context(request.user_id, request.notebook_id, active_source_names, last_user_message, token_budget=1800, top_k=8, include_insights=True)
+            context = built["context"]
+            if built["sources"]:
+                active_source_names = built["sources"]
         yield from _stream_model(request, context, active_source_names)
     except Exception as exc:
         yield _event({"type": "error", "message": str(exc)})
@@ -339,7 +332,24 @@ def _stream_chat(request: ChatRequest):
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {"status": "ok", "service": "apollo-api", "version": "0.8.0", "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()), "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()), "primary_model": PRIMARY_MODEL, "vision_model": GROQ_VISION_MODEL, "fallback_model": GEMINI_FALLBACK_MODEL, "gemini_fallback_chain": GEMINI_FALLBACK_MODELS, "deep_output_tokens": DEEP_OUTPUT_TOKENS, "deep_research": "hybrid_rag_tavily", "web_search": "tavily"}
+    return {
+        "status": "ok",
+        "service": "apollo-api",
+        "version": "0.9.0",
+        "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "tavily_configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+        "primary_model": PRIMARY_MODEL,
+        "vision_model": GROQ_VISION_MODEL,
+        "fallback_model": GEMINI_FALLBACK_MODEL,
+        "gemini_fallback_chain": GEMINI_FALLBACK_MODELS,
+        "deep_output_tokens": DEEP_OUTPUT_TOKENS,
+        "deep_research": "hybrid_rag_tavily",
+        "web_search": "tavily",
+        "embedding_model": os.getenv("APOLLO_EMBEDDING_MODEL", "gemini-embedding-2"),
+        "embedding_dimensions": int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768")),
+        "pgvector": bool(STORE and STORE.vector_available()),
+    }
 
 
 @app.get("/api/notebooks")
@@ -388,11 +398,16 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     try:
-        return add_source(user_id, notebook_id, file.filename or "source.txt", raw)
+        result = add_source(user_id, notebook_id, file.filename or "source.txt", raw)
+        embedding_job = await enqueue_embedding_job(notebook_id, user_id, file.filename or "source.txt")
+        result["embedding_job"] = embedding_job
+        return result
     except KeyError:
         raise HTTPException(status_code=404, detail="Notebook not found") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Source indexing failed: {exc}") from exc
 
 
 @app.delete("/api/notebooks/{notebook_id}/sources/{source_name}")
@@ -410,6 +425,112 @@ def notebook_search(notebook_id: str, request: RAGQueryRequest):
         raise HTTPException(status_code=404, detail="Notebook not found")
     results = retrieve(request.user_id, notebook_id, request.query, top_k=request.top_k, source_names=request.source_names)
     return {"results": results}
+
+
+@app.post("/api/notebooks/{notebook_id}/mindmap")
+async def notebook_mindmap(notebook_id: str, request: MindMapRequest, http_request: Request):
+    rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
+    allowed, retry_after = _check_rate_limit(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+    if get_notebook(request.user_id, notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    # Resolve source content on the server. Client text is never trusted as
+    # diagram source material for notebook Mind Maps.
+    chunks = get_notebook_chunks(request.user_id, notebook_id, request.active_sources)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="No indexed source content is available for this notebook. Upload a source and try again.")
+
+    topic = request.diagram_hint or "the main concepts, relationships, events, and structure in these notebook sources"
+    built = build_context(request.user_id, notebook_id, request.active_sources, topic, token_budget=4500, top_k=18, include_insights=True)
+    student_content = built["context"]
+    if not student_content:
+        raise HTTPException(status_code=400, detail="No indexed source content is available for this notebook. Upload a source and try again.")
+
+    instruction = (
+        "You are formatting a student's indexed OWN notebook sources into a diagram. "
+        "Use ONLY ideas, terms, events, facts, and relationships already present in the supplied source content. "
+        "Do NOT invent facts, plot points, steps, names, or concepts. Your job is only to structure and label what is already present."
+    )
+    prompt = build_diagram_prompt(topic, context=student_content) + f"\n\n{instruction}"
+
+    def attempt_sync() -> Any:
+        text = _generate_gemini_once(prompt)
+        return generate_and_render(text)
+
+    try:
+        rendered = await asyncio.wait_for(asyncio.to_thread(attempt_sync), timeout=float(os.getenv("GEMINI_DIAGRAM_TIMEOUT", "45")))
+        overlap = content_overlap_ratio(rendered.kind, rendered.source_code, student_content) if rendered else 0.0
+        if rendered and overlap < 0.5:
+            stricter_prompt = prompt + "\n\nYour first attempt introduced labels not supported by the source content. Regenerate using only words and ideas supported by the supplied notebook sources."
+
+            def retry_sync() -> Any:
+                text = _generate_gemini_once(stricter_prompt)
+                return generate_and_render(text)
+
+            retry = await asyncio.wait_for(asyncio.to_thread(retry_sync), timeout=float(os.getenv("GEMINI_DIAGRAM_RETRY_TIMEOUT", "45")))
+            if retry:
+                retry_overlap = content_overlap_ratio(retry.kind, retry.source_code, student_content)
+                if retry_overlap > overlap:
+                    rendered, overlap = retry, retry_overlap
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Diagram generation timed out. Please try again.") from None
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not rendered or not rendered.svg_bytes:
+        raise HTTPException(status_code=502, detail=rendered.error if rendered else "Diagram generation failed")
+
+    return {
+        "kind": rendered.kind,
+        "svg": rendered.svg_bytes.decode("utf-8"),
+        "verified": overlap >= 0.5,
+        "overlap_ratio": round(overlap, 2),
+        "warning": None if overlap >= 0.5 else "This diagram may include wording not found in your original content -- please review it before submitting.",
+        "sources": list(dict.fromkeys(chunk.get("source") for chunk in chunks if chunk.get("source"))),
+    }
+
+
+@app.post("/api/notebooks/{notebook_id}/sources/{source_name}/insights")
+def notebook_source_insight(notebook_id: str, source_name: str, request: InsightRequest):
+    if get_notebook(request.user_id, notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    if not any(source.get("name") == source_name for source in list_sources(request.user_id, notebook_id)):
+        raise HTTPException(status_code=404, detail="Source not found")
+    try:
+        return run_transformation(request.user_id, notebook_id, source_name, request.insight_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/notebooks/{notebook_id}/sources/{source_name}/insights")
+def notebook_source_insights(notebook_id: str, source_name: str, user_id: str = "default"):
+    if get_notebook(user_id, notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    if not STORE:
+        return {"insights": []}
+    return {"insights": STORE.list_insights(notebook_id, source_name=source_name)}
+
+
+@app.post("/api/jobs")
+async def create_job(request: JobRequest):
+    if get_notebook(request.user_id, request.notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    try:
+        return await enqueue_job(request.type, request.notebook_id, request.user_id, request.source_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/jobs/{job_id}")
+def read_job(job_id: str):
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.post("/api/chat")
@@ -440,14 +561,19 @@ def portfolio_diagram(request: PortfolioDiagramRequest, http_request: Request):
 
     def _attempt(p: str):
         text = _generate_gemini_once(p)
-        parsed_render = generate_and_render(text)
-        return parsed_render
+        return generate_and_render(text)
 
-    rendered = _attempt(prompt)
+    try:
+        rendered = _attempt(prompt)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     overlap = content_overlap_ratio(rendered.kind, rendered.source_code, request.content) if rendered else 0.0
     if rendered and overlap < 0.5:
         stricter = prompt + "\n\nYour previous attempt used words not found in the student's own content. Regenerate using ONLY the student's own words and ideas."
-        retry = _attempt(stricter)
+        try:
+            retry = _attempt(stricter)
+        except Exception:
+            retry = None
         if retry:
             retry_overlap = content_overlap_ratio(retry.kind, retry.source_code, request.content)
             if retry_overlap > overlap:
