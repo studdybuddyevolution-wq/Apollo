@@ -18,6 +18,23 @@ WORKSPACE_FILE = DATA_DIR / "workspace.json"
 _LOCK = threading.RLock()
 
 
+def _ensure_workspace_schema() -> None:
+    if not STORE:
+        return
+    migration_path = Path(__file__).resolve().parent / "migrations" / "002_knowledge_workspace.sql"
+    if not migration_path.exists():
+        return
+    try:
+        with STORE._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(migration_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[Apollo workspace] schema migration warning: {exc}")
+
+
+_ensure_workspace_schema()
+
+
 def _now() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
 
