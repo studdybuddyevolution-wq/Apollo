@@ -1,20 +1,29 @@
-"""Hybrid research orchestration for Apollo Deep Research.
+"""Hybrid research orchestration for Apollo Deep Research."""
 
-The engine deliberately stays lightweight: query classification/decomposition are
-local, notebook retrieval reuses Apollo's BM25 RAG, and Tavily supplies external
-evidence. Gemini remains the synthesis layer owned by main.py.
-"""
 from __future__ import annotations
 
 import re
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 from tavily import TavilyClient
 
-from rag_service import format_context, retrieve
+from rag_service import retrieve
+
+
+class EvidenceItem(TypedDict, total=False):
+    """Stable evidence contract shared by notebook and web research."""
+
+    kind: str
+    title: str
+    url: str
+    source: str
+    published_date: str
+    score: float
+    authority: float
+    text: str
 
 
 TOPIC_TEMPLATES: dict[str, list[str]] = {
@@ -127,7 +136,7 @@ def _authority_score(url: str) -> float:
     return 0.5
 
 
-def retrieve_tavily_evidence(query: str, deep: bool = True) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+def retrieve_tavily_evidence(query: str, deep: bool = True) -> tuple[list[EvidenceItem], list[dict[str, str]]]:
     key = __import__("os").getenv("TAVILY_API_KEY", "").strip()
     if not key:
         raise RuntimeError("TAVILY_API_KEY is not configured")
@@ -140,7 +149,7 @@ def retrieve_tavily_evidence(query: str, deep: bool = True) -> tuple[list[dict[s
         include_answer=False,
         include_raw_content=deep,
     )
-    evidence: list[dict[str, Any]] = []
+    evidence: list[EvidenceItem] = []
     sources: list[dict[str, str]] = []
     for item in response.get("results", []) or []:
         url = str(item.get("url") or "").strip()
@@ -167,7 +176,7 @@ def retrieve_notebook_evidence(
     notebook_id: str | None,
     query: str,
     source_names: list[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[EvidenceItem]:
     if not notebook_id:
         return []
     results = retrieve(user_id, notebook_id, query, top_k=4, source_names=source_names or [])
@@ -176,16 +185,16 @@ def retrieve_notebook_evidence(
             "kind": "notebook",
             "title": result["source"],
             "source": result["source"],
-            "score": result.get("score", 0.0),
+            "score": float(result.get("rrf_score", result.get("score", 0.0))),
             "text": result["text"][:6000],
         }
         for result in results
     ]
 
 
-def merge_evidence(pools: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def merge_evidence(pools: list[list[EvidenceItem]]) -> list[EvidenceItem]:
     """Deduplicate URLs/chunks while retaining independent corroboration."""
-    merged: OrderedDict[str, dict[str, Any]] = OrderedDict()
+    merged: OrderedDict[str, EvidenceItem] = OrderedDict()
     for pool in pools:
         for item in pool:
             key = f"web:{item.get('url')}" if item.get("kind") == "web" else f"notebook:{item.get('source')}:{item.get('text', '')[:160]}"
@@ -196,7 +205,7 @@ def merge_evidence(pools: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     return items
 
 
-def verify_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any]:
+def verify_evidence(evidence: list[EvidenceItem]) -> dict[str, Any]:
     """Produce a compact verification layer for synthesis rather than flattening conflicts."""
     web = [e for e in evidence if e.get("kind") == "web"]
     notebook = [e for e in evidence if e.get("kind") == "notebook"]
@@ -221,7 +230,7 @@ def build_outline(topic: str, question: str) -> list[str]:
     return TOPIC_TEMPLATES.get(topic, TOPIC_TEMPLATES["conceptual"]).copy()
 
 
-def format_evidence(evidence: list[dict[str, Any]], max_chars: int = 36000) -> str:
+def format_evidence(evidence: list[EvidenceItem], max_chars: int = 36000) -> str:
     blocks: list[str] = []
     used = 0
     for i, item in enumerate(evidence, 1):
@@ -304,12 +313,12 @@ def run_hybrid_research(
     topic = classify_query(question)
     plan = decompose_query(question, topic, study=study)
 
-    def run_pass(item: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    def run_pass(item: dict[str, str]) -> tuple[list[EvidenceItem], list[dict[str, str]]]:
         notebook = retrieve_notebook_evidence(user_id, notebook_id, item["query"], source_names)
         web, sources = retrieve_tavily_evidence(item["query"], deep=deep)
         return merge_evidence([notebook, web]), sources
 
-    evidence_by_pass: list[list[dict[str, Any]]] = []
+    evidence_by_pass: list[list[EvidenceItem]] = []
     web_sources: list[dict[str, str]] = []
     max_workers = min(3, len(plan)) or 1
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="apollo-research") as executor:
