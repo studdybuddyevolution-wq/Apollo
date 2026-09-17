@@ -10,3 +10,4 @@ python-multipart>=0.0.9,<1
 tavily-python>=0.7,<1
 psycopg[binary]>=3.2,<4
 requests>=2.31,<3
+tiktoken>=0.7,<1
