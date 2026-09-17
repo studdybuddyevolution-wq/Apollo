@@ -6,7 +6,7 @@ import ipaddress
 import re
 import socket
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
@@ -78,7 +78,7 @@ def _download(url: str) -> tuple[bytes, str]:
                 location = response.headers.get("Location")
                 if not location:
                     raise ValueError("URL redirect did not provide a destination")
-                current = _validate_public_url(requests.compat.urljoin(current, location))
+                current = _validate_public_url(urljoin(current, location))
                 response.close()
                 continue
             response.raise_for_status()
