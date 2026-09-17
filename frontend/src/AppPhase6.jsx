@@ -13,6 +13,7 @@ import {
   renameSession, uploadSource,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
+import SourceImportBar from './SourceImportBar'
 import './console-clean.css'
 
 const NAV_ITEMS = [
@@ -182,6 +183,7 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
       <p className="context-description">Choose how much of each source Apollo can use for chat and research.</p>
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sources..." /></div>
+      <SourceImportBar notebookId={activeId} userId={getUserId()} onImported={async () => { setSourceMode && setSourceMode('__refresh__', 'full'); window.dispatchEvent(new CustomEvent('apollo-sources-refresh')) }} />
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
       <div className="source-list">{visibleSources.map((s) => {
         const mode = sourceModes[s.name] || 'full'
