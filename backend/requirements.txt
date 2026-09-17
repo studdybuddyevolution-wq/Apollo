@@ -11,3 +11,4 @@ tavily-python>=0.7,<1
 psycopg[binary]>=3.2,<4
 requests>=2.31,<3
 tiktoken>=0.7,<1
+youtube-transcript-api>=1,<2
