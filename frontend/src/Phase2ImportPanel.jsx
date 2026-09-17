@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Globe, Link2, X, Youtube } from 'lucide-react'
+import { Globe, Link2, Video, X } from 'lucide-react'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
@@ -89,7 +89,7 @@ export default function Phase2ImportPanel() {
     <div style={{ padding: 14 }}>
       <div style={{ display: 'flex', gap: 7, marginBottom: 11 }}>
         <button onClick={() => setMode('url')} style={{ flex: 1, border: '1px solid rgba(255,255,255,.08)', borderRadius: 8, padding: '7px 8px', background: mode === 'url' ? '#20232d' : 'transparent', color: '#fff', cursor: 'pointer' }}><Globe size={13} style={{ verticalAlign: -2 }} /> Web URL</button>
-        <button disabled={!youtubeReady} onClick={() => setMode('youtube')} style={{ flex: 1, border: '1px solid rgba(255,255,255,.08)', borderRadius: 8, padding: '7px 8px', background: mode === 'youtube' ? '#20232d' : 'transparent', color: youtubeReady ? '#fff' : '#666', cursor: youtubeReady ? 'pointer' : 'not-allowed' }}><Youtube size={13} style={{ verticalAlign: -2 }} /> YouTube</button>
+        <button disabled={!youtubeReady} onClick={() => setMode('youtube')} style={{ flex: 1, border: '1px solid rgba(255,255,255,.08)', borderRadius: 8, padding: '7px 8px', background: mode === 'youtube' ? '#20232d' : 'transparent', color: youtubeReady ? '#fff' : '#666', cursor: youtubeReady ? 'pointer' : 'not-allowed' }}><Video size={13} style={{ verticalAlign: -2 }} /> YouTube</button>
       </div>
       <select value={notebookId} onChange={(e) => setNotebookId(e.target.value)} style={{ width: '100%', marginBottom: 10, borderRadius: 8, padding: 9, background: '#181a22', color: '#fff', border: '1px solid rgba(255,255,255,.08)' }}>
         <option value="">Choose notebook</option>
