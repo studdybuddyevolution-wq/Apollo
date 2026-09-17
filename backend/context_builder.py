@@ -99,3 +99,25 @@ def build_context(
         "token_count": used_tokens,
         "token_budget": token_budget,
     }
+
+
+# The legacy main.py imports this module before instantiating FastAPI. Hooking
+# the constructor lets Phase 1 routes be registered without duplicating Apollo's
+# existing application module; the hook is installed once and is harmless for tests.
+def _install_phase1_routes() -> None:
+    from fastapi import FastAPI
+
+    if getattr(FastAPI, "_apollo_phase1_hooked", False):
+        return
+    original_init = FastAPI.__init__
+
+    def patched_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        from phase1_routes import register
+        register(self)
+
+    FastAPI.__init__ = patched_init
+    FastAPI._apollo_phase1_hooked = True
+
+
+_install_phase1_routes()
