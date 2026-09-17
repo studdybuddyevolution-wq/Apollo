@@ -73,3 +73,59 @@ export function searchNotebook(notebookId, query, options = {}) {
     }),
   })
 }
+
+export function listSessions(notebookId, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions?user_id=${encodeURIComponent(userId)}`)
+}
+
+export function createSession(notebookId, title = 'New chat', userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, user_id: userId }),
+  })
+}
+
+export function renameSession(notebookId, sessionId, title, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, user_id: userId }),
+  })
+}
+
+export function deleteSession(notebookId, sessionId, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function getSessionMessages(notebookId, sessionId, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}/messages?user_id=${encodeURIComponent(userId)}`)
+}
+
+export function listNotes(notebookId, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/notes?user_id=${encodeURIComponent(userId)}`)
+}
+
+export function createNote(notebookId, note, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...note, user_id: userId }),
+  })
+}
+
+export function updateNote(notebookId, noteId, note, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/notes/${encodeURIComponent(noteId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...note, user_id: userId }),
+  })
+}
+
+export function deleteNote(notebookId, noteId, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/notes/${encodeURIComponent(noteId)}?user_id=${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  })
+}
