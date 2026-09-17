@@ -31,18 +31,7 @@ async function openChat({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
-    body: JSON.stringify({
-      messages,
-      // Web/Deep/Study research is synthesized by Gemini after Tavily retrieval.
-      // Groq remains the normal-chat model only.
-      model,
-      notebook_id: notebookId,
-      notebook_title: notebookTitle,
-      active_sources: activeSources,
-      user_id: userId,
-      web_enabled: webEnabled,
-      research_mode: researchMode,
-    }),
+    body: JSON.stringify({ messages, model, notebook_id: notebookId, notebook_title: notebookTitle, active_sources: activeSources, user_id: userId, web_enabled: webEnabled, research_mode: researchMode }),
   })
 
   if (!response.ok) {
@@ -50,12 +39,9 @@ async function openChat({
     try {
       const body = await response.json()
       if (body?.detail) message = body.detail
-    } catch {
-      // Keep the HTTP status message when the backend does not return JSON.
-    }
+    } catch {}
     throw new Error(message)
   }
-
   if (!response.body) throw new Error('Apollo API did not return a streaming response')
 
   const reader = response.body.getReader()
@@ -70,7 +56,6 @@ async function openChat({
       .map((line) => line.slice(5).trim())
       .join('')
     if (!data) return
-
     const payload = JSON.parse(data)
     if (payload.type === 'start') {
       serverResearch = payload.research || researchMode
@@ -102,7 +87,6 @@ async function openChat({
     }
     if (done) break
   }
-
   if (buffer.trim()) consumeEvent(buffer)
 }
 
@@ -150,6 +134,20 @@ export async function checkHealth() {
   return response.json()
 }
 
+export async function generateNotebookDiagram(notebookId, activeSources = [], diagramHint = null, userId = 'default', signal) {
+  const response = await fetch(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/mindmap`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ active_sources: activeSources, diagram_hint: diagramHint || null, user_id: userId }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Diagram generation failed')
+  }
+  return response.json()
+}
+
 export async function generatePortfolioDiagram(content, diagramHint, userId = 'default') {
   const response = await fetch(`${API_BASE}/api/portfolio/diagram`, {
     method: 'POST',
@@ -161,4 +159,29 @@ export async function generatePortfolioDiagram(content, diagramHint, userId = 'd
     throw new Error(err.detail || 'Diagram generation failed')
   }
   return response.json()
+}
+
+export async function getJob(jobId, signal) {
+  const response = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, { signal })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Job lookup failed')
+  }
+  return response.json()
+}
+
+export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
+  while (true) {
+    const job = await getJob(jobId, signal)
+    onProgress?.(job)
+    if (job.status === 'completed' || job.status === 'failed') return job
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, intervalMs)
+      const abort = () => {
+        clearTimeout(timer)
+        reject(new DOMException('The operation was aborted.', 'AbortError'))
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+    })
+  }
 }
