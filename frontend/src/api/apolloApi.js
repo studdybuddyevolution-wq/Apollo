@@ -149,3 +149,16 @@ export async function checkHealth() {
   if (!response.ok) throw new Error(`Health check failed: ${response.status}`)
   return response.json()
 }
+
+export async function generatePortfolioDiagram(content, diagramHint, userId = 'default') {
+  const response = await fetch(`${API_BASE}/api/portfolio/diagram`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, diagram_hint: diagramHint || null, user_id: userId }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Diagram generation failed')
+  }
+  return response.json()
+}
