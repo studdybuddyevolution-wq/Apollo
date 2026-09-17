@@ -5,7 +5,7 @@ import {
   LoaderCircle, Menu, Paperclip, Plus, Search, Settings, Sparkles, Upload, User,
   Video, WandSparkles, X, Activity, SlidersHorizontal,
 } from 'lucide-react'
-import { streamChat } from './api/apolloApi'
+import { generatePortfolioDiagram, streamChat } from './api/apolloApi'
 import { createNotebook, listNotebooks, listSources, uploadSource } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import './console-clean.css'
@@ -172,7 +172,41 @@ function SourcePanel({ notebooks, activeId, sources, activeSources, setActiveId,
 
 function StudioPanel({ close, tool, setTool }) {
   const current = STUDIO_TOOLS.find((x) => x.id === tool) || STUDIO_TOOLS[0]
-  return <aside className="context-panel studio-panel"><div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div><p className="context-description">Studio generation will use the connected notebook once those tools are migrated.</p><div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => setTool(id)}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div><div className="studio-footer"><div><strong>{current.label}</strong><span>Waiting for backend</span></div><button className="studio-generate" disabled><Sparkles size={15} /> Generate</button></div></aside>
+  const [portfolioContent, setPortfolioContent] = useState('')
+  const [diagram, setDiagram] = useState(null)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState('')
+
+  const generate = async () => {
+    const content = portfolioContent.trim()
+    if (tool !== 'mindmap' || !content || generating) return
+    setGenerating(true)
+    setError('')
+    setDiagram(null)
+    try {
+      const result = await generatePortfolioDiagram(content)
+      setDiagram(result)
+    } catch (err) {
+      setError(err?.message || 'Diagram generation failed')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  return <aside className="context-panel studio-panel">
+    <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
+    <p className="context-description">Studio generation will use the connected notebook once those tools are migrated.</p>
+    {tool === 'mindmap' && <div style={{ marginBottom: 16 }}>
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 7, color: 'var(--text)' }}>Your own content</label>
+      <textarea value={portfolioContent} onChange={(e) => { setPortfolioContent(e.target.value); setError(''); setDiagram(null) }} placeholder="Paste your own story, notes, or ideas here…" rows={8} style={{ width: '100%', resize: 'vertical', border: '1px solid var(--surface-high)', borderRadius: 10, padding: 10, background: 'var(--surface-container)', color: 'var(--text)', outline: 'none', font: '12px Inter, system-ui, sans-serif', lineHeight: 1.5 }} />
+      {error && <div role="alert" style={{ marginTop: 9, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11 }}>{error}</div>}
+      {diagram?.warning && <div role="alert" style={{ marginTop: 10, padding: 11, borderRadius: 9, background: 'rgba(127,29,29,.45)', border: '2px solid #ef4444', color: '#fee2e2', fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}><strong>⚠ Review this diagram:</strong> {diagram.warning}</div>}
+      {diagram?.svg && <div style={{ marginTop: 12, padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />}
+      {diagram && !diagram.warning && <div style={{ marginTop: 8, color: 'var(--tertiary)', fontSize: 10 }}>Verified against your original content ({Math.round((diagram.overlap_ratio || 0) * 100)}% label overlap).</div>}
+    </div>}
+    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => setTool(id)}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
+    <div className="studio-footer"><div><strong>{current.label}</strong><span>{tool === 'mindmap' ? (generating ? 'Generating…' : 'Ready') : 'Waiting for backend'}</span></div><button className="studio-generate" disabled={tool !== 'mindmap' || !portfolioContent.trim() || generating} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
+  </aside>
 }
 
 export default function AppPhase6() {
