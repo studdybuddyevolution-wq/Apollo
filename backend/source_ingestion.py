@@ -14,7 +14,7 @@ from rag_service import add_source
 
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = 15
-USER_AGENT = "Apollo Omni AI/Phase2 (+https://apollo.studdybuddyevolution.workers.dev)"
+USER_AGENT = "Apollo Omni AI/Phase2"
 
 
 class _TextExtractor(HTMLParser):
@@ -70,7 +70,7 @@ def _validate_public_url(url: str) -> str:
 def _download(url: str) -> tuple[bytes, str]:
     response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT, allow_redirects=True)
     response.raise_for_status()
-    final_url = _validate_public_url(response.url)
+    _validate_public_url(response.url)
     content = response.content
     if len(content) > MAX_DOWNLOAD_BYTES:
         raise ValueError("Source is larger than Apollo's 8 MB URL ingestion limit")
@@ -103,7 +103,8 @@ def extract_youtube_video_id(url: str) -> str:
         if parsed.path == "/watch":
             candidate = parse_qs(parsed.query).get("v", [""])[0]
         elif parsed.path.startswith(("/shorts/", "/embed/", "/live/")):
-            candidate = parsed.path.strip("/").split("/")[1]
+            parts = parsed.path.strip("/").split("/")
+            candidate = parts[1] if len(parts) > 1 else ""
         else:
             candidate = ""
     else:
@@ -119,12 +120,12 @@ def ingest_url(user_id: str | None, notebook_id: str, url: str) -> dict:
     if "application/pdf" in content_type or safe_url.lower().endswith(".pdf"):
         title = urlparse(safe_url).path.rstrip("/").split("/")[-1] or "web-document"
         filename = _slug_title(title.rsplit(".", 1)[0], safe_url, "URL") + ".pdf"
-        return add_source(user_id, notebook_id, filename, raw, kind="url")
+        return add_source(user_id, notebook_id, filename, raw)
 
     title, text = _html_to_text(raw)
     name = _slug_title(title, safe_url, "URL") + ".txt"
     payload = f"Source URL: {safe_url}\n\n{text}".encode("utf-8")
-    return add_source(user_id, notebook_id, name, payload, kind="url")
+    return add_source(user_id, notebook_id, name, payload)
 
 
 def ingest_youtube(user_id: str | None, notebook_id: str, url: str, languages: list[str] | None = None) -> dict:
@@ -145,4 +146,4 @@ def ingest_youtube(user_id: str | None, notebook_id: str, url: str, languages: l
         + "\n\n".join(lines)
     )
     filename = f"YouTube {video_id}.txt"
-    return add_source(user_id, notebook_id, filename, text.encode("utf-8"), kind="youtube")
+    return add_source(user_id, notebook_id, filename, text.encode("utf-8"))
