@@ -163,7 +163,37 @@ export async function checkHealth() {
 
 async function parseError(response, fallback) {
   const err = await response.json().catch(() => ({}))
-  return err?.detail || fallback
+  const detail = err?.detail || fallback
+  const normalized = String(detail).toUpperCase()
+  if (response.status >= 500 && (normalized.includes('UNAVAILABLE') || normalized.includes('HIGH DEMAND') || normalized.includes('503'))) {
+    return 'Gemini is temporarily busy. Apollo will retry automatically.'
+  }
+  return detail
+}
+
+function isTransientDiagramError(error) {
+  const text = String(error?.message || '').toUpperCase()
+  return text.includes('503') || text.includes('UNAVAILABLE') || text.includes('HIGH DEMAND') || text.includes('TEMPORARILY BUSY')
+}
+
+function sleepWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+  })
 }
 
 export async function generatePortfolioDiagram(content, diagramHint, userId = 'default', signal) {
@@ -179,14 +209,35 @@ export async function generatePortfolioDiagram(content, diagramHint, userId = 'd
 
 export async function generateNotebookDiagram(notebookId, activeSources = [], diagramHint = null, userId = 'default', signal) {
   if (!notebookId) throw new Error('No active notebook selected')
-  const response = await fetch(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/mindmap`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    body: JSON.stringify({ active_sources: activeSources, diagram_hint: diagramHint || null, user_id: userId }),
-  })
-  if (!response.ok) throw new Error(await parseError(response, 'Diagram generation failed'))
-  return response.json()
+
+  const maxAttempts = 4
+  const retryDelays = [1200, 2500, 4500]
+  let lastError = null
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/mindmap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({ active_sources: activeSources, diagram_hint: diagramHint || null, user_id: userId }),
+      })
+      if (!response.ok) {
+        throw new Error(await parseError(response, `Apollo API returned ${response.status}`))
+      }
+      return response.json()
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error
+      lastError = error
+      const transient = isTransientDiagramError(error)
+      if (!transient || attempt === maxAttempts - 1) {
+        throw new Error(transient ? 'Gemini is temporarily busy. Please try again in a moment.' : (error?.message || 'Diagram generation failed'))
+      }
+      await sleepWithSignal(retryDelays[attempt], signal)
+    }
+  }
+
+  throw lastError || new Error('Diagram generation failed')
 }
 
 export async function getJob(jobId, signal) {
