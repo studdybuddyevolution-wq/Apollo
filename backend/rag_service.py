@@ -1,5 +1,4 @@
-"""Lightweight Apollo notebook/RAG service for the FastAPI backend."""
-
+"""Apollo notebook/RAG service with token-aware chunking and hybrid retrieval."""
 from __future__ import annotations
 
 import datetime as dt
@@ -18,6 +17,8 @@ from typing import Any
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 
+from chunking import split_text, token_count
+from embeddings import embed_text
 from storage import STORE
 
 DATA_DIR = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
@@ -59,37 +60,6 @@ def _metadata_path(notebook_id: str) -> Path:
 
 def _tokens(text: str) -> list[str]:
     return [token.lower() for token in _TOKEN_RE.findall(text)]
-
-
-def _clean_text(text: str) -> str:
-    text = re.sub(r"\r\n?", "\n", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _split_text(text: str, chunk_size: int = 1200, overlap: int = 180) -> list[str]:
-    text = _clean_text(text)
-    if not text:
-        return []
-    chunks: list[str] = []
-    start = 0
-    length = len(text)
-    while start < length:
-        end = min(length, start + chunk_size)
-        if end < length:
-            boundary = text.rfind("\n\n", start + chunk_size // 2, end)
-            if boundary == -1:
-                boundary = text.rfind(". ", start + chunk_size // 2, end)
-            if boundary != -1:
-                end = boundary + (2 if text[boundary:boundary + 2] == ". " else 0)
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= length:
-            break
-        start = max(0, end - overlap)
-    return chunks
 
 
 def _extract_text(filename: str, raw: bytes) -> str:
@@ -191,35 +161,74 @@ def delete_notebook(user_id: str | None, notebook_id: str) -> bool:
         return True
 
 
+def _normalize_chunk(chunk: dict[str, Any], fallback_index: int = 0) -> dict[str, Any]:
+    return {
+        **chunk,
+        "chunk_index": int(chunk.get("chunk_index", fallback_index)),
+        "content_type": chunk.get("content_type", "plain"),
+        "text": str(chunk.get("text", "")),
+    }
+
+
+def get_notebook_chunks(user_id: str | None, notebook_id: str, source_names: list[str] | None = None) -> list[dict[str, Any]]:
+    """Return indexed chunks strictly scoped to one notebook and optional sources."""
+    if not get_notebook(user_id, notebook_id):
+        return []
+    chunks = STORE.list_chunks(notebook_id) if STORE else _load_chunks(notebook_id)
+    allowed = set(source_names or [])
+    filtered = [
+        _normalize_chunk(chunk, index)
+        for index, chunk in enumerate(chunks)
+        if not allowed or chunk.get("source") in allowed
+    ]
+    return sorted(filtered, key=lambda item: (str(item.get("source", "")), int(item.get("chunk_index", 0))))
+
+
 def list_sources(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]:
     if not get_notebook(user_id, notebook_id):
         return []
     if STORE:
         return STORE.list_sources(notebook_id)
-    chunks = _load_chunks(notebook_id)
+    chunks = get_notebook_chunks(user_id, notebook_id)
     grouped: dict[str, dict[str, Any]] = {}
     for chunk in chunks:
         source = chunk["source"]
-        grouped.setdefault(source, {"name": source, "kind": chunk.get("kind", "file"), "chunks": 0})
+        grouped.setdefault(source, {"name": source, "kind": chunk.get("kind", "file"), "chunks": 0, "processing_status": "indexed"})
         grouped[source]["chunks"] += 1
     return list(grouped.values())
+
+
+def list_sources_with_status(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]:
+    if not get_notebook(user_id, notebook_id):
+        return []
+    if STORE:
+        return STORE.list_sources_with_status(notebook_id)
+    return list_sources(user_id, notebook_id)
 
 
 def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes) -> dict[str, Any]:
     if not get_notebook(user_id, notebook_id):
         raise KeyError("Notebook not found")
     text = _extract_text(filename, raw)
-    chunks = _split_text(text)
-    if not chunks:
+    chunk_records = split_text(text, filename=filename)
+    if not chunk_records:
         raise ValueError("No readable text found in source")
     new_chunks = [
-        {"id": uuid.uuid4().hex, "source": filename, "kind": "file", "text": chunk}
-        for chunk in chunks
+        {
+            "id": uuid.uuid4().hex,
+            "source": filename,
+            "kind": "file",
+            "text": chunk["text"],
+            "chunk_index": chunk["chunk_index"],
+            "content_type": chunk["content_type"],
+        }
+        for chunk in chunk_records
     ]
     if STORE:
         STORE.replace_source(notebook_id, filename, new_chunks)
+        STORE.upsert_source_status(notebook_id, filename, "file", "indexed", None)
         STORE.update_counts(notebook_id, _now(), len(STORE.list_sources(notebook_id)), len(STORE.list_chunks(notebook_id)))
-        return {"name": filename, "kind": "file", "chunks": len(chunks), "characters": len(text)}
+        return {"name": filename, "kind": "file", "chunks": len(new_chunks), "characters": len(text), "status": "indexed"}
     with _LOCK:
         existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
         all_chunks = existing + new_chunks
@@ -233,7 +242,7 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes)
                 notebook["node_count"] = len(all_chunks)
                 break
         _save_manifest(manifest)
-    return {"name": filename, "kind": "file", "chunks": len(chunks), "characters": len(text)}
+    return {"name": filename, "kind": "file", "chunks": len(new_chunks), "characters": len(text), "status": "indexed"}
 
 
 def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
@@ -288,27 +297,97 @@ def _bm25_scores(query: str, chunks: list[dict[str, Any]]) -> list[tuple[float, 
     return scores
 
 
-def retrieve(user_id: str | None, notebook_id: str, query: str, top_k: int = 5, source_names: list[str] | None = None) -> list[dict[str, Any]]:
+def retrieve_hybrid(
+    user_id: str | None,
+    notebook_id: str,
+    query: str,
+    top_k: int = 5,
+    source_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
     if not get_notebook(user_id, notebook_id):
         return []
-    chunks = STORE.list_chunks(notebook_id) if STORE else _load_chunks(notebook_id)
+    chunks = get_notebook_chunks(user_id, notebook_id, source_names)
     if not chunks:
         return []
-    allowed = set(source_names or [])
-    filtered = [chunk for chunk in chunks if not allowed or chunk.get("source") in allowed]
-    ranked = _bm25_scores(query, filtered)
-    return [{"source": filtered[index]["source"], "text": filtered[index]["text"], "score": float(score)} for score, index in ranked[:top_k]]
+
+    bm25 = _bm25_scores(query, chunks)
+    bm25_ranks = {index: rank for rank, (_, index) in enumerate(bm25[: max(top_k * 4, 20)], 1)}
+    vector_results: list[dict[str, Any]] = []
+    if STORE and getattr(STORE, "vector_enabled", False):
+        try:
+            query_embedding = embed_text(query)
+            vector_results = STORE.vector_search(notebook_id, query_embedding, top_k=max(top_k * 4, 20), source_names=source_names)
+        except Exception as exc:
+            print(f"[Apollo RAG] vector retrieval unavailable; using BM25 only: {exc}")
+
+    id_to_index = {str(chunk.get("id")): index for index, chunk in enumerate(chunks)}
+    vector_ranks: dict[int, int] = {}
+    vector_scores: dict[int, float] = {}
+    for rank, item in enumerate(vector_results, 1):
+        index = id_to_index.get(str(item.get("id")))
+        if index is not None:
+            vector_ranks[index] = rank
+            vector_scores[index] = float(item.get("similarity", 0.0))
+
+    rrf_k = float(os.getenv("APOLLO_RRF_K", "60"))
+    bm25_weight = float(os.getenv("APOLLO_RRF_BM25_WEIGHT", "1.0"))
+    vector_weight = float(os.getenv("APOLLO_RRF_VECTOR_WEIGHT", "1.0"))
+    candidate_indexes = set(bm25_ranks) | set(vector_ranks)
+    if not candidate_indexes:
+        candidate_indexes = {index for _, index in bm25[:top_k]}
+
+    fused: list[tuple[float, int]] = []
+    for index in candidate_indexes:
+        score = 0.0
+        if index in bm25_ranks:
+            score += bm25_weight / (rrf_k + bm25_ranks[index])
+        if index in vector_ranks:
+            score += vector_weight / (rrf_k + vector_ranks[index])
+        fused.append((score, index))
+    fused.sort(reverse=True)
+
+    bm25_score_map = {index: score for score, index in bm25}
+    results: list[dict[str, Any]] = []
+    for rrf_score, index in fused[:top_k]:
+        method = "hybrid" if index in bm25_ranks and index in vector_ranks else ("vector" if index in vector_ranks else "bm25")
+        results.append(
+            {
+                "source": chunks[index]["source"],
+                "text": chunks[index]["text"],
+                "score": float(rrf_score),
+                "bm25_score": float(bm25_score_map.get(index, 0.0)),
+                "vector_score": float(vector_scores.get(index, 0.0)),
+                "rrf_score": float(rrf_score),
+                "retrieval_method": method,
+                "chunk_index": chunks[index].get("chunk_index", 0),
+                "content_type": chunks[index].get("content_type", "plain"),
+                "id": chunks[index].get("id"),
+            }
+        )
+    return results
 
 
-def format_context(results: list[dict[str, Any]], max_chars: int = 9000) -> str:
+def retrieve(user_id: str | None, notebook_id: str, query: str, top_k: int = 5, source_names: list[str] | None = None) -> list[dict[str, Any]]:
+    return retrieve_hybrid(user_id, notebook_id, query, top_k=top_k, source_names=source_names)
+
+
+def format_context(results: list[dict[str, Any]], max_chars: int = 9000, max_tokens: int | None = None) -> str:
     if not results:
         return ""
     blocks = []
-    used = 0
+    used_chars = 0
+    used_tokens = 0
     for idx, result in enumerate(results, 1):
         block = f"[Source {idx}: {result['source']}]\n{result['text']}"
-        if used + len(block) > max_chars:
+        block_tokens = token_count(block)
+        if blocks and max_tokens is not None and used_tokens + block_tokens > max_tokens:
             break
+        if blocks and used_chars + len(block) > max_chars:
+            break
+        if not blocks and max_tokens is not None and block_tokens > max_tokens:
+            words = block.split()
+            block = " ".join(words[: max_tokens * 2])
         blocks.append(block)
-        used += len(block)
+        used_chars += len(block)
+        used_tokens += token_count(block)
     return "\n\n".join(blocks)
