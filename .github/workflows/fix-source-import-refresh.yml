@@ -1,0 +1,59 @@
+name: fix-source-import-refresh
+
+on:
+  push:
+    branches:
+      - feat/phase3-studio-tools
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/phase3-studio-tools
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Fix refresh wiring
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('frontend/src/AppPhase6.jsx')
+          text = path.read_text(encoding='utf-8')
+
+          text = text.replace(
+              "function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close }) {",
+              "function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close, userId, refreshSources }) {",
+              1,
+          )
+          text = text.replace(
+              "<SourceImportBar notebookId={activeId} userId={getUserId()} onImported={async () => { setSourceMode && setSourceMode('__refresh__', 'full'); window.dispatchEvent(new CustomEvent('apollo-sources-refresh')) }} />",
+              "<SourceImportBar notebookId={activeId} userId={userId} onImported={refreshSources} />",
+              1,
+          )
+          text = text.replace(
+              "{sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} />}",
+              "{sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} />}",
+              1,
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit changes and remove workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add frontend/src/AppPhase6.jsx
+          git rm .github/workflows/fix-source-import-refresh.yml
+          git commit -m 'fix: refresh Sources after web or YouTube import'
+          git push origin HEAD:feat/phase3-studio-tools
