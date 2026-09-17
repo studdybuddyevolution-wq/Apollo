@@ -1,0 +1,67 @@
+name: embed-source-import
+
+on:
+  push:
+    branches:
+      - feat/phase3-studio-tools
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/phase3-studio-tools
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Wire embedded source importer
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app_path = Path('frontend/src/AppPhase6.jsx')
+          app = app_path.read_text(encoding='utf-8')
+
+          old_import = "import MarkdownMessage from './MarkdownMessage'\nimport './console-clean.css'"
+          new_import = "import MarkdownMessage from './MarkdownMessage'\nimport SourceImportBar from './SourceImportBar'\nimport './console-clean.css'"
+          if old_import not in app:
+              raise SystemExit('AppPhase6 import anchor not found')
+          app = app.replace(old_import, new_import, 1)
+
+          old_on_file = """  const onFile = async (e) => {\n    const file = e.target.files?.[0]\n    if (!file || !nb) return\n    setUploading(true)\n    try { await upload(file) } finally { setUploading(false); e.target.value = '' }\n  }\n"""
+          new_on_file = old_on_file
+          if old_on_file not in app:
+              raise SystemExit('SourcePanel handler anchor not found')
+
+          old_search = "      <div className=\"source-search\"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder=\"Search sources...\" /></div>\n      <input ref={input} hidden type=\"file\" accept=\".pdf,.docx,.txt,.md,.csv\" onChange={onFile} />\n      <div className=\"source-list\">"
+          new_search = "      <div className=\"source-search\"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder=\"Search sources...\" /></div>\n      <SourceImportBar notebookId={activeId} userId={getUserId()} onImported={() => loadSourcesFromPanel?.()} />\n      <input ref={input} hidden type=\"file\" accept=\".pdf,.docx,.txt,.md,.csv\" onChange={onFile} />\n      <div className=\"source-list\">"
+          # The SourcePanel does not own the parent's loadSources function, so use a local callback prop instead.
+          new_search = "      <div className=\"source-search\"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder=\"Search sources...\" /></div>\n      <SourceImportBar notebookId={activeId} userId={getUserId()} onImported={async () => { setSourceMode && setSourceMode('__refresh__', 'full'); window.dispatchEvent(new CustomEvent('apollo-sources-refresh')) }} />\n      <input ref={input} hidden type=\"file\" accept=\".pdf,.docx,.txt,.md,.csv\" onChange={onFile} />\n      <div className=\"source-list\">"
+          if old_search not in app:
+              raise SystemExit('SourcePanel search anchor not found')
+          app = app.replace(old_search, new_search, 1)
+          app_path.write_text(app, encoding='utf-8')
+
+          main_path = Path('frontend/src/main.jsx')
+          main = main_path.read_text(encoding='utf-8')
+          main = main.replace("import Phase2ImportPanel from './Phase2ImportPanel'\n", '', 1)
+          main = main.replace("    <Phase2ImportPanel />\n", '', 1)
+          main_path.write_text(main, encoding='utf-8')
+          PY
+
+      - name: Commit changes and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add frontend/src/AppPhase6.jsx frontend/src/main.jsx frontend/src/SourceImportBar.jsx frontend/src/api/sourceIngestionApi.js
+          git rm .github/workflows/embed-source-import.yml
+          git commit -m 'feat: show YouTube import inside Sources panel'
+          git push origin HEAD:feat/phase3-studio-tools
