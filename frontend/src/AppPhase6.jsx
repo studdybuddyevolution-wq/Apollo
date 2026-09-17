@@ -164,7 +164,7 @@ function Composer({ send, busy, researchMode }) {
   )
 }
 
-function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close }) {
+function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close, userId, refreshSources }) {
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
   const [query, setQuery] = useState('')
@@ -183,7 +183,7 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
       <p className="context-description">Choose how much of each source Apollo can use for chat and research.</p>
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sources..." /></div>
-      <SourceImportBar notebookId={activeId} userId={getUserId()} onImported={async () => { setSourceMode && setSourceMode('__refresh__', 'full'); window.dispatchEvent(new CustomEvent('apollo-sources-refresh')) }} />
+      <SourceImportBar notebookId={activeId} userId={userId} onImported={refreshSources} />
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
       <div className="source-list">{visibleSources.map((s) => {
         const mode = sourceModes[s.name] || 'full'
@@ -560,7 +560,7 @@ export default function AppPhase6() {
         <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'Create a notebook to get started.'}</p></div><button className="upload-button" onClick={newChat} disabled={!notebook}><MessageSquarePlus size={15} /> New chat</button></div>
         <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
       </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>
-        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} />}
+        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} />}
         {sessionOpen && <SessionPanel sessions={sessions} activeSessionId={sessionId} selectSession={selectSession} createNew={newChat} rename={rename} remove={remove} close={() => setSessionOpen(false)} />}
         {notesOpen && <NotesPanel notes={notes} remove={removeNote} close={() => setNotesOpen(false)} />}
         {studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} activeId={activeId} sources={sources} activeSources={activeSources} userId={uid} openSources={() => { setStudioOpen(false); setSourceOpen(true) }} />}
