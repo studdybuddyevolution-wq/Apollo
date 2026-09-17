@@ -34,3 +34,15 @@ def test_capabilities_route_reports_phase2_support(monkeypatch):
     body = response.json()
     assert body["source_ingestion"] == {"file": True, "url": True, "youtube": True}
     assert body["research"]["deep"] is True
+
+
+def test_phase2_app_registers_workspace_and_ingestion_routes():
+    import phase2_app
+
+    paths = {route.path for route in phase2_app.app.routes}
+    assert "/api/chat/workspace" in paths
+    assert "/api/capabilities" in paths
+    assert "/api/notebooks/{notebook_id}/sources/url" in paths
+    assert "/api/notebooks/{notebook_id}/sources/youtube" in paths
+    assert "/api/notebooks/{notebook_id}/sessions" in paths
+    assert "/api/notebooks/{notebook_id}/notes" in paths
