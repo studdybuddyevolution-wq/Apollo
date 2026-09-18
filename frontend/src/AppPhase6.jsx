@@ -393,7 +393,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   }, [])
 
   const generate = async () => {
-    if (!activeId || !activeSources.length || generating || tool === 'video') return
+    if (!activeId || !activeSources.length || generating) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -444,7 +444,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   }
 
   const activeNames = sources.filter((source) => activeSources.includes(source.name)).map((source) => source.name)
-  const canGenerate = Boolean(activeId && activeSources.length && !generating && tool !== 'video')
+  const canGenerate = Boolean(activeId && activeSources.length && !generating)
 
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
@@ -511,11 +511,11 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         </div>
       </div>}
 
-      {tool === 'video' && <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}><strong style={{ display: 'block', marginBottom: 5 }}>Video Overview</strong>Storyboard generation is intentionally deferred until the Slide Deck and Podcast pipelines are stable. The selected source context is already ready for that next step.</div>}
+      {output?.tool === 'video' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}><div style={{ padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{output.data?.title || 'Video Overview'}</strong><span style={{ color: 'var(--tertiary)', fontSize: 10 }}>{output.data?.duration_seconds ? `${output.data.duration_seconds}s storyboard` : 'Storyboard'} · Model: {output.model_used || 'Gemini'}</span></div>{(output.data?.scenes || []).map((scene, index) => <article key={`${scene.timecode || index}-${scene.title || ''}`} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{scene.timecode || `Scene ${index + 1}`} · {scene.title}</strong><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Narration:</b> {scene.narration}</div><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Visual:</b> {scene.visual}</div><div style={{ fontSize: 10, lineHeight: 1.45 }}><b>On screen:</b> {scene.on_screen_text}</div></article>)}</div>}
     </>}
 
     <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
-    <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : tool === 'video' ? 'Planned' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
+    <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
 
