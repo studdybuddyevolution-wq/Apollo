@@ -116,7 +116,7 @@ def extract_requested_sections(question: str) -> list[str]:
     """Extract an explicit, ordered research structure without forcing Apollo's template."""
     sections: list[str] = []
     seen: set[str] = set()
-    heading_pattern = re.compile(r"^\s*(?:#{1,4}\s+|(?:\d+(?:\.\d+)*[.)]?\s+)|[-*+]\s+)(.{4,140})\s*$")
+    heading_pattern = re.compile(r"^\s*(?:#{1,4}\s+|(?:\d+(?:\.\d+)*[.)]?\s+)|[-*+]\s+)(.{2,140})\s*$")
     for line in question.splitlines():
         match = heading_pattern.match(line)
         if not match:
