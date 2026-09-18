@@ -280,9 +280,7 @@ def refresh_url_source(user_id: str | None, notebook_id: str, source_name: str) 
         payload = raw
     else:
         _, text = _html_to_text(raw)
-        payload = f"Source URL: {safe_url}
-
-{text}".encode("utf-8")
+        payload = f"Source URL: {safe_url}\n\n{text}".encode("utf-8")
     return add_source(user_id, notebook_id, source_name, payload, kind="url", source_url=safe_url)
 
 
@@ -300,15 +298,10 @@ def refresh_youtube_source(user_id: str | None, notebook_id: str, source_name: s
     lines = [snippet.text.strip() for snippet in transcript if getattr(snippet, "text", "").strip()]
     if not lines:
         raise ValueError("No transcript was available for this YouTube video")
+    language_code = getattr(transcript, "language_code", "unknown")
     text = (
-        f"YouTube URL: {url}
-"
-        f"Transcript language: {getattr(transcript, 'language_code', 'unknown')}
-
-"
-        + "
-
-".join(lines)
+        f"YouTube URL: {url}\n"
+        f"Transcript language: {language_code}\n\n"
+        + "\n\n".join(lines)
     )
     return add_source(user_id, notebook_id, source_name, text.encode("utf-8"), kind="youtube", source_url=url)
-
