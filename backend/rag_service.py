@@ -289,20 +289,25 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes,
     ]
     now = _now()
     if STORE:
-        STORE.upsert_source_status(notebook_id, filename, "file", "processing")
+        STORE.upsert_source_status(notebook_id, filename, kind, "processing", source_url=source_url)
         try:
+            STORE.save_source_payload(notebook_id, filename, raw, now)
             STORE.replace_source(notebook_id, filename, new_chunks)
             STORE.update_counts(notebook_id, now, len(STORE.list_sources(notebook_id)), len(STORE.list_chunks(notebook_id)))
-            STORE.upsert_source_status(notebook_id, filename, "file", "indexed", now=now)
+            STORE.upsert_source_status(notebook_id, filename, kind, "indexed", now=now, source_url=source_url)
         except Exception as exc:
-            STORE.upsert_source_status(notebook_id, filename, "file", "failed", str(exc)[:500], now=now)
+            STORE.upsert_source_status(notebook_id, filename, kind, "failed", str(exc)[:500], now=now, source_url=source_url)
             raise
-        return {"name": filename, "kind": "file", "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed"}
+        return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
 
     with _LOCK:
         existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
         all_chunks = existing + new_chunks
         _save_chunks(notebook_id, all_chunks)
+        _save_source_payload_fs(notebook_id, filename, raw)
+        metadata = _load_source_meta(notebook_id)
+        metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
+        _save_source_meta(notebook_id, metadata)
         key = _user_key(user_id)
         manifest = _load_manifest()
         for notebook in manifest.get(key, []):
@@ -312,7 +317,7 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes,
                 notebook["node_count"] = len(all_chunks)
                 break
         _save_manifest(manifest)
-    return {"name": filename, "kind": "file", "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed"}
+    return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
 
 
 def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
