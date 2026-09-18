@@ -342,14 +342,15 @@ class PostgresStore:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO apollo_sources (id,notebook_id,name,kind,processing_status,error_message,created,updated)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    INSERT INTO apollo_sources (id,notebook_id,name,kind,processing_status,error_message,source_url,created,updated)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (notebook_id,name) DO UPDATE SET
                       kind=EXCLUDED.kind,
                       processing_status=EXCLUDED.processing_status,
                       error_message=EXCLUDED.error_message,
+                      source_url=COALESCE(EXCLUDED.source_url, apollo_sources.source_url),
                       updated=EXCLUDED.updated
-                """, (f"src_{notebook_id}_{name}", notebook_id, name, kind, status, error, stamp, stamp))
+                """, (f"src_{notebook_id}_{name}", notebook_id, name, kind, status, error, source_url, stamp, stamp))
 
     def create_insight(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._connect() as conn:
