@@ -188,19 +188,21 @@ function downloadBase64File(base64, filename, mimeType) {
   URL.revokeObjectURL(url)
 }
 
-function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close, userId, refreshSources }) {
+function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setAllSourceMode, setActiveId, create, upload, close, userId, refreshSources, removeSource, retrySource, refreshSource }) {
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
   const [query, setQuery] = useState('')
   const nb = notebooks.find((n) => n.id === activeId)
   const visibleSources = sources.filter((source) => source.name.toLowerCase().includes(query.toLowerCase()))
-  const enabledCount = sources.filter((source) => sourceModes[source.name] !== 'off').length
+  const enabledCount = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').length
+
   const onFile = async (e) => {
     const file = e.target.files?.[0]
     if (!file || !nb) return
     setUploading(true)
     try { await upload(file) } finally { setUploading(false); e.target.value = '' }
   }
+
   return (
     <aside className="context-panel source-panel">
       <div className="context-header"><div><div className="context-kicker">KNOWLEDGE BASE</div><h2><FolderOpen size={17} /> Sources</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
@@ -208,17 +210,34 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sources..." /></div>
       <SourceImportBar notebookId={activeId} userId={userId} onImported={refreshSources} />
+      <div className="source-bulk-controls">
+        <span className="muted-label">CONTEXT PRESET</span>
+        <div className="segmented-control source-presets">
+          <button onClick={() => setAllSourceMode('full')}>All full</button>
+          <button onClick={() => setAllSourceMode('summary')}>Summaries</button>
+          <button onClick={() => setAllSourceMode('insights')}>Insights</button>
+          <button onClick={() => setAllSourceMode('off')}>None</button>
+        </div>
+      </div>
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
       <div className="source-list">{visibleSources.map((s) => {
         const mode = sourceModes[s.name] || 'full'
         const modeLabel = SOURCE_MODES.find((item) => item.id === mode)?.label || 'Full source'
+        const failed = s.status === 'failed'
+        const processing = ['pending', 'processing'].includes(s.status)
+        const refreshable = s.kind === 'url' || s.kind === 'youtube'
         return <div key={s.name} className={`source-card ${mode !== 'off' ? 'selected' : ''}`} style={{ cursor: 'default' }}>
           <div className="source-icon"><FileText size={16} /></div>
-          <div className="source-card-copy"><strong>{s.name}</strong><span>{s.chunks} chunks · {s.kind || 'file'} · {s.status || 'indexed'}</span></div>
-          <select aria-label={`Context mode for ${s.name}`} value={mode} onChange={(e) => setSourceMode(s.name, e.target.value)} style={{ width: 98, fontSize: 10, borderRadius: 7, padding: '5px 4px' }}>
+          <div className="source-card-copy"><strong title={s.name}>{s.name}</strong><span>{s.chunks} chunks · {s.kind || 'file'} · {s.status || 'indexed'}</span>{s.error && <small className="source-error">{s.error}</small>}</div>
+          <select aria-label={`Context mode for ${s.name}`} value={mode} onChange={(e) => setSourceMode(s.name, e.target.value)} style={{ width: 94, fontSize: 10, borderRadius: 7, padding: '5px 4px' }}>
             {SOURCE_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
           </select>
-          <span className="source-check" title={modeLabel}>{mode === 'full' ? '●' : mode === 'insights' ? '◐' : '○'}</span>
+          <div className="source-actions">
+            {(failed || processing) && <button className="icon-button" title={processing ? 'Retry indexing' : 'Retry source'} onClick={() => retrySource(s)}><RefreshCw size={13} /></button>}
+            {refreshable && <button className="icon-button" title="Refresh source" onClick={() => refreshSource(s)}><RefreshCw size={13} /></button>}
+            <button className="icon-button" title="Delete source" onClick={() => removeSource(s)}><Trash2 size={13} /></button>
+          </div>
+          <span className="source-check" title={modeLabel}>{mode === 'full' ? '●' : mode === 'summary' ? '◉' : mode === 'insights' ? '◐' : '○'}</span>
         </div>
       })}{!visibleSources.length && <div className="source-empty-state"><FolderOpen size={22} /><strong>{sources.length ? 'No matching sources' : 'No sources connected'}</strong><span>{sources.length ? 'Try another source name.' : 'Upload a PDF, DOCX, TXT, Markdown or CSV file.'}</span></div>}</div>
       <div className="source-footer"><div className="source-stats"><span><strong>{enabledCount}</strong> enabled</span><span><strong>{sources.length}</strong> total</span></div><button className="upload-button" disabled={!nb || uploading} onClick={() => input.current?.click()}><Upload size={15} /> {uploading ? 'Indexing…' : 'Add sources'}</button></div>
@@ -226,7 +245,6 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
     </aside>
   )
 }
-
 function SessionPanel({ sessions, activeSessionId, selectSession, createNew, rename, remove, close }) {
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">CONVERSATIONS</div><h2><History size={17} /> Chats</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
