@@ -779,8 +779,10 @@ export default function AppPhase6() {
     if (!currentNotebook && researchMode === 'study') {
       // Study mode is still useful without notebook context; it becomes web-only research.
     }
-    if (currentNotebook && !sessionId) {
+    let requestSessionId = sessionId
+    if (currentNotebook && !requestSessionId) {
       const session = await createSession(activeId, 'New chat', uid)
+      requestSessionId = session.id
       setSessionId(session.id)
       setSessions((current) => [session, ...current])
     }
@@ -801,7 +803,7 @@ export default function AppPhase6() {
         notebookTitle: currentNotebook?.title || null,
         activeSources: currentNotebook ? activeSources : [],
         sourceModes: currentNotebook ? sourceModes : {},
-        sessionId: currentNotebook ? sessionId : null,
+        sessionId: currentNotebook ? requestSessionId : null,
         userId: uid,
         webEnabled: needsWeb,
         researchMode: requestMode,
