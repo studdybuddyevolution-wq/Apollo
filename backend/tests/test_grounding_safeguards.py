@@ -67,7 +67,7 @@ def test_study_report_retries_when_overlap_is_weak(monkeypatch):
 @pytest.mark.parametrize(
     ("answer", "expected_verified"),
     [
-        ("DNA is genetic material in cells.", True),
+        ("DNA is the genetic material in cells. It stores genetic information in cells, which is the main point in the retrieved evidence.", True),
         ("Quantum mechanics describes a wavefunction for physical systems.", False),
     ],
 )
