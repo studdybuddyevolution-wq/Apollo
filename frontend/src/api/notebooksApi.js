@@ -15,6 +15,10 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+export function getCapabilities() {
+  return request('/api/capabilities')
+}
+
 export function listNotebooks(userId = 'default') {
   return request(`/api/notebooks?user_id=${encodeURIComponent(userId)}`)
 }
