@@ -1,95 +1,101 @@
-# Apollo free deployment
+# Apollo deployment
 
-Apollo is split into two services:
+Apollo runs as two services:
 
-- `frontend/` — React + Vite, deployed to Cloudflare Pages.
-- `backend/` — FastAPI, deployed to Render Free.
+- `frontend/` — React + Vite + Cloudflare Worker/static assets.
+- `backend/` — FastAPI on Render.
 
-Cloudflare Pages builds the frontend with `npm run build` and publishes `dist`. Render runs the FastAPI service with Uvicorn on Render's `$PORT`.
+The backend uses PostgreSQL when `DATABASE_URL` is configured. The filesystem store remains a local-development fallback.
 
-## 1. Push/pull the latest repo
+## Frontend — Cloudflare Workers
 
-```cmd
-git pull origin main
-```
-
-## 2. Local environment
-
-Copy `.env.example` to `.env` in the repository root and set:
-
-```env
-GROQ_API_KEY=gsk_...
-APOLLO_CORS_ORIGINS=http://localhost:5173
-```
-
-Never commit `.env`.
-
-For local frontend development, `frontend/.env.example` can be copied to `frontend/.env` if needed, but it may remain empty because Vite proxies `/api` to `http://127.0.0.1:8000` during development.
-
-## 3. Render backend
-
-Use the repository's `render.yaml` Blueprint, or create a Web Service manually with:
-
-- Root Directory: `backend`
-- Build Command: `pip install -r requirements.txt`
-- Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- Health Check Path: `/api/health`
-- Plan: Free
-
-Set these Render environment variables in the service:
-
-- `GROQ_API_KEY` = your Groq API key
-- `APOLLO_CORS_ORIGINS` = your Cloudflare Pages production URL, for example `https://apollo.pages.dev`
-
-After deployment, verify:
-
-```text
-https://YOUR-RENDER-SERVICE.onrender.com/api/health
-```
-
-The response should include `"groq_configured":true`.
-
-## 4. Cloudflare Pages frontend
-
-Create a Pages project from the GitHub repository and configure:
-
-- Production branch: `main`
-- Root directory: `frontend`
-- Build command: `npm run build`
-- Build output directory: `dist`
-
-Add this Cloudflare Pages environment variable for the production build:
-
-```text
-VITE_API_BASE_URL=https://YOUR-RENDER-SERVICE.onrender.com
-```
-
-This value is intentionally a Vite build-time variable. Do not put API secrets in `VITE_*` variables because they are exposed to browser code.
-
-## 5. Connect CORS after Cloudflare deployment
-
-Once Cloudflare gives you the final Pages URL, set the Render variable:
-
-```text
-APOLLO_CORS_ORIGINS=https://YOUR-PAGES-PROJECT.pages.dev
-```
-
-Redeploy/restart the Render service after changing it.
-
-## 6. Local run
-
-Backend:
+From the repository root:
 
 ```cmd
-cd backend
-uvicorn main:app --reload --port 8000
+cd frontend
+npm.cmd install
+npm.cmd run build
+npx.cmd wrangler deploy
 ```
 
-Frontend:
+Wrangler reads `frontend/wrangler.jsonc`. The worker serves the Vite build from `dist` and uses SPA fallback handling.
+
+For local development:
 
 ```cmd
 cd frontend
 npm.cmd run dev
 ```
 
-Open `http://localhost:5173`.
+Set the build-time API origin when the backend is not reached through the local Vite proxy:
+
+```text
+VITE_API_BASE_URL=https://YOUR-RENDER-SERVICE.onrender.com
+```
+
+Never put API secrets in `VITE_*` variables; they are exposed to browser code.
+
+## Backend — Render
+
+Use the repository `render.yaml` Blueprint, or configure the service with:
+
+- Root Directory: `backend`
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `uvicorn phase2_app:app --host 0.0.0.0 --port $PORT`
+- Health Check Path: `/api/health`
+
+Required environment variables:
+
+```text
+GROQ_API_KEY=...
+GEMINI_API_KEY=...
+TAVILY_API_KEY=...
+DATABASE_URL=...
+APOLLO_CORS_ORIGINS=https://YOUR-APOLLO-WORKER.workers.dev
+```
+
+Optional hardening/configuration:
+
+```text
+APOLLO_MAX_UPLOAD_BYTES=26214400
+APOLLO_GEMINI_FALLBACK_MODELS=...
+APOLLO_TRANSFORM_MODEL=...
+APOLLO_WEB_SYNTHESIS_MODEL=...
+```
+
+`DATABASE_URL` is the durable storage path for notebooks, sources, raw source payloads, jobs, insights, chat sessions and notes. When it is not configured, Apollo falls back to local filesystem storage for development.
+
+Apollo applies SQL files in `backend/migrations/` at backend startup. The source-lifecycle migration adds refreshable source URLs and durable source payloads used by retry/refresh.
+
+## CORS
+
+Set `APOLLO_CORS_ORIGINS` to the exact production worker origin, then redeploy/restart the Render service.
+
+Local development commonly uses:
+
+```text
+APOLLO_CORS_ORIGINS=http://localhost:5173
+```
+
+## Health check
+
+After deployment:
+
+```text
+https://YOUR-RENDER-SERVICE.onrender.com/api/health
+```
+
+The health response includes provider configuration flags and the configured upload limit.
+
+## Local backend
+
+```cmd
+cd backend
+uvicorn phase2_app:app --reload --port 8000
+```
+
+Then open the frontend at `http://localhost:5173`.
+
+## Operational notes
+
+Web URL ingestion validates every redirect and pins the HTTP connection to the validated public IP. Uploaded files are bounded by `APOLLO_MAX_UPLOAD_BYTES` before indexing. Long embedding work is tracked through Apollo jobs, and source failures expose retry controls in the Sources drawer.
