@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from jobs import enqueue_embedding_job
 from rag_service import add_source, get_notebook, get_source_metadata, get_source_payload
+from phase3_common import gemini_model_chain
 from source_ingestion import ingest_url, ingest_youtube, refresh_url_source, refresh_youtube_source
 from storage import STORE
 
@@ -24,6 +25,10 @@ class URLSourceRequest(BaseModel):
 class YouTubeSourceRequest(BaseModel):
     url: str = Field(min_length=12, max_length=2048)
     languages: list[str] = Field(default_factory=lambda: ["en"], max_length=8)
+    user_id: str | None = None
+
+
+class SourceLifecycleRequest(BaseModel):
     user_id: str | None = None
 
 
@@ -62,6 +67,7 @@ def register(app: FastAPI) -> None:
                 "deep": True,
                 "study": True,
             },
+            "ai_models": gemini_model_chain(max_models=3),
         }
 
     @app.post("/api/notebooks/{notebook_id}/sources/url")
@@ -77,7 +83,7 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=502, detail=f"URL ingestion failed: {exc}") from exc
 
     @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/retry")
-    async def notebook_source_retry(notebook_id: str, source_name: str, request: URLSourceRequest):
+    async def notebook_source_retry(notebook_id: str, source_name: str, request: SourceLifecycleRequest):
         _check_notebook(request.user_id, notebook_id)
         try:
             metadata = get_source_metadata(request.user_id, notebook_id, source_name)
@@ -102,7 +108,7 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=502, detail=f"Source retry failed: {exc}") from exc
 
     @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/refresh")
-    async def notebook_source_refresh(notebook_id: str, source_name: str, request: URLSourceRequest):
+    async def notebook_source_refresh(notebook_id: str, source_name: str, request: SourceLifecycleRequest):
         _check_notebook(request.user_id, notebook_id)
         metadata = get_source_metadata(request.user_id, notebook_id, source_name) or {}
         kind = str(metadata.get("kind") or "")
