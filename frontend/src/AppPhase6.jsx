@@ -3,15 +3,17 @@ import {
   ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
   CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
   LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
-  Video, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus,
+  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2,
 } from 'lucide-react'
-import { generateNotebookDiagram, streamChat } from './api/apolloApi'
+import { streamChat } from './api/apolloApi'
+import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource,
+  renameSession, uploadSource, deleteNotebook,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
+import SourceImportBar from './SourceImportBar'
 import './console-clean.css'
 
 const NAV_ITEMS = [
@@ -31,10 +33,12 @@ const RESEARCH_MODES = [
 ]
 
 const STUDIO_TOOLS = [
-  { id: 'slides', label: 'Slide Deck', description: 'Turn selected sources into slides', icon: FileText },
-  { id: 'report', label: 'Study Report', description: 'Generate structured revision notes', icon: FileText },
+  { id: 'slides', label: 'Slide Deck', description: 'Build a grounded presentation', icon: FileText },
+  { id: 'report', label: 'Study Report', description: 'Create structured revision notes', icon: FileText },
   { id: 'mindmap', label: 'Mind Map', description: 'Build a visual concept structure', icon: BrainCircuit },
-  { id: 'video', label: 'Video Overview', description: 'Create an explainer storyboard', icon: Video },
+  { id: 'transform', label: 'Transformations', description: 'Extract reusable study insights', icon: WandSparkles },
+  { id: 'podcast', label: 'Podcast / Audio', description: 'Create a narrated source overview', icon: Mic },
+  { id: 'video', label: 'Video Overview', description: 'Storyboard support coming next', icon: Video },
 ]
 
 const SOURCE_MODES = [
@@ -53,7 +57,7 @@ function getUserId() {
   return value
 }
 
-function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create }) {
+function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, removeNotebook }) {
   const [open, setOpen] = useState(true)
   return (
     <aside className={`apollo-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -79,9 +83,17 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
           </button>
           {open && <div className="notebook-content">
             {notebooks.map((nb) => (
-              <button key={nb.id} className={`notebook-row ${activeId === nb.id ? 'active' : ''}`} onClick={() => setNotebook(nb.id)}>
-                <span className="notebook-title"><BookOpen size={15} />{nb.title}</span><span className="source-count">{nb.source_count || 0} src</span>
-              </button>
+              <div
+                key={nb.id}
+                className={`notebook-row ${activeId === nb.id ? 'active' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => setNotebook(nb.id)}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setNotebook(nb.id) } }}
+              >
+                <span className="notebook-title"><BookOpen size={15} />{nb.title}</span>
+                <span className="notebook-row-right"><span className="source-count">{nb.source_count || 0} src</span><button className="notebook-delete" title={`Delete ${nb.title}`} aria-label={`Delete ${nb.title}`} onClick={(event) => { event.stopPropagation(); removeNotebook(nb) }}><Trash2 size={13} /></button></span>
+              </div>
             ))}
             {!notebooks.length && <div className="notebook-row"><span className="notebook-title">No notebooks yet</span></div>}
             <button className="new-notebook" onClick={create}><Plus size={15} /> New Notebook</button>
@@ -160,7 +172,22 @@ function Composer({ send, busy, researchMode }) {
   )
 }
 
-function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close }) {
+function downloadBase64File(base64, filename, mimeType) {
+  const binary = window.atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  const blob = new Blob([bytes], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close, userId, refreshSources }) {
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
   const [query, setQuery] = useState('')
@@ -179,6 +206,7 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
       <p className="context-description">Choose how much of each source Apollo can use for chat and research.</p>
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sources..." /></div>
+      <SourceImportBar notebookId={activeId} userId={userId} onImported={refreshSources} />
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
       <div className="source-list">{visibleSources.map((s) => {
         const mode = sourceModes[s.name] || 'full'
@@ -231,27 +259,60 @@ function NotesPanel({ notes, remove, close }) {
 function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, userId, openSources }) {
   const current = STUDIO_TOOLS.find((x) => x.id === tool) || STUDIO_TOOLS[0]
   const [diagram, setDiagram] = useState(null)
+  const [output, setOutput] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  const [transformation, setTransformation] = useState('summary')
+  const [customPrompt, setCustomPrompt] = useState('')
+  const [speaking, setSpeaking] = useState(false)
   const abortRef = useRef(null)
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  const transformations = [
+    ['summary', 'Summary'],
+    ['key_concepts', 'Key concepts'],
+    ['faq', 'FAQ'],
+    ['outline', 'Outline'],
+    ['glossary', 'Glossary'],
+    ['quiz', 'Quiz'],
+    ['study_guide', 'Study guide'],
+    ['timeline', 'Timeline'],
+    ['compare_contrast', 'Compare / contrast'],
+    ['explain_simply', 'Explain simply'],
+    ['misconceptions', 'Misconceptions'],
+    ['custom', 'Custom'],
+  ]
+
+  useEffect(() => () => {
+    abortRef.current?.abort()
+    window.speechSynthesis?.cancel()
+  }, [])
 
   const generate = async () => {
-    if (tool !== 'mindmap' || !activeId || sources.length === 0 || generating) return
+    if (!activeId || !activeSources.length || generating || tool === 'video') return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
-    const timeout = window.setTimeout(() => controller.abort(), 60000)
+    const timeout = window.setTimeout(() => controller.abort(), 65000)
     setGenerating(true)
     setError('')
     setDiagram(null)
+    setOutput(null)
     try {
-      const result = await generateNotebookDiagram(activeId, activeSources, null, userId, controller.signal)
-      setDiagram(result)
+      if (tool === 'mindmap') {
+        const result = await generateNotebookMindMap(activeId, activeSources, null, userId, controller.signal)
+        setDiagram(result)
+      } else {
+        const result = await generateStudioOutput(activeId, tool, activeSources, {
+          transformationType: tool === 'transform' ? transformation : null,
+          customPrompt: tool === 'transform' && transformation === 'custom' ? customPrompt : null,
+          userId,
+          signal: controller.signal,
+        })
+        setOutput(result)
+      }
     } catch (err) {
-      if (err?.name === 'AbortError') setError('Diagram generation timed out. Please try again.')
-      else setError(err?.message || 'Diagram generation failed')
+      if (err?.name === 'AbortError') setError('Studio generation timed out before Apollo returned a complete result.')
+      else setError(err?.message || 'Studio generation failed')
     } finally {
       window.clearTimeout(timeout)
       if (abortRef.current === controller) abortRef.current = null
@@ -259,26 +320,91 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     }
   }
 
+  const playPodcast = () => {
+    const script = output?.script
+    if (!script || !('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(script)
+    utterance.rate = 0.96
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => setSpeaking(false)
+    setSpeaking(true)
+    window.speechSynthesis.speak(utterance)
+  }
+
+  const stopPodcast = () => {
+    window.speechSynthesis?.cancel()
+    setSpeaking(false)
+  }
+
+  const activeNames = sources.filter((source) => activeSources.includes(source.name)).map((source) => source.name)
+  const canGenerate = Boolean(activeId && activeSources.length && !generating && tool !== 'video')
+
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
-    <p className="context-description">Studio generation uses the connected notebook sources.</p>
-    {tool === 'mindmap' && <div style={{ marginBottom: 16 }}>
-      {sources.length === 0 ? <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 12, lineHeight: 1.5 }}>
-        <strong style={{ display: 'block', marginBottom: 8, color: 'var(--text)' }}>Upload a source to build a mind map from it</strong>
-        <button className="upload-button" onClick={openSources}><FolderOpen size={15} /> Open Sources</button>
-      </div> : <>
-        <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5 }}>
-          <strong style={{ display: 'block', marginBottom: 6, color: 'var(--text)' }}>Mind map will be built from:</strong>
-          <span style={{ color: 'var(--tertiary)' }}>{sources.filter((s) => activeSources.includes(s.name)).map((source) => source.name).join(', ') || 'no active sources'}</span>
+    <p className="context-description">Every Studio output is generated from the selected Apollo notebook sources and saved as a reusable insight.</p>
+
+    {!sources.length ? <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+      <strong style={{ display: 'block', marginBottom: 8, color: 'var(--text)' }}>Connect a source first</strong>
+      <button className="upload-button" onClick={openSources}><FolderOpen size={15} /> Open Sources</button>
+    </div> : <>
+      <div style={{ padding: 11, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}>
+        <strong style={{ display: 'block', marginBottom: 5, color: 'var(--text)' }}>Grounded in</strong>
+        <span style={{ color: 'var(--tertiary)' }}>{activeNames.join(', ') || 'no active sources'}</span>
+      </div>
+
+      {tool === 'transform' && <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+        <label className="muted-label" htmlFor="apollo-transformation">TRANSFORMATION</label>
+        <select id="apollo-transformation" value={transformation} onChange={(e) => setTransformation(e.target.value)} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
+          {transformations.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {transformation === 'custom' && <textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} placeholder="Describe the transformation you want…" rows={4} style={{ width: '100%', resize: 'vertical', padding: 9, borderRadius: 8 }} />}
+      </div>}
+
+      {error && <div role="alert" style={{ marginBottom: 10, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11, lineHeight: 1.45 }}>{error}</div>}
+
+      {diagram?.svg && <div style={{ marginBottom: 12 }}>
+        {diagram.warning && <div role="alert" style={{ marginBottom: 8, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.45)', border: '1px solid #ef4444', color: '#fee2e2', fontSize: 11, lineHeight: 1.45 }}><strong>Review:</strong> {diagram.warning}</div>}
+        <div style={{ padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />
+        <div style={{ marginTop: 7, color: 'var(--tertiary)', fontSize: 10 }}>Model: {diagram.model_used || 'Gemini'} · {Math.round((diagram.overlap_ratio || 0) * 100)}% source-label overlap</div>
+      </div>}
+
+      {output?.tool === 'slides' && <div style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>{output.title || output.data?.title || 'Slide Deck'}</div>
+          {output.pptx_base64 && <button
+            className="upload-button"
+            style={{ width: 'auto', padding: '0 10px' }}
+            onClick={() => downloadBase64File(output.pptx_base64, output.filename || 'Apollo-Slide-Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')}
+          >Download PPTX</button>}
         </div>
-        {error && <div role="alert" style={{ marginTop: 9, padding: 9, borderRadius: 8, background: 'rgba(127,29,29,.32)', border: '1px solid #ef4444', color: '#fecaca', fontSize: 11 }}>{error}</div>}
-        {diagram?.warning && <div role="alert" style={{ marginTop: 10, padding: 11, borderRadius: 9, background: 'rgba(127,29,29,.45)', border: '2px solid #ef4444', color: '#fee2e2', fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}><strong>⚠ Review this diagram:</strong> {diagram.warning}</div>}
-        {diagram?.svg && <div style={{ marginTop: 12, padding: 8, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: diagram.svg }} />}
-        {diagram && !diagram.warning && <div style={{ marginTop: 8, color: 'var(--tertiary)', fontSize: 10 }}>Verified against indexed notebook content ({Math.round((diagram.overlap_ratio || 0) * 100)}% label overlap).</div>}
-      </>}
-    </div>}
-    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => setTool(id)}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
-    <div className="studio-footer"><div><strong>{current.label}</strong><span>{tool === 'mindmap' ? (generating ? 'Generating…' : 'Ready') : 'Waiting for backend'}</span></div><button className="studio-generate" disabled={tool !== 'mindmap' || !activeId || !activeSources.length || generating} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
+        <div style={{ color: 'var(--tertiary)', fontSize: 10 }}>Grounded in: {(output.source_names || activeNames || []).join(', ') || 'selected notebook sources'}</div>
+        {(output.slides || output.data?.slides || []).map((slide, index) => <article key={`${slide.title}-${index}`} style={{ padding: 10, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+          <strong style={{ display: 'block', marginBottom: 6 }}>{index + 1}. {slide.title}</strong>
+          {(slide.bullets || []).map((bullet, bulletIndex) => <div key={bulletIndex} style={{ fontSize: 11, lineHeight: 1.45, marginBottom: 3 }}>• {bullet}</div>)}
+          {slide.speaker_notes && <div style={{ marginTop: 6, fontSize: 10, color: 'var(--tertiary)' }}>Notes: {slide.speaker_notes}</div>}
+        </article>)}
+      </div>}
+
+      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre></div>}
+
+      {output?.tool === 'transform' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.content}</pre></div>}
+
+      {output?.tool === 'podcast' && <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 7, marginBottom: 8 }}>
+          <button className="upload-button" onClick={speaking ? stopPodcast : playPodcast}>{speaking ? 'Stop audio' : 'Play audio'}</button>
+        </div>
+        <div style={{ maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}>
+          <strong style={{ fontSize: 14 }}>{output.data?.title || 'Apollo Audio Overview'}</strong>
+          {(output.data?.segments || []).map((segment, index) => <article key={index} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ fontSize: 10, textTransform: 'uppercase' }}>{segment.speaker}</strong><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45 }}>{segment.text}</div></article>)}
+        </div>
+      </div>}
+
+      {tool === 'video' && <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}><strong style={{ display: 'block', marginBottom: 5 }}>Video Overview</strong>Storyboard generation is intentionally deferred until the Slide Deck and Podcast pipelines are stable. The selected source context is already ready for that next step.</div>}
+    </>}
+
+    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
+    <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : tool === 'video' ? 'Planned' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
 
@@ -337,6 +463,22 @@ export default function AppPhase6() {
   useEffect(() => { loadSources(activeId).catch(console.error); loadSessionsAndNotes(activeId).catch(console.error) }, [activeId])
 
   const create = async () => { const name = prompt('Notebook name', 'My Notebook'); if (!name?.trim()) return; const nb = await createNotebook(name, uid); await refresh(nb.id) }
+  const removeNotebook = async (nb) => {
+    if (!nb?.id || !confirm(`Delete notebook “${nb.title}”? This will remove its sources, chats, notes, and saved study data.`)) return
+    await deleteNotebook(nb.id, uid)
+    const remaining = notebooks.filter((item) => item.id !== nb.id)
+    setNotebooks(remaining)
+    if (nb.id === activeId) {
+      const nextId = remaining[0]?.id || ''
+      setActiveId(nextId)
+      setMessages([])
+      setSources([])
+      setSourceModes({})
+      setSessions([])
+      setSessionId('')
+      setNotes([])
+    }
+  }
   const upload = async (file) => { if (!activeId) return; await uploadSource(activeId, file, uid); await loadSources(activeId); await refresh(activeId) }
   const setSourceMode = (name, mode) => setSourceModes((current) => ({ ...current, [name]: mode }))
 
@@ -450,7 +592,7 @@ export default function AppPhase6() {
   const NavIcon = navIcon
 
   return <div className="apollo-app">
-    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} />
+    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} removeNotebook={removeNotebook} />
     <section className="app-shell">
       <TopBar
         active={active}
@@ -462,10 +604,10 @@ export default function AppPhase6() {
         setResearchMode={setResearchMode}
       />
       {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll">
-        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'Create a notebook to get started.'}</p></div><button className="upload-button" onClick={newChat} disabled={!notebook}><MessageSquarePlus size={15} /> New chat</button></div>
+        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'Create a notebook to get started.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
         <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
       </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>
-        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} />}
+        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} />}
         {sessionOpen && <SessionPanel sessions={sessions} activeSessionId={sessionId} selectSession={selectSession} createNew={newChat} rename={rename} remove={remove} close={() => setSessionOpen(false)} />}
         {notesOpen && <NotesPanel notes={notes} remove={removeNote} close={() => setNotesOpen(false)} />}
         {studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} activeId={activeId} sources={sources} activeSources={activeSources} userId={uid} openSources={() => { setStudioOpen(false); setSourceOpen(true) }} />}
