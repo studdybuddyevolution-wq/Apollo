@@ -698,32 +698,44 @@ export default function AppPhase6() {
     await refreshNotes()
   }
 
+  const stop = () => {
+    streamAbortRef.current?.abort()
+  }
+
   const send = async (text) => {
-    if (!notebook || busy) { if (!notebook) setSourceOpen(true); return }
-    if (!sessionId) {
+    if (busy || !text?.trim()) return
+    const currentNotebook = notebook
+    if (currentNotebook) rememberRecent('notebooks', currentNotebook.id, uid)
+    if (!currentNotebook && researchMode === 'study') {
+      // Study mode is still useful without notebook context; it becomes web-only research.
+    }
+    if (currentNotebook && !sessionId) {
       const session = await createSession(activeId, 'New chat', uid)
       setSessionId(session.id)
       setSessions((current) => [session, ...current])
     }
-    const user = { id: `${Date.now()}u`, role: 'user', content: text }
+    const user = { id: `${Date.now()}u`, role: 'user', content: text.trim() }
     const assistantId = `${Date.now()}a`
     const history = [...messages.map((m) => ({ role: m.role, content: m.content })), user]
     const needsWeb = researchMode === 'web' || researchMode === 'deep' || researchMode === 'study'
     const requestMode = researchMode
+    const controller = new AbortController()
+    streamAbortRef.current = controller
     setMessages((v) => [...v, user, { id: assistantId, role: 'assistant', content: '', model, streaming: true, sources: [], researchMode: requestMode }])
     setBusy(true)
     try {
       await streamChat({
         messages: history,
-        model: 'openai/gpt-oss-120b',
-        notebookId: notebook.id,
-        notebookTitle: notebook.title,
-        activeSources,
-        sourceModes,
-        sessionId,
+        model: model || 'openai/gpt-oss-120b',
+        notebookId: currentNotebook?.id || null,
+        notebookTitle: currentNotebook?.title || null,
+        activeSources: currentNotebook ? activeSources : [],
+        sourceModes: currentNotebook ? sourceModes : {},
+        sessionId: currentNotebook ? sessionId : null,
         userId: uid,
         webEnabled: needsWeb,
         researchMode: requestMode,
+        signal: controller.signal,
         onSession: (session) => {
           if (!session) return
           setSessionId(session.id)
@@ -733,15 +745,27 @@ export default function AppPhase6() {
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
-        onDone: () => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)); setBusy(false); listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {}) },
-        onError: (message) => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m)); setBusy(false) },
+        onDone: () => {
+          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m))
+          setBusy(false)
+          if (currentNotebook) listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {})
+        },
+        onError: (message) => {
+          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m))
+          setBusy(false)
+        },
       })
     } catch (error) {
-      setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
+      if (error?.name === 'AbortError') {
+        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Generation stopped.)_` : 'Generation stopped.', streaming: false } : m))
+      } else {
+        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
+      }
       setBusy(false)
+    } finally {
+      if (streamAbortRef.current === controller) streamAbortRef.current = null
     }
   }
-
   const navIcon = (NAV_ITEMS.find((n) => n.id === active) || NAV_ITEMS[0]).icon
   const NavIcon = navIcon
 
