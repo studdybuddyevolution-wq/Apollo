@@ -331,9 +331,14 @@ def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
     with _LOCK:
         existing = _load_chunks(notebook_id)
         chunks = [c for c in existing if c.get("source") != filename]
-        if len(chunks) == len(existing):
+        metadata = _load_source_meta(notebook_id)
+        existed = len(chunks) != len(existing) or filename in metadata or _load_source_payload_fs(notebook_id, filename) is not None
+        if not existed:
             return False
         _save_chunks(notebook_id, chunks)
+        metadata.pop(filename, None)
+        _save_source_meta(notebook_id, metadata)
+        _delete_source_payload_fs(notebook_id, filename)
     return True
 
 
