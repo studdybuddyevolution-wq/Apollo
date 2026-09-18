@@ -276,7 +276,11 @@ def refresh_url_source(user_id: str | None, notebook_id: str, source_name: str) 
 
     safe_ip, safe_url = _validate_public_url(url)
     raw, content_type = _download(safe_ip, safe_url)
-    if "application/pdf" in content_type or safe_url.lower().endswith(".pdf"):
+    is_pdf = "application/pdf" in content_type or safe_url.lower().endswith(".pdf")
+    original_is_pdf = source_name.lower().endswith(".pdf")
+    if is_pdf != original_is_pdf:
+        raise ValueError("The refreshed URL changed content type. Delete and re-add the source so Apollo can select the correct parser.")
+    if is_pdf:
         payload = raw
     else:
         _, text = _html_to_text(raw)
