@@ -120,12 +120,11 @@ def build_source_grounded_pptx(
 
         for bullet_index, bullet in enumerate(bullets[:6]):
             paragraph = frame.paragraphs[0] if bullet_index == 0 else frame.add_paragraph()
-            paragraph.text = bullet
+            paragraph.text = f"• {bullet}"
             paragraph.level = 0
             paragraph.font.size = Pt(19 if len(bullets) <= 4 else 16)
             paragraph.font.color.rgb = APOLLO_TEXT
             paragraph.space_after = Pt(11)
-            paragraph.bullet = True
 
         notes = str(item.get("speaker_notes") or "").strip()
         if notes:
