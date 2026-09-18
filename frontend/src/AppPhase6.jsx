@@ -283,6 +283,8 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   const [error, setError] = useState('')
   const [transformation, setTransformation] = useState('summary')
   const [customPrompt, setCustomPrompt] = useState('')
+  const [availableModels, setAvailableModels] = useState([])
+  const [selectedModel, setSelectedModel] = useState('')
   const [speaking, setSpeaking] = useState(false)
   const abortRef = useRef(null)
 
@@ -300,6 +302,14 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     ['misconceptions', 'Misconceptions'],
     ['custom', 'Custom'],
   ]
+
+  useEffect(() => {
+    getCapabilities().then((data) => {
+      const models = data?.ai_models || []
+      setAvailableModels(models)
+      if (selectedModel && !models.includes(selectedModel)) setSelectedModel('')
+    }).catch(() => {})
+  }, [selectedModel])
 
   useEffect(() => () => {
     abortRef.current?.abort()
@@ -324,6 +334,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         const result = await generateStudioOutput(activeId, tool, activeSources, {
           transformationType: tool === 'transform' ? transformation : null,
           customPrompt: tool === 'transform' && transformation === 'custom' ? customPrompt : null,
+          model: tool === 'transform' ? (selectedModel || null) : null,
           userId,
           signal: controller.signal,
         })
@@ -376,6 +387,11 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         <label className="muted-label" htmlFor="apollo-transformation">TRANSFORMATION</label>
         <select id="apollo-transformation" value={transformation} onChange={(e) => setTransformation(e.target.value)} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
           {transformations.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <label className="muted-label" htmlFor="apollo-studio-model">MODEL</label>
+        <select id="apollo-studio-model" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
+          <option value="">Auto (configured fallback)</option>
+          {availableModels.map((value) => <option key={value} value={value}>{value}</option>)}
         </select>
         {transformation === 'custom' && <textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} placeholder="Describe the transformation you want…" rows={4} style={{ width: '100%', resize: 'vertical', padding: 9, borderRadius: 8 }} />}
       </div>}
