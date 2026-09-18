@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import context_builder
 import main
 import phase1_routes
 
@@ -27,7 +28,7 @@ def test_workspace_stream_persists_partial_response_on_client_cancel(monkeypatch
         ),
     )
     monkeypatch.setattr(
-        phase1_routes,
+        context_builder,
         "build_context",
         lambda *args, **kwargs: {"context": "source context", "full_sources": ["notes.txt"]},
     )
