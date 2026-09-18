@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import weakref
 
 from fastapi import FastAPI, HTTPException
@@ -68,6 +69,19 @@ def register(app: FastAPI) -> None:
                 "study": True,
             },
             "ai_models": gemini_model_chain(max_models=3),
+            "providers": {
+                "gemini": {
+                    "configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+                    "models": gemini_model_chain(max_models=8),
+                },
+                "groq": {
+                    "configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+                    "primary_model": os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b"),
+                },
+                "tavily": {
+                    "configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+                },
+            },
         }
 
     @app.post("/api/notebooks/{notebook_id}/sources/url")
