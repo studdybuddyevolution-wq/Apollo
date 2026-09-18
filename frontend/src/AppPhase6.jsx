@@ -10,7 +10,7 @@ import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource,
+  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource, getCapabilities,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import SourceImportBar from './SourceImportBar'
@@ -152,7 +152,7 @@ function Bubble({ message, onSaveNote }) {
   )
 }
 
-function Composer({ send, busy, researchMode }) {
+function Composer({ send, stop, busy, researchMode }) {
   const [value, setValue] = useState('')
   const mode = RESEARCH_MODES.find((item) => item.id === researchMode) || RESEARCH_MODES[0]
   const submit = () => {
@@ -166,9 +166,9 @@ function Composer({ send, busy, researchMode }) {
         <button className="composer-icon" disabled><Paperclip size={18} /></button>
         <button className="composer-icon" disabled><ImagePlus size={18} /></button>
         <input value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} placeholder={`${mode.label} — message Apollo…`} />
-        <button className="send-button" onClick={submit} disabled={busy || !value.trim()}><ArrowUp size={18} /></button>
+        {busy ? <button className="send-button stop-button" onClick={stop} title="Stop response" aria-label="Stop response"><Square size={16} /></button> : <button className="send-button" onClick={submit} disabled={!value.trim()}><ArrowUp size={18} /></button>}
       </div>
-      <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{mode.description}</span></div>
+      <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{busy ? 'Generation in progress — press stop to cancel' : mode.description}</span></div>
     </div>
   )
 }
