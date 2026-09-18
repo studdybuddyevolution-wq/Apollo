@@ -274,7 +274,43 @@ def _stream_deep_research(request: ChatRequest, system_content: str, context: st
     prompt = _conversation_text(request.messages, instruction) + "\n\nRESEARCH PLAN:\n" + json.dumps(plan["plan"], ensure_ascii=False, indent=2) + "\n\nVERIFIED EVIDENCE:\n" + evidence + notebook_context
     if plan["web_sources"]:
         yield _event({"type": "sources", "sources": plan["web_sources"]})
-    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=instruction, output_tokens=DEEP_OUTPUT_TOKENS, primary_model=WEB_SYNTHESIS_MODEL, event_meta={"provider": "gemini+hybrid-rag+tavily", "web": True, "deep": True, "research": request.research_mode, "topic": plan["topic"], "evidence": {k: plan["verification"][k] for k in ("web_sources", "notebook_chunks", "high_authority_sources")}}, min_chars=1200 if requested_detail else 400)
+    accumulated: list[str] = []
+    min_chars = 1200 if requested_detail else 400
+    for event in _stream_gemini_resilient(
+        prompt=prompt,
+        system_instruction=instruction,
+        output_tokens=DEEP_OUTPUT_TOKENS,
+        primary_model=WEB_SYNTHESIS_MODEL,
+        event_meta={
+            "provider": "gemini+hybrid-rag+tavily",
+            "web": True,
+            "deep": True,
+            "research": request.research_mode,
+            "topic": plan["topic"],
+            "evidence": {k: plan["verification"][k] for k in ("web_sources", "notebook_chunks", "high_authority_sources")},
+        },
+        min_chars=min_chars,
+    ):
+        yield event
+        if not event.startswith("data: "):
+            continue
+        try:
+            payload = json.loads(event[6:].strip())
+        except Exception:
+            continue
+        if payload.get("type") == "token":
+            accumulated.append(payload.get("text") or "")
+        elif payload.get("type") == "done":
+            full_text = "".join(accumulated)
+            grounding_source = evidence + notebook_context
+            threshold = float(os.getenv("APOLLO_GROUNDING_MIN_OVERLAP", "0.4"))
+            overlap = content_overlap_ratio("text", full_text, grounding_source) if full_text else 1.0
+            yield _event({
+                "type": "grounding_check",
+                "verified": overlap >= threshold,
+                "overlap_ratio": round(overlap, 2),
+                "warning": None if overlap >= threshold else "Some details in this answer may not be fully supported by the retrieved sources -- please verify before relying on it.",
+            })
 
 
 def _stream_web(request: ChatRequest, system_content: str):
