@@ -58,6 +58,41 @@ function getUserId() {
   return value
 }
 
+function recentKey(type, userId, notebookId = '') {
+  return type === 'notebooks'
+    ? `apollo-recent-notebooks:${userId}`
+    : `apollo-recent-sources:${userId}:${notebookId}`
+}
+
+function readRecent(type, userId, notebookId = '') {
+  try {
+    const value = JSON.parse(localStorage.getItem(recentKey(type, userId, notebookId)) || '[]')
+    return Array.isArray(value) ? value : []
+  } catch {
+    return []
+  }
+}
+
+function rememberRecent(type, id, userId, notebookId = '') {
+  if (!id) return
+  const key = recentKey(type, userId, notebookId)
+  const current = readRecent(type, userId, notebookId).filter((value) => value !== id)
+  localStorage.setItem(key, JSON.stringify([id, ...current].slice(0, 12)))
+}
+
+function readSourceModes(userId, notebookId) {
+  try {
+    const value = JSON.parse(localStorage.getItem(`apollo-source-modes:${userId}:${notebookId}`) || '{}')
+    return value && typeof value === 'object' ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveSourceModes(userId, notebookId, modes) {
+  localStorage.setItem(`apollo-source-modes:${userId}:${notebookId}`, JSON.stringify(modes))
+}
+
 function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, renameNotebookUi, removeNotebook }) {
   const [open, setOpen] = useState(true)
   return (
@@ -463,22 +498,36 @@ export default function AppPhase6() {
   const [model, setModel] = useState('')
   const [tool, setTool] = useState('slides')
   const uid = useMemo(() => getUserId(), [])
+  const streamAbortRef = useRef(null)
   const notebook = notebooks.find((n) => n.id === activeId) || null
   const activeSources = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name)
 
   const refresh = async (preferred) => {
     const data = await listNotebooks(uid)
     const items = data.notebooks || []
-    setNotebooks(items)
-    setActiveId(preferred || activeId || items[0]?.id || '')
+    const recent = readRecent('notebooks', uid)
+    const ranked = [...items].sort((a, b) => {
+      const aIndex = recent.indexOf(a.id)
+      const bIndex = recent.indexOf(b.id)
+      if (aIndex === -1 && bIndex === -1) return String(b.updated || '').localeCompare(String(a.updated || ''))
+      if (aIndex === -1) return 1
+      if (bIndex === -1) return -1
+      return aIndex - bIndex
+    })
+    setNotebooks(ranked)
+    const nextId = preferred || activeId || recent[0] || ranked[0]?.id || ''
+    if (nextId) rememberRecent('notebooks', nextId, uid)
+    setActiveId(nextId)
   }
 
   const loadSources = async (id) => {
     if (!id) { setSources([]); setSourceModes({}); return }
     const data = await listSources(id, uid)
     const nextSources = data.sources || []
+    const savedModes = readSourceModes(uid, id)
+    const mergedModes = Object.fromEntries(nextSources.map((source) => [source.name, savedModes[source.name] || 'full']))
     setSources(nextSources)
-    setSourceModes(Object.fromEntries(nextSources.map((source) => [source.name, 'full'])))
+    setSourceModes(mergedModes)
   }
 
   const loadSessionsAndNotes = async (id) => {
@@ -494,10 +543,30 @@ export default function AppPhase6() {
     setNotes(noteData.notes || [])
   }
 
-  useEffect(() => { refresh('').catch(console.error) }, [])
-  useEffect(() => { loadSources(activeId).catch(console.error); loadSessionsAndNotes(activeId).catch(console.error) }, [activeId])
+  useEffect(() => {
+    refresh('').catch(console.error)
+    return () => streamAbortRef.current?.abort()
+  }, [])
 
-  const create = async () => { const name = prompt('Notebook name', 'My Notebook'); if (!name?.trim()) return; const nb = await createNotebook(name, uid); await refresh(nb.id) }
+  useEffect(() => {
+    loadSources(activeId).catch(console.error)
+    loadSessionsAndNotes(activeId).catch(console.error)
+  }, [activeId])
+
+  const create = async () => {
+    const name = prompt('Notebook name', 'My Notebook')
+    if (!name?.trim()) return
+    const nb = await createNotebook(name, uid)
+    rememberRecent('notebooks', nb.id, uid)
+    await refresh(nb.id)
+  }
+
+  const renameNotebookUi = async (nb) => {
+    const title = prompt('Notebook name', nb?.title || 'Untitled Notebook')
+    if (!nb?.id || !title?.trim()) return
+    const updated = await renameNotebook(nb.id, title.trim(), uid)
+    setNotebooks((current) => current.map((item) => item.id === nb.id ? { ...item, ...updated } : item))
+  }
   const removeNotebook = async (nb) => {
     if (!nb?.id || !confirm(`Delete notebook “${nb.title}”? This will remove its sources, chats, notes, and saved study data.`)) return
     await deleteNotebook(nb.id, uid)
@@ -514,8 +583,58 @@ export default function AppPhase6() {
       setNotes([])
     }
   }
-  const upload = async (file) => { if (!activeId) return; await uploadSource(activeId, file, uid); await loadSources(activeId); await refresh(activeId) }
-  const setSourceMode = (name, mode) => setSourceModes((current) => ({ ...current, [name]: mode }))
+  const upload = async (file) => {
+    if (!activeId) return
+    await uploadSource(activeId, file, uid)
+    rememberRecent('notebooks', activeId, uid)
+    await loadSources(activeId)
+    await refresh(activeId)
+  }
+
+  const setSourceMode = (name, mode) => {
+    if (activeId) rememberRecent('sources', name, uid, activeId)
+    setSourceModes((current) => {
+      const next = { ...current, [name]: mode }
+      if (activeId) saveSourceModes(uid, activeId, next)
+      return next
+    })
+  }
+
+  const setAllSourceMode = (mode) => {
+    if (!activeId) return
+    const next = Object.fromEntries(sources.map((source) => [source.name, mode]))
+    sources.forEach((source) => rememberRecent('sources', source.name, uid, activeId))
+    setSourceModes(next)
+    saveSourceModes(uid, activeId, next)
+  }
+
+  const removeSourceUi = async (source) => {
+    if (!activeId || !source?.name) return
+    if (!confirm(`Delete “${source.name}” from this notebook?`)) return
+    await deleteSource(activeId, source.name, uid)
+    await loadSources(activeId)
+    await refresh(activeId)
+  }
+
+  const retrySourceUi = async (source) => {
+    if (!activeId || !source?.name) return
+    rememberRecent('sources', source.name, uid, activeId)
+    try {
+      await retrySource(activeId, source.name, uid)
+      await loadSources(activeId)
+      window.setTimeout(() => loadSources(activeId).catch(() => {}), 1200)
+    } catch (error) {
+      await loadSources(activeId)
+      throw error
+    }
+  }
+
+  const refreshSourceUi = async (source) => {
+    if (!activeId || !source?.name) return
+    rememberRecent('sources', source.name, uid, activeId)
+    await refreshSource(activeId, source.name, uid)
+    await loadSources(activeId)
+  }
 
   const newChat = async () => {
     if (!activeId) return
