@@ -263,8 +263,30 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
 
     if request.tool == "report":
         markdown = _report_markdown(data)
+        overlap = content_overlap_ratio("text", markdown, context)
+        if overlap < 0.5:
+            stricter_prompt = prompt + "\n\nYour previous report included claims not supported by the source context. Regenerate using ONLY facts, figures, and claims present in the supplied source context."
+            try:
+                retry_text, retry_model = _safe_generation(stricter_prompt, system=system, output_tokens=output_tokens)
+                retry_data = extract_json_object(retry_text)
+                retry_markdown = _report_markdown(retry_data)
+                retry_overlap = content_overlap_ratio("text", retry_markdown, context)
+                if retry_overlap > overlap:
+                    data, markdown, overlap, model = retry_data, retry_markdown, retry_overlap, retry_model
+            except Exception:
+                pass
         insight = _persist_output(notebook_id, "study_report", markdown, model)
-        return {"tool": "report", "data": data, "markdown": markdown, "insight": insight, "model_used": model, "sources": source_names}
+        return {
+            "tool": "report",
+            "data": data,
+            "markdown": markdown,
+            "insight": insight,
+            "model_used": model,
+            "sources": source_names,
+            "verified": overlap >= 0.5,
+            "overlap_ratio": round(overlap, 2),
+            "warning": None if overlap >= 0.5 else "Some claims in this report may not be fully supported by the indexed source content -- please review before relying on it.",
+        }
     if request.tool == "slides":
         slides = data.get("slides") or []
         if not slides:

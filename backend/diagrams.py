@@ -155,6 +155,8 @@ def _extract_label_words(kind: str, code: str) -> set[str]:
     if kind == "svg":
         texts = _SVG_TEXT_RE.findall(code)
         blob = " ".join(_TAG_STRIP_RE.sub(" ", t) for t in texts)
+    elif kind == "text":
+        blob = code
     else:
         blob = _MERMAID_SYNTAX_RE.sub(" ", code)
         blob = _MERMAID_ARROW_RE.sub(" ", blob)
