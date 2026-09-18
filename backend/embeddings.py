@@ -7,6 +7,8 @@ import os
 import time
 from typing import Sequence
 
+from error_classifier import classify_error
+
 MODEL = os.getenv("APOLLO_EMBEDDING_MODEL", "gemini-embedding-2")
 DIMENSIONS = int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768"))
 BATCH_SIZE = int(os.getenv("APOLLO_EMBEDDING_BATCH_SIZE", "50"))
@@ -45,7 +47,10 @@ def _embed_batch_sync(texts: Sequence[str]) -> list[list[float]]:
             if attempt >= MAX_RETRIES - 1:
                 break
             time.sleep(2 ** attempt)
-    raise RuntimeError(f"Embedding generation failed: {last_error}")
+    if last_error is not None:
+        _, message = classify_error(last_error)
+        raise RuntimeError(message) from last_error
+    raise RuntimeError("Embedding generation failed.")
 
 
 def embed_texts_sync(texts: Sequence[str]) -> list[list[float]]:

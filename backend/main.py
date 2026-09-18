@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import threading
@@ -23,6 +24,9 @@ from rag_service import add_source, create_notebook, delete_notebook, format_con
 from research_engine import build_synthesis_instruction, format_evidence, is_detailed_request, run_hybrid_research
 from transformations import run_transformation
 from storage import STORE
+from error_classifier import classify_error
+from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text
+from pptx_generator import build_source_grounded_pptx
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_REPO_ROOT / ".env", override=False)
@@ -104,6 +108,13 @@ class MindMapRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     diagram_hint: str | None = None
     user_id: str | None = None
+
+
+class SlideDeckRequest(BaseModel):
+    active_sources: list[str] = Field(default_factory=list)
+    user_id: str | None = None
+    page_count: int = Field(default=8, ge=4, le=12)
+    aspect_ratio: Literal["16:9", "4:3"] = "16:9"
 
 
 class InsightRequest(BaseModel):
@@ -238,12 +249,16 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
             return
         except Exception as exc:
             last_error = exc
+            status_code, message = classify_error(exc)
             if is_last:
-                yield _event({"type": "error", "message": f"All Gemini synthesis models failed: {exc}"})
+                yield _event({"type": "error", "status_code": status_code, "message": message})
                 return
-            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(exc)})
+            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": message})
             continue
-    raise RuntimeError(f"All Gemini synthesis models failed: {last_error}")
+    if last_error is not None:
+        _, message = classify_error(last_error)
+        raise RuntimeError(message) from last_error
+    raise RuntimeError("All Gemini synthesis models failed.")
 
 
 def _stream_deep_research(request: ChatRequest, system_content: str, context: str, source_names: list[str]):
@@ -327,7 +342,8 @@ def _stream_chat(request: ChatRequest):
                 active_source_names = built["sources"]
         yield from _stream_model(request, context, active_source_names)
     except Exception as exc:
-        yield _event({"type": "error", "message": str(exc)})
+        status_code, message = classify_error(exc)
+        yield _event({"type": "error", "status_code": status_code, "message": message})
 
 
 @app.get("/api/health")
@@ -407,7 +423,8 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Source indexing failed: {exc}") from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 @app.delete("/api/notebooks/{notebook_id}/sources/{source_name}")
@@ -477,7 +494,8 @@ async def notebook_mindmap(notebook_id: str, request: MindMapRequest, http_reque
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Diagram generation timed out. Please try again.") from None
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
     if not rendered or not rendered.svg_bytes:
         raise HTTPException(status_code=502, detail=rendered.error if rendered else "Diagram generation failed")
@@ -492,6 +510,105 @@ async def notebook_mindmap(notebook_id: str, request: MindMapRequest, http_reque
     }
 
 
+@app.post("/api/notebooks/{notebook_id}/studio/slides")
+async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_request: Request):
+    rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
+    allowed, retry_after = _check_rate_limit(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+    if get_notebook(request.user_id, notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    if not request.active_sources:
+        raise HTTPException(status_code=400, detail="Select at least one source before generating a slide deck.")
+
+    built = build_context(
+        request.user_id,
+        notebook_id,
+        request.active_sources,
+        "create a presentation from the selected notebook sources",
+        token_budget=7500,
+        top_k=24,
+        include_insights=True,
+    )
+    source_context = built.get("context") or ""
+    source_names = built.get("sources") or request.active_sources
+    if not source_context:
+        raise HTTPException(status_code=400, detail="No indexed source content is available for this notebook.")
+
+    prompt = (
+        "Create a source-grounded academic slide deck from ONLY the supplied notebook source context. "
+        "Do not invent facts, examples, dates, names, or claims. If the sources do not support a point, omit it. "
+        f"Return exactly {request.page_count} slides as JSON with this schema: "
+        "{\"title\": string, \"slides\": [{\"title\": string, \"bullets\": [string], \"speaker_notes\": string}]}. "
+        "The first slide should be a clear title/overview. Every later slide should have 2-6 concise bullets. "
+        "Use a logical teaching sequence and cover the most important source-supported ideas. "
+        "Speaker notes should be brief and grounded in the same sources. "
+        "\n\nSOURCE CONTEXT:\n" + source_context
+    )
+    try:
+        text, model, _ = await asyncio.to_thread(
+            generate_gemini_text,
+            prompt,
+            system_instruction=(
+                "You are Apollo's slide-deck generation engine. Output only valid JSON. "
+                "Use only the provided notebook source context and never add outside knowledge."
+            ),
+            output_tokens=3200,
+            primary_model=os.getenv("APOLLO_SLIDE_MODEL", os.getenv("APOLLO_WEB_SYNTHESIS_MODEL")),
+            max_models=3,
+            retry_primary_once=True,
+            request_timeout_ms=int(os.getenv("APOLLO_SLIDE_GEMINI_TIMEOUT_MS", "20000")),
+            response_mime_type="application/json",
+        )
+        payload = extract_json_object(text)
+    except FriendlyGeminiError as exc:
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    except Exception as exc:
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+    raw_slides = payload.get("slides") if isinstance(payload, dict) else None
+    if not isinstance(raw_slides, list) or not raw_slides:
+        raise HTTPException(status_code=502, detail="Apollo's slide generator returned an invalid deck structure.")
+
+    slides = []
+    for index, item in enumerate(raw_slides[: request.page_count], 1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or f"Slide {index}").strip()
+        bullets = [str(value).strip() for value in (item.get("bullets") or []) if str(value).strip()][:6]
+        notes = str(item.get("speaker_notes") or "").strip()
+        if not bullets:
+            bullets = ["No source-supported points were returned for this slide."]
+        slides.append({"title": title, "bullets": bullets, "speaker_notes": notes})
+
+    if not slides:
+        raise HTTPException(status_code=502, detail="Apollo's slide generator returned no usable slides.")
+
+    try:
+        pptx_bytes = build_source_grounded_pptx(
+            slides=slides,
+            source_names=source_names,
+            aspect_ratio=request.aspect_ratio,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PPTX export failed: {exc}") from exc
+
+    safe_title = str(payload.get("title") or "Apollo Slide Deck").strip() or "Apollo Slide Deck"
+    filename = "".join(character if character.isalnum() or character in " -_" else "_" for character in safe_title).strip() or "Apollo Slide Deck"
+    filename = f"{filename[:80]}.pptx"
+    return {
+        "tool": "slides",
+        "title": safe_title,
+        "slides": slides,
+        "source_names": source_names,
+        "model_used": model,
+        "filename": filename,
+        "pptx_base64": base64.b64encode(pptx_bytes).decode("ascii"),
+    }
+
+
 @app.post("/api/notebooks/{notebook_id}/sources/{source_name}/insights")
 def notebook_source_insight(notebook_id: str, source_name: str, request: InsightRequest):
     if get_notebook(request.user_id, notebook_id) is None:
@@ -503,7 +620,8 @@ def notebook_source_insight(notebook_id: str, source_name: str, request: Insight
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 @app.get("/api/notebooks/{notebook_id}/sources/{source_name}/insights")
@@ -566,7 +684,8 @@ def portfolio_diagram(request: PortfolioDiagramRequest, http_request: Request):
     try:
         rendered = _attempt(prompt)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
     overlap = content_overlap_ratio(rendered.kind, rendered.source_code, request.content) if rendered else 0.0
     if rendered and overlap < 0.5:
         stricter = prompt + "\n\nYour previous attempt used words not found in the student's own content. Regenerate using ONLY the student's own words and ideas."

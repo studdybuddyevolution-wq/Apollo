@@ -1,0 +1,93 @@
+"""Phase 2 research-ingestion and capability routes."""
+
+from __future__ import annotations
+
+import importlib.util
+import weakref
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from jobs import enqueue_embedding_job
+from rag_service import get_notebook
+from source_ingestion import ingest_url, ingest_youtube
+from storage import STORE
+
+_REGISTERED_APPS: weakref.WeakSet[FastAPI] = weakref.WeakSet()
+
+
+class URLSourceRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    user_id: str | None = None
+
+
+class YouTubeSourceRequest(BaseModel):
+    url: str = Field(min_length=12, max_length=2048)
+    languages: list[str] = Field(default_factory=lambda: ["en"], max_length=8)
+    user_id: str | None = None
+
+
+def _check_notebook(user_id: str | None, notebook_id: str) -> None:
+    if get_notebook(user_id, notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+
+def register(app: FastAPI) -> None:
+    if app in _REGISTERED_APPS:
+        return
+
+    @app.get("/api/capabilities")
+    def capabilities():
+        youtube_ready = importlib.util.find_spec("youtube_transcript_api") is not None
+        vector_ready = bool(STORE and STORE.vector_available())
+        return {
+            "source_ingestion": {
+                "file": True,
+                "url": True,
+                "youtube": youtube_ready,
+            },
+            "retrieval": {
+                "bm25": True,
+                "hybrid_vector": vector_ready,
+            },
+            "transformations": {
+                "summary": True,
+                "key_points": True,
+                "study_guide": True,
+                "flashcards": True,
+            },
+            "research": {
+                "quick": True,
+                "web": True,
+                "deep": True,
+                "study": True,
+            },
+        }
+
+    @app.post("/api/notebooks/{notebook_id}/sources/url")
+    async def notebook_url_source(notebook_id: str, request: URLSourceRequest):
+        _check_notebook(request.user_id, notebook_id)
+        try:
+            result = ingest_url(request.user_id, notebook_id, request.url)
+            result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"URL ingestion failed: {exc}") from exc
+
+    @app.post("/api/notebooks/{notebook_id}/sources/youtube")
+    async def notebook_youtube_source(notebook_id: str, request: YouTubeSourceRequest):
+        _check_notebook(request.user_id, notebook_id)
+        try:
+            result = ingest_youtube(request.user_id, notebook_id, request.url, request.languages)
+            result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"YouTube ingestion failed: {exc}") from exc
+
+    _REGISTERED_APPS.add(app)
