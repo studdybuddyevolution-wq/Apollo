@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import threading
@@ -104,6 +105,13 @@ class MindMapRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     diagram_hint: str | None = None
     user_id: str | None = None
+
+
+class SlideDeckRequest(BaseModel):
+    active_sources: list[str] = Field(default_factory=list)
+    user_id: str | None = None
+    page_count: int = Field(default=8, ge=4, le=12)
+    aspect_ratio: Literal["16:9", "4:3"] = "16:9"
 
 
 class InsightRequest(BaseModel):
@@ -489,6 +497,103 @@ async def notebook_mindmap(notebook_id: str, request: MindMapRequest, http_reque
         "overlap_ratio": round(overlap, 2),
         "warning": None if overlap >= 0.5 else "This diagram may include wording not found in your original content -- please review it before submitting.",
         "sources": list(dict.fromkeys(chunk.get("source") for chunk in chunks if chunk.get("source"))),
+    }
+
+
+@app.post("/api/notebooks/{notebook_id}/studio/slides")
+async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_request: Request):
+    rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
+    allowed, retry_after = _check_rate_limit(rate_key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+    if get_notebook(request.user_id, notebook_id) is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    if not request.active_sources:
+        raise HTTPException(status_code=400, detail="Select at least one source before generating a slide deck.")
+
+    built = build_context(
+        request.user_id,
+        notebook_id,
+        request.active_sources,
+        "create a presentation from the selected notebook sources",
+        token_budget=7500,
+        top_k=24,
+        include_insights=True,
+    )
+    source_context = built.get("context") or ""
+    source_names = built.get("sources") or request.active_sources
+    if not source_context:
+        raise HTTPException(status_code=400, detail="No indexed source content is available for this notebook.")
+
+    prompt = (
+        "Create a source-grounded academic slide deck from ONLY the supplied notebook source context. "
+        "Do not invent facts, examples, dates, names, or claims. If the sources do not support a point, omit it. "
+        f"Return exactly {request.page_count} slides as JSON with this schema: "
+        "{\"title\": string, \"slides\": [{\"title\": string, \"bullets\": [string], \"speaker_notes\": string}]}. "
+        "The first slide should be a clear title/overview. Every later slide should have 2-6 concise bullets. "
+        "Use a logical teaching sequence and cover the most important source-supported ideas. "
+        "Speaker notes should be brief and grounded in the same sources. "
+        "\n\nSOURCE CONTEXT:\n" + source_context
+    )
+    try:
+        text, model, _ = await asyncio.to_thread(
+            generate_gemini_text,
+            prompt,
+            system_instruction=(
+                "You are Apollo's slide-deck generation engine. Output only valid JSON. "
+                "Use only the provided notebook source context and never add outside knowledge."
+            ),
+            output_tokens=3200,
+            primary_model=os.getenv("APOLLO_SLIDE_MODEL", os.getenv("APOLLO_WEB_SYNTHESIS_MODEL")),
+            max_models=3,
+            retry_primary_once=True,
+            request_timeout_ms=int(os.getenv("APOLLO_SLIDE_GEMINI_TIMEOUT_MS", "20000")),
+            response_mime_type="application/json",
+        )
+        payload = extract_json_object(text)
+    except FriendlyGeminiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Apollo could not build the slide outline right now.") from exc
+
+    raw_slides = payload.get("slides") if isinstance(payload, dict) else None
+    if not isinstance(raw_slides, list) or not raw_slides:
+        raise HTTPException(status_code=502, detail="Apollo's slide generator returned an invalid deck structure.")
+
+    slides = []
+    for index, item in enumerate(raw_slides[: request.page_count], 1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or f"Slide {index}").strip()
+        bullets = [str(value).strip() for value in (item.get("bullets") or []) if str(value).strip()][:6]
+        notes = str(item.get("speaker_notes") or "").strip()
+        if not bullets:
+            bullets = ["No source-supported points were returned for this slide."]
+        slides.append({"title": title, "bullets": bullets, "speaker_notes": notes})
+
+    if not slides:
+        raise HTTPException(status_code=502, detail="Apollo's slide generator returned no usable slides.")
+
+    try:
+        pptx_bytes = build_source_grounded_pptx(
+            slides=slides,
+            source_names=source_names,
+            aspect_ratio=request.aspect_ratio,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PPTX export failed: {exc}") from exc
+
+    safe_title = str(payload.get("title") or "Apollo Slide Deck").strip() or "Apollo Slide Deck"
+    filename = "".join(character if character.isalnum() or character in " -_" else "_" for character in safe_title).strip() or "Apollo Slide Deck"
+    filename = f"{filename[:80]}.pptx"
+    return {
+        "tool": "slides",
+        "title": safe_title,
+        "slides": slides,
+        "source_names": source_names,
+        "model_used": model,
+        "filename": filename,
+        "pptx_base64": base64.b64encode(pptx_bytes).decode("ascii"),
     }
 
 
