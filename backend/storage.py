@@ -59,19 +59,19 @@ class PostgresStore:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_apollo_chunks_notebook ON apollo_chunks(notebook_id)")
 
     def run_migrations(self) -> bool:
-        """Apply additive SQL migrations; failures degrade to the legacy schema."""
-        migration_path = Path(__file__).resolve().parent / "migrations" / "001_add_chunking_fields.sql"
-        if not migration_path.exists():
-            return False
-        try:
-            sql = migration_path.read_text(encoding="utf-8")
-            with self._connect() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql)
-            return True
-        except Exception as exc:
-            print(f"[Apollo storage] migration warning: {exc}")
-            return False
+        """Apply all additive SQL migrations in order; failures degrade gracefully."""
+        migration_dir = Path(__file__).resolve().parent / "migrations"
+        migrated = False
+        for migration_path in sorted(migration_dir.glob("*.sql")):
+            try:
+                sql = migration_path.read_text(encoding="utf-8")
+                with self._connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql)
+                migrated = True
+            except Exception as exc:
+                print(f"[Apollo storage] migration warning ({migration_path.name}): {exc}")
+        return migrated
 
     def _detect_vector(self) -> bool:
         try:
@@ -174,6 +174,7 @@ class PostgresStore:
                            COALESCE(s.kind, c.kind, 'file') AS kind,
                            COALESCE(s.processing_status, 'indexed') AS processing_status,
                            s.error_message,
+                           s.source_url,
                            COALESCE(c.chunks, 0) AS chunks
                     FROM (
                       SELECT source, MIN(kind) AS kind, COUNT(*) AS chunks
@@ -187,7 +188,41 @@ class PostgresStore:
                     ORDER BY name
                 """, (notebook_id, notebook_id, notebook_id))
                 rows = cur.fetchall()
-        return [{"name": n, "kind": k, "status": status, "error": error, "chunks": chunks} for n, k, status, error, chunks in rows]
+        return [{"name": n, "kind": k, "status": status, "error": error, "source_url": source_url, "chunks": chunks} for n, k, status, error, source_url, chunks in rows]
+
+    def get_source_metadata(self, notebook_id: str, filename: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT name, kind, processing_status, error_message, source_url FROM apollo_sources WHERE notebook_id=%s AND name=%s",
+                    (notebook_id, filename),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"name": row[0], "kind": row[1], "status": row[2], "error": row[3], "source_url": row[4]}
+
+    def save_source_payload(self, notebook_id: str, filename: str, payload: bytes, updated: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO apollo_source_payloads(notebook_id,source_name,payload,updated)
+                    VALUES (%s,%s,%s,%s)
+                    ON CONFLICT (notebook_id,source_name) DO UPDATE SET payload=EXCLUDED.payload, updated=EXCLUDED.updated
+                    """,
+                    (notebook_id, filename, payload, updated),
+                )
+
+    def get_source_payload(self, notebook_id: str, filename: str) -> bytes | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM apollo_source_payloads WHERE notebook_id=%s AND source_name=%s",
+                    (notebook_id, filename),
+                )
+                row = cur.fetchone()
+        return bytes(row[0]) if row and row[0] is not None else None
 
     def replace_source(self, notebook_id: str, filename: str, chunks: list[dict[str, Any]]) -> None:
         with self._connect() as conn:
@@ -273,6 +308,7 @@ class PostgresStore:
                 cur.execute("DELETE FROM apollo_chunks WHERE notebook_id=%s AND source=%s", (notebook_id, filename))
                 deleted = cur.rowcount > 0
                 cur.execute("DELETE FROM apollo_sources WHERE notebook_id=%s AND name=%s", (notebook_id, filename))
+                cur.execute("DELETE FROM apollo_source_payloads WHERE notebook_id=%s AND source_name=%s", (notebook_id, filename))
                 return deleted
 
     def update_counts(self, notebook_id: str, updated: str, source_count: int, node_count: int) -> None:
@@ -280,7 +316,7 @@ class PostgresStore:
             with conn.cursor() as cur:
                 cur.execute("UPDATE apollo_notebooks SET updated=%s, source_count=%s, node_count=%s WHERE id=%s", (updated, source_count, node_count, notebook_id))
 
-    def upsert_source_status(self, notebook_id: str, name: str, kind: str, status: str, error: str | None = None, now: str | None = None) -> None:
+    def upsert_source_status(self, notebook_id: str, name: str, kind: str, status: str, error: str | None = None, now: str | None = None, source_url: str | None = None) -> None:
         stamp = now or ""
         with self._connect() as conn:
             with conn.cursor() as cur:
