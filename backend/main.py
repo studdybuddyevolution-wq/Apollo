@@ -24,6 +24,7 @@ from rag_service import add_source, create_notebook, delete_notebook, format_con
 from research_engine import build_synthesis_instruction, format_evidence, is_detailed_request, run_hybrid_research
 from transformations import run_transformation
 from storage import STORE
+from error_classifier import classify_error
 from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text
 from pptx_generator import build_source_grounded_pptx
 
@@ -239,21 +240,27 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
                 reason = "; ".join(reasons)
                 last_error = RuntimeError(f"Gemini {model} returned an incomplete response: {reason}")
                 if is_last:
-                    yield _event({"type": "error", "message": str(last_error)})
+                    status_code, message = classify_error(last_error)
+                    yield _event({"type": "error", "status_code": status_code, "message": message})
                     return
-                yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(last_error)})
+                _, message = classify_error(last_error)
+                yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": message})
                 continue
 
             yield _event({"type": "done", "model": model, **event_meta})
             return
         except Exception as exc:
             last_error = exc
+            status_code, message = classify_error(exc)
             if is_last:
-                yield _event({"type": "error", "message": f"All Gemini synthesis models failed: {exc}"})
+                yield _event({"type": "error", "status_code": status_code, "message": message})
                 return
-            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(exc)})
+            yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": message})
             continue
-    raise RuntimeError(f"All Gemini synthesis models failed: {last_error}")
+    if last_error is not None:
+        _, message = classify_error(last_error)
+        raise RuntimeError(message) from last_error
+    raise RuntimeError("All Gemini synthesis models failed.")
 
 
 def _stream_deep_research(request: ChatRequest, system_content: str, context: str, source_names: list[str]):
@@ -337,7 +344,8 @@ def _stream_chat(request: ChatRequest):
                 active_source_names = built["sources"]
         yield from _stream_model(request, context, active_source_names)
     except Exception as exc:
-        yield _event({"type": "error", "message": str(exc)})
+        status_code, message = classify_error(exc)
+        yield _event({"type": "error", "status_code": status_code, "message": message})
 
 
 @app.get("/api/health")
@@ -487,7 +495,8 @@ async def notebook_mindmap(notebook_id: str, request: MindMapRequest, http_reque
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Diagram generation timed out. Please try again.") from None
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
     if not rendered or not rendered.svg_bytes:
         raise HTTPException(status_code=502, detail=rendered.error if rendered else "Diagram generation failed")
@@ -554,9 +563,11 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
         )
         payload = extract_json_object(text)
     except FriendlyGeminiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="Apollo could not build the slide outline right now.") from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
     raw_slides = payload.get("slides") if isinstance(payload, dict) else None
     if not isinstance(raw_slides, list) or not raw_slides:
@@ -673,7 +684,8 @@ def portfolio_diagram(request: PortfolioDiagramRequest, http_request: Request):
     try:
         rendered = _attempt(prompt)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
     overlap = content_overlap_ratio(rendered.kind, rendered.source_code, request.content) if rendered else 0.0
     if rendered and overlap < 0.5:
         stricter = prompt + "\n\nYour previous attempt used words not found in the student's own content. Regenerate using ONLY the student's own words and ideas."
