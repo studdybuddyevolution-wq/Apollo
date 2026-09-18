@@ -24,6 +24,8 @@ from rag_service import add_source, create_notebook, delete_notebook, format_con
 from research_engine import build_synthesis_instruction, format_evidence, is_detailed_request, run_hybrid_research
 from transformations import run_transformation
 from storage import STORE
+from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text
+from pptx_generator import build_source_grounded_pptx
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_REPO_ROOT / ".env", override=False)
