@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import io
 import json
 import math
@@ -57,6 +58,40 @@ def _notebook_dir(notebook_id: str) -> Path:
 
 def _metadata_path(notebook_id: str) -> Path:
     return _notebook_dir(notebook_id) / "chunks.json"
+
+def _source_meta_path(notebook_id: str) -> Path:
+    return _notebook_dir(notebook_id) / "sources.json"
+
+def _source_payload_path(notebook_id: str, filename: str) -> Path:
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    return _notebook_dir(notebook_id) / "payloads" / (digest + ".bin")
+
+def _load_source_meta(notebook_id: str) -> dict[str, dict[str, Any]]:
+    path = _source_meta_path(notebook_id)
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+def _save_source_meta(notebook_id: str, meta: dict[str, dict[str, Any]]) -> None:
+    notebook = _notebook_dir(notebook_id)
+    notebook.mkdir(parents=True, exist_ok=True)
+    _source_meta_path(notebook_id).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+def _save_source_payload_fs(notebook_id: str, filename: str, raw: bytes) -> None:
+    path = _source_payload_path(notebook_id, filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+def _load_source_payload_fs(notebook_id: str, filename: str) -> bytes | None:
+    path = _source_payload_path(notebook_id, filename)
+    return path.read_bytes() if path.exists() else None
+
+def _delete_source_payload_fs(notebook_id: str, filename: str) -> None:
+    _source_payload_path(notebook_id, filename).unlink(missing_ok=True)
 
 
 def _tokens(text: str) -> list[str]:
