@@ -177,6 +177,8 @@ class PostgresStore:
     def delete_notebook(self, user_id: str, notebook_id: str) -> bool:
         with self._connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("DELETE FROM apollo_source_insights WHERE notebook_id=%s", (notebook_id,))
+                cur.execute("DELETE FROM apollo_jobs WHERE notebook_id=%s", (notebook_id,))
                 cur.execute("DELETE FROM apollo_notebooks WHERE user_id=%s AND id=%s", (user_id, notebook_id))
                 return cur.rowcount > 0
 
@@ -326,11 +328,14 @@ class PostgresStore:
     def delete_source(self, notebook_id: str, filename: str) -> bool:
         with self._connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("DELETE FROM apollo_source_insights WHERE notebook_id=%s AND source_name=%s", (notebook_id, filename))
                 cur.execute("DELETE FROM apollo_chunks WHERE notebook_id=%s AND source=%s", (notebook_id, filename))
-                deleted = cur.rowcount > 0
+                chunk_deleted = cur.rowcount > 0
                 cur.execute("DELETE FROM apollo_sources WHERE notebook_id=%s AND name=%s", (notebook_id, filename))
+                source_deleted = cur.rowcount > 0
                 cur.execute("DELETE FROM apollo_source_payloads WHERE notebook_id=%s AND source_name=%s", (notebook_id, filename))
-                return deleted
+                payload_deleted = cur.rowcount > 0
+                return chunk_deleted or source_deleted or payload_deleted
 
     def update_counts(self, notebook_id: str, updated: str, source_count: int, node_count: int) -> None:
         with self._connect() as conn:
