@@ -426,7 +426,7 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     try:
-        result = add_source(user_id, notebook_id, file.filename or "source.txt", raw)
+        result = await asyncio.to_thread(add_source, user_id, notebook_id, file.filename or "source.txt", raw)
         embedding_job = await enqueue_embedding_job(notebook_id, user_id, file.filename or "source.txt")
         result["embedding_job"] = embedding_job
         return result
