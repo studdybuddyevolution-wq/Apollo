@@ -441,7 +441,7 @@ export default function AppPhase6() {
 
   const create = async () => { const name = prompt('Notebook name', 'My Notebook'); if (!name?.trim()) return; const nb = await createNotebook(name, uid); await refresh(nb.id) }
   const removeNotebook = async (nb) => {
-    if (!nb?.id || !confirm(\`Delete notebook “\${nb.title}”? This will remove its sources, chats, notes, and saved study data.\`)) return
+    if (!nb?.id || !confirm(`Delete notebook “${nb.title}”? This will remove its sources, chats, notes, and saved study data.`)) return
     await deleteNotebook(nb.id, uid)
     const remaining = notebooks.filter((item) => item.id !== nb.id)
     setNotebooks(remaining)
