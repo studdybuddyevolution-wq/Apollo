@@ -113,24 +113,27 @@ def _importance_terms(question: str) -> list[str]:
 
 
 def extract_requested_sections(question: str) -> list[str]:
-    """Extract explicit user-requested sections from numbered or bulleted lines."""
+    """Extract an explicit, ordered research structure without forcing Apollo's template."""
     sections: list[str] = []
+    seen: set[str] = set()
+    heading_pattern = re.compile(r"^\s*(?:#{1,4}\s+|(?:\d+(?:\.\d+)*[.)]?\s+)|[-*+]\s+)(.{4,140})\s*$")
     for line in question.splitlines():
-        match = re.match(r"^\s*(?:\d+[.)]|[-*])\s+(.{4,140})\s*$", line)
+        match = heading_pattern.match(line)
         if not match:
             continue
         value = re.sub(r"\s+", " ", match.group(1)).strip(" .:;")
-        if value and value.lower() not in {item.lower() for item in sections}:
+        if value and value.lower() not in seen:
             sections.append(value)
+            seen.add(value.lower())
     if len(sections) >= 2:
         return sections[:MAX_RESEARCH_SECTIONS]
 
-    inline = re.search(r"(?:sections?|cover(?:ing)?|focus on)\s*:\s*(.+)$", question, re.IGNORECASE | re.MULTILINE)
+    inline = re.search(r"(?:sections?|headings?|cover(?:ing)?|focus on)\s*:\s*(.+)$", question, re.IGNORECASE | re.MULTILINE)
     if inline:
         parts = [re.sub(r"\s+", " ", item).strip(" .:;") for item in re.split(r";|\|", inline.group(1))]
         parts = [item for item in parts if len(item) >= 4]
         if len(parts) >= 2:
-            return parts[:MAX_RESEARCH_SECTIONS]
+            return list(dict.fromkeys(parts))[:MAX_RESEARCH_SECTIONS]
     return []
 
 
