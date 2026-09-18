@@ -122,6 +122,18 @@ def _register_chat(app: FastAPI) -> None:
                     yield event
                 if generated:
                     append_message(request.user_id, request.notebook_id, session["id"], "assistant", "".join(generated), model_name, sources)
+            except GeneratorExit:
+                if generated:
+                    append_message(
+                        request.user_id,
+                        request.notebook_id,
+                        session["id"],
+                        "assistant",
+                        "".join(generated),
+                        model_name,
+                        sources,
+                    )
+                return
             except Exception as exc:
                 if generated:
                     append_message(request.user_id, request.notebook_id, session["id"], "assistant", "".join(generated), model_name, sources)

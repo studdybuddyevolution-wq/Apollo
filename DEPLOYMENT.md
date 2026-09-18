@@ -99,3 +99,23 @@ Then open the frontend at `http://localhost:5173`.
 ## Operational notes
 
 Web URL ingestion validates every redirect and pins the HTTP connection to the validated public IP. Uploaded files are bounded by `APOLLO_MAX_UPLOAD_BYTES` before indexing. Long embedding work is tracked through Apollo jobs, and source failures expose retry controls in the Sources drawer.
+
+## Production entrypoints and legacy code
+
+The active production entrypoints are:
+
+- Frontend: `frontend/src/main.jsx` → `AppPhase6.jsx`
+- Backend: `backend/phase2_app.py` → FastAPI application
+
+The root-level Streamlit files and older Python UI modules are legacy code kept for historical/reference purposes. They are not part of the current Cloudflare + Render production path and should not be used as deployment entrypoints.
+
+## Persistence requirement
+
+For production, `DATABASE_URL` is required. With PostgreSQL configured, Apollo stores notebooks, chunks, source lifecycle metadata, raw source payloads, chat sessions/messages, notes, insights and jobs in the database. The filesystem store is a development fallback and is not a durable production store on an ephemeral Render filesystem.
+
+The backend health endpoint reports:
+
+- `storage_backend=postgres` when PostgreSQL is active
+- `durable_storage=true` when the database-backed store is active
+
+Check this after deployment before relying on persisted workspace data.

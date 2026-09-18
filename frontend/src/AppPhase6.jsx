@@ -181,6 +181,11 @@ function Bubble({ message, onSaveNote, canSaveNote = true }) {
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
         </div>}
+        {!me && message.groundingWarning && <div role="status" className="grounding-review">
+          <strong>Grounding review</strong>
+          <span>{message.groundingWarning}</span>
+          {typeof message.overlapRatio === 'number' && <span>Source overlap: {Math.round(message.overlapRatio * 100)}%</span>}
+        </div>}
         {!me && canSaveNote && message.content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
       </div>
     </article>
@@ -517,7 +522,10 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         </article>)}
       </div>}
 
-      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre></div>}
+      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+        {output.warning && <div className="grounding-review" role="status"><strong>Grounding review</strong><span>{output.warning}</span><span>Source overlap: {Math.round((output.overlap_ratio || 0) * 100)}%</span></div>}
+        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre>
+      </div>}
 
       {output?.tool === 'transform' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.content}</pre></div>}
 
@@ -531,7 +539,13 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         </div>
       </div>}
 
-      {output?.tool === 'video' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}><div style={{ padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{output.data?.title || 'Video Overview'}</strong><span style={{ color: 'var(--tertiary)', fontSize: 10 }}>{output.data?.duration_seconds ? `${output.data.duration_seconds}s storyboard` : 'Storyboard'} · Model: {output.model_used || 'Gemini'}</span></div>{(output.data?.scenes || []).map((scene, index) => <article key={`${scene.timecode || index}-${scene.title || ''}`} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{scene.timecode || `Scene ${index + 1}`} · {scene.title}</strong><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Narration:</b> {scene.narration}</div><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Visual:</b> {scene.visual}</div><div style={{ fontSize: 10, lineHeight: 1.45 }}><b>On screen:</b> {scene.on_screen_text}</div></article>)}</div>}
+      {output?.tool === 'video' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}>
+        <div style={{ padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+          <strong style={{ display: 'block', marginBottom: 4 }}>{output.data?.title || 'Video Overview'}</strong>
+          <span style={{ color: 'var(--tertiary)', fontSize: 10 }}>{output.data?.duration_seconds ? `${output.data.duration_seconds}s storyboard` : 'Storyboard'} · Model: {output.model_used || 'Gemini'} · No video file is rendered here</span>
+        </div>
+        {(output.data?.scenes || []).map((scene, index) => <article key={`${scene.timecode || index}-${scene.title || ''}`} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{scene.timecode || `Scene ${index + 1}`} · {scene.title}</strong><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Narration:</b> {scene.narration}</div><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Visual:</b> {scene.visual}</div><div style={{ fontSize: 10, lineHeight: 1.45 }}><b>On screen:</b> {scene.on_screen_text}</div></article>)}
+      </div>}
     </>}
 
     <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
@@ -771,8 +785,10 @@ export default function AppPhase6() {
     if (!currentNotebook && researchMode === 'study') {
       // Study mode is still useful without notebook context; it becomes web-only research.
     }
-    if (currentNotebook && !sessionId) {
+    let requestSessionId = sessionId
+    if (currentNotebook && !requestSessionId) {
       const session = await createSession(activeId, 'New chat', uid)
+      requestSessionId = session.id
       setSessionId(session.id)
       setSessions((current) => [session, ...current])
     }
@@ -793,7 +809,7 @@ export default function AppPhase6() {
         notebookTitle: currentNotebook?.title || null,
         activeSources: currentNotebook ? activeSources : [],
         sourceModes: currentNotebook ? sourceModes : {},
-        sessionId: currentNotebook ? sessionId : null,
+        sessionId: currentNotebook ? requestSessionId : null,
         userId: uid,
         webEnabled: needsWeb,
         researchMode: requestMode,
@@ -807,6 +823,7 @@ export default function AppPhase6() {
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
+        onGroundingCheck: (payload) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, groundingWarning: payload.warning || null, overlapRatio: payload.overlap_ratio } : m)),
         onDone: () => {
           setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m))
           setBusy(false)
