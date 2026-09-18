@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import main
 import phase1_routes
 
 
@@ -30,9 +31,9 @@ def test_workspace_stream_persists_partial_response_on_client_cancel(monkeypatch
         "build_context",
         lambda *args, **kwargs: {"context": "source context", "full_sources": ["notes.txt"]},
     )
-    monkeypatch.setattr(phase1_routes.main, "_check_rate_limit", lambda key: (True, 0))
+    monkeypatch.setattr(main, "_check_rate_limit", lambda key: (True, 0))
     monkeypatch.setattr(
-        phase1_routes.main,
+        main,
         "_stream_model",
         lambda *args, **kwargs: iter(
             [
