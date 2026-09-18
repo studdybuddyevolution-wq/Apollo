@@ -184,6 +184,10 @@ button { color: inherit; }
 .studio-tool strong { font-size: 10px; font-weight: 600; }
 .studio-tool small { color: var(--outline); font-size: 8px; line-height: 1.35; }
 .studio-config { margin: 13px 17px 0; padding: 13px; border: 1px solid var(--surface-high); border-radius: 11px; background: var(--surface-container-low); }
+.studio-panel select { color-scheme: dark; color: var(--text); background: var(--surface-container); border: 1px solid var(--surface-high); }
+.studio-panel select:focus { outline: none; border-color: rgba(249,115,22,.55); box-shadow: 0 0 0 3px rgba(249,115,22,.07); }
+.studio-panel select option { color: var(--text); background: var(--surface-container); }
+.studio-panel select option:checked { color: var(--text); background: var(--surface-high); }
 .segmented-control { display: grid; grid-template-columns: repeat(3,1fr); margin-top: 7px; background: var(--surface-container); border: 1px solid var(--surface-high); border-radius: 8px; padding: 3px; }
 .segmented-control button { border: 0; background: transparent; color: var(--outline); border-radius: 6px; padding: 6px 4px; cursor: pointer; font-size: 8px; }
 .segmented-control button.selected { color: var(--text); background: var(--surface-high); }
