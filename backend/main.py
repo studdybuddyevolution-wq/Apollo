@@ -42,6 +42,7 @@ WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 RATE_LIMIT_MAX = int(os.getenv("APOLLO_RATE_LIMIT_MAX", "20"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "600"))
+MAX_UPLOAD_BYTES = int(os.getenv("APOLLO_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: dict[str, list[float]] = defaultdict(list)
 
@@ -365,6 +366,7 @@ def health() -> dict[str, object]:
         "embedding_model": os.getenv("APOLLO_EMBEDDING_MODEL", "gemini-embedding-2"),
         "embedding_dimensions": int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768")),
         "pgvector": bool(STORE and STORE.vector_available()),
+        "max_upload_bytes": MAX_UPLOAD_BYTES,
     }
 
 
@@ -409,8 +411,18 @@ def notebook_sources(notebook_id: str, user_id: str = "default"):
 
 
 @app.post("/api/notebooks/{notebook_id}/sources")
-async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...), user_id: str = Query("default")):
-    raw = await file.read()
+async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...), user_id: str = Query("default"), request: Request | None = None):
+    if request is not None:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_UPLOAD_BYTES + 512 * 1024:
+                    raise HTTPException(status_code=413, detail=f"Upload is too large. Apollo accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+            except ValueError:
+                pass
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Upload is too large. Apollo accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     try:
