@@ -29,6 +29,14 @@ export async function generateStudioOutput(
   { transformationType = null, customPrompt = null, userId = 'default', signal } = {},
 ) {
   if (!notebookId) throw new Error('No active notebook selected')
+  if (tool === 'slides') {
+    return requestJson(`/api/notebooks/${encodeURIComponent(notebookId)}/studio/slides`, {
+      active_sources: activeSources,
+      user_id: userId,
+      page_count: 8,
+      aspect_ratio: '16:9',
+    }, signal)
+  }
   return requestJson(`/api/notebooks/${encodeURIComponent(notebookId)}/studio/generate`, {
     tool,
     active_sources: activeSources,
