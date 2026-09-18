@@ -3,14 +3,14 @@ import {
   ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
   CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
   LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
-  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2,
+  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2, RefreshCw, Square, Pencil,
 } from 'lucide-react'
 import { streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource, deleteNotebook,
+  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import SourceImportBar from './SourceImportBar'
@@ -43,6 +43,7 @@ const STUDIO_TOOLS = [
 
 const SOURCE_MODES = [
   { id: 'full', label: 'Full source', description: 'Use source text + saved insights' },
+  { id: 'summary', label: 'Summary', description: 'Use the saved source summary only' },
   { id: 'insights', label: 'Insights only', description: 'Use only saved AI insights' },
   { id: 'off', label: 'Off', description: 'Exclude this source' },
 ]
@@ -57,7 +58,7 @@ function getUserId() {
   return value
 }
 
-function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, removeNotebook }) {
+function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, renameNotebookUi, removeNotebook }) {
   const [open, setOpen] = useState(true)
   return (
     <aside className={`apollo-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -92,7 +93,7 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
                 onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setNotebook(nb.id) } }}
               >
                 <span className="notebook-title"><BookOpen size={15} />{nb.title}</span>
-                <span className="notebook-row-right"><span className="source-count">{nb.source_count || 0} src</span><button className="notebook-delete" title={`Delete ${nb.title}`} aria-label={`Delete ${nb.title}`} onClick={(event) => { event.stopPropagation(); removeNotebook(nb) }}><Trash2 size={13} /></button></span>
+                <span className="notebook-row-right"><span className="source-count">{nb.source_count || 0} src</span><button className="notebook-rename" title={`Rename ${nb.title}`} aria-label={`Rename ${nb.title}`} onClick={(event) => { event.stopPropagation(); renameNotebookUi(nb) }}><Pencil size={12} /></button><button className="notebook-delete" title={`Delete ${nb.title}`} aria-label={`Delete ${nb.title}`} onClick={(event) => { event.stopPropagation(); removeNotebook(nb) }}><Trash2 size={13} /></button></span>
               </div>
             ))}
             {!notebooks.length && <div className="notebook-row"><span className="notebook-title">No notebooks yet</span></div>}
