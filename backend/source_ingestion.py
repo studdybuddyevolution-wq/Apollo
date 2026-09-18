@@ -16,7 +16,7 @@ from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3 import PoolManager
 from urllib3.util import connection as urllib3_connection
 
-from rag_service import add_source
+from rag_service import add_source, get_source_metadata
 
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = 15
@@ -240,12 +240,12 @@ def ingest_url(user_id: str | None, notebook_id: str, url: str) -> dict:
     if "application/pdf" in content_type or safe_url.lower().endswith(".pdf"):
         title = urlparse(safe_url).path.rstrip("/").split("/")[-1] or "web-document"
         filename = _slug_title(title.rsplit(".", 1)[0], safe_url, "URL") + ".pdf"
-        return add_source(user_id, notebook_id, filename, raw)
+        return add_source(user_id, notebook_id, filename, raw, kind="url", source_url=safe_url)
 
     title, text = _html_to_text(raw)
     name = _slug_title(title, safe_url, "URL") + ".txt"
     payload = f"Source URL: {safe_url}\n\n{text}".encode("utf-8")
-    return add_source(user_id, notebook_id, name, payload)
+    return add_source(user_id, notebook_id, name, payload, kind="url", source_url=safe_url)
 
 
 def ingest_youtube(user_id: str | None, notebook_id: str, url: str, languages: list[str] | None = None) -> dict:
@@ -266,4 +266,49 @@ def ingest_youtube(user_id: str | None, notebook_id: str, url: str, languages: l
         + "\n\n".join(lines)
     )
     filename = f"YouTube {video_id}.txt"
-    return add_source(user_id, notebook_id, filename, text.encode("utf-8"))
+    return add_source(user_id, notebook_id, filename, text.encode("utf-8"), kind="youtube", source_url=source_url)
+
+def refresh_url_source(user_id: str | None, notebook_id: str, source_name: str) -> dict:
+    metadata = get_source_metadata(user_id, notebook_id, source_name)
+    url = str((metadata or {}).get("source_url") or "").strip()
+    if not url:
+        raise ValueError("This source does not contain a refreshable web URL")
+
+    safe_ip, safe_url = _validate_public_url(url)
+    raw, content_type = _download(safe_ip, safe_url)
+    if "application/pdf" in content_type or safe_url.lower().endswith(".pdf"):
+        payload = raw
+    else:
+        _, text = _html_to_text(raw)
+        payload = f"Source URL: {safe_url}
+
+{text}".encode("utf-8")
+    return add_source(user_id, notebook_id, source_name, payload, kind="url", source_url=safe_url)
+
+
+def refresh_youtube_source(user_id: str | None, notebook_id: str, source_name: str) -> dict:
+    metadata = get_source_metadata(user_id, notebook_id, source_name)
+    url = str((metadata or {}).get("source_url") or "").strip()
+    if not url:
+        raise ValueError("This source does not contain a refreshable YouTube URL")
+    video_id = extract_youtube_video_id(url)
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except ImportError as exc:
+        raise RuntimeError("YouTube ingestion is not installed on this deployment") from exc
+    transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en"])
+    lines = [snippet.text.strip() for snippet in transcript if getattr(snippet, "text", "").strip()]
+    if not lines:
+        raise ValueError("No transcript was available for this YouTube video")
+    text = (
+        f"YouTube URL: {url}
+"
+        f"Transcript language: {getattr(transcript, 'language_code', 'unknown')}
+
+"
+        + "
+
+".join(lines)
+    )
+    return add_source(user_id, notebook_id, source_name, text.encode("utf-8"), kind="youtube", source_url=url)
+
