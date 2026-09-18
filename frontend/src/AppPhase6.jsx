@@ -145,6 +145,11 @@ function Bubble({ message, onSaveNote }) {
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
         </div>}
+        {!me && message.groundingWarning && <div role="status" style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(127,29,29,.42)', border: '1px solid #ef4444', color: '#fee2e2', fontSize: 11, lineHeight: 1.45 }}>
+          <strong style={{ display: 'block', marginBottom: 3 }}>Grounding review</strong>
+          <span>{message.groundingWarning}</span>
+          {typeof message.overlapRatio === 'number' && <span style={{ display: 'block', marginTop: 3, color: '#fecaca' }}>Source overlap: {Math.round(message.overlapRatio * 100)}%</span>}
+        </div>}
         {!me && message.content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
       </div>
     </article>
@@ -579,6 +584,7 @@ export default function AppPhase6() {
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
+        onGroundingCheck: (payload) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, groundingWarning: payload.warning || null, overlapRatio: payload.overlap_ratio } : m)),
         onDone: () => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)); setBusy(false); listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {}) },
         onError: (message) => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m)); setBusy(false) },
       })
