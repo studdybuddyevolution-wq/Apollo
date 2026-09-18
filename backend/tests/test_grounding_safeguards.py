@@ -4,6 +4,13 @@ import pytest
 
 import main
 import phase3_routes
+from diagrams import content_overlap_ratio
+
+
+def test_text_overlap_uses_plain_prose_words():
+    source = "Cells contain DNA and DNA stores genetic information."
+    assert content_overlap_ratio("text", "Cells contain DNA.", source) > 0.5
+    assert content_overlap_ratio("text", "Quantum mechanics describes a wavefunction.", source) < 0.5
 
 
 def _events_to_payloads(events):
