@@ -83,6 +83,7 @@ def test_workspace_stream_persists_partial_response_on_client_cancel(monkeypatch
 
     next(iterator)  # session event
     next(iterator)  # start event
+    next(iterator)  # first already-received token
     iterator.close()
 
     assert [item["role"] for item in appended] == ["user", "assistant"]
