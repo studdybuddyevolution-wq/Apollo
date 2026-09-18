@@ -177,6 +177,9 @@ class PostgresStore:
     def delete_notebook(self, user_id: str, notebook_id: str) -> bool:
         with self._connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM apollo_notebooks WHERE user_id=%s AND id=%s", (user_id, notebook_id))
+                if cur.fetchone() is None:
+                    return False
                 cur.execute("DELETE FROM apollo_source_insights WHERE notebook_id=%s", (notebook_id,))
                 cur.execute("DELETE FROM apollo_jobs WHERE notebook_id=%s", (notebook_id,))
                 cur.execute("DELETE FROM apollo_notebooks WHERE user_id=%s AND id=%s", (user_id, notebook_id))
