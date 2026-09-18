@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import weakref
@@ -88,7 +89,7 @@ def register(app: FastAPI) -> None:
     async def notebook_url_source(notebook_id: str, request: URLSourceRequest):
         _check_notebook(request.user_id, notebook_id)
         try:
-            result = ingest_url(request.user_id, notebook_id, request.url)
+            result = await asyncio.to_thread(ingest_url, request.user_id, notebook_id, request.url)
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
             return result
         except ValueError as exc:
@@ -104,7 +105,8 @@ def register(app: FastAPI) -> None:
             payload = get_source_payload(request.user_id, notebook_id, source_name)
             if not metadata or payload is None:
                 raise HTTPException(status_code=404, detail="Source payload is no longer available for retry")
-            result = add_source(
+            result = await asyncio.to_thread(
+                add_source,
                 request.user_id,
                 notebook_id,
                 source_name,
@@ -128,9 +130,9 @@ def register(app: FastAPI) -> None:
         kind = str(metadata.get("kind") or "")
         try:
             if kind == "url":
-                result = refresh_url_source(request.user_id, notebook_id, source_name)
+                result = await asyncio.to_thread(refresh_url_source, request.user_id, notebook_id, source_name)
             elif kind == "youtube":
-                result = refresh_youtube_source(request.user_id, notebook_id, source_name)
+                result = await asyncio.to_thread(refresh_youtube_source, request.user_id, notebook_id, source_name)
             else:
                 raise HTTPException(status_code=400, detail="Only web and YouTube sources can be refreshed")
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, source_name)
@@ -148,7 +150,7 @@ def register(app: FastAPI) -> None:
     async def notebook_youtube_source(notebook_id: str, request: YouTubeSourceRequest):
         _check_notebook(request.user_id, notebook_id)
         try:
-            result = ingest_youtube(request.user_id, notebook_id, request.url, request.languages)
+            result = await asyncio.to_thread(ingest_youtube, request.user_id, notebook_id, request.url, request.languages)
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
             return result
         except ValueError as exc:
