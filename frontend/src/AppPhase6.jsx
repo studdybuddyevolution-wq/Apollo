@@ -181,6 +181,11 @@ function Bubble({ message, onSaveNote, canSaveNote = true }) {
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
         </div>}
+        {!me && message.groundingWarning && <div role="status" className="grounding-review">
+          <strong>Grounding review</strong>
+          <span>{message.groundingWarning}</span>
+          {typeof message.overlapRatio === 'number' && <span>Source overlap: {Math.round(message.overlapRatio * 100)}%</span>}
+        </div>}
         {!me && canSaveNote && message.content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
       </div>
     </article>
@@ -517,7 +522,10 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         </article>)}
       </div>}
 
-      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre></div>}
+      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+        {output.warning && <div className="grounding-review" role="status"><strong>Grounding review</strong><span>{output.warning}</span><span>Source overlap: {Math.round((output.overlap_ratio || 0) * 100)}%</span></div>}
+        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre>
+      </div>}
 
       {output?.tool === 'transform' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.content}</pre></div>}
 
@@ -807,6 +815,7 @@ export default function AppPhase6() {
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
+        onGroundingCheck: (payload) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, groundingWarning: payload.warning || null, overlapRatio: payload.overlap_ratio } : m)),
         onDone: () => {
           setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m))
           setBusy(false)
