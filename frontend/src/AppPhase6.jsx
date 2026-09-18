@@ -3,14 +3,14 @@ import {
   ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
   CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
   LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
-  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus,
+  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2,
 } from 'lucide-react'
 import { streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource,
+  renameSession, uploadSource, deleteNotebook,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import SourceImportBar from './SourceImportBar'
@@ -57,7 +57,7 @@ function getUserId() {
   return value
 }
 
-function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create }) {
+function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, removeNotebook }) {
   const [open, setOpen] = useState(true)
   return (
     <aside className={`apollo-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -83,9 +83,17 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
           </button>
           {open && <div className="notebook-content">
             {notebooks.map((nb) => (
-              <button key={nb.id} className={`notebook-row ${activeId === nb.id ? 'active' : ''}`} onClick={() => setNotebook(nb.id)}>
-                <span className="notebook-title"><BookOpen size={15} />{nb.title}</span><span className="source-count">{nb.source_count || 0} src</span>
-              </button>
+              <div
+                key={nb.id}
+                className={`notebook-row ${activeId === nb.id ? 'active' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => setNotebook(nb.id)}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setNotebook(nb.id) } }}
+              >
+                <span className="notebook-title"><BookOpen size={15} />{nb.title}</span>
+                <span className="notebook-row-right"><span className="source-count">{nb.source_count || 0} src</span><button className="notebook-delete" title={`Delete ${nb.title}`} aria-label={`Delete ${nb.title}`} onClick={(event) => { event.stopPropagation(); removeNotebook(nb) }}><Trash2 size={13} /></button></span>
+              </div>
             ))}
             {!notebooks.length && <div className="notebook-row"><span className="notebook-title">No notebooks yet</span></div>}
             <button className="new-notebook" onClick={create}><Plus size={15} /> New Notebook</button>
@@ -432,6 +440,22 @@ export default function AppPhase6() {
   useEffect(() => { loadSources(activeId).catch(console.error); loadSessionsAndNotes(activeId).catch(console.error) }, [activeId])
 
   const create = async () => { const name = prompt('Notebook name', 'My Notebook'); if (!name?.trim()) return; const nb = await createNotebook(name, uid); await refresh(nb.id) }
+  const removeNotebook = async (nb) => {
+    if (!nb?.id || !confirm(\`Delete notebook “\${nb.title}”? This will remove its sources, chats, notes, and saved study data.\`)) return
+    await deleteNotebook(nb.id, uid)
+    const remaining = notebooks.filter((item) => item.id !== nb.id)
+    setNotebooks(remaining)
+    if (nb.id === activeId) {
+      const nextId = remaining[0]?.id || ''
+      setActiveId(nextId)
+      setMessages([])
+      setSources([])
+      setSourceModes({})
+      setSessions([])
+      setSessionId('')
+      setNotes([])
+    }
+  }
   const upload = async (file) => { if (!activeId) return; await uploadSource(activeId, file, uid); await loadSources(activeId); await refresh(activeId) }
   const setSourceMode = (name, mode) => setSourceModes((current) => ({ ...current, [name]: mode }))
 
@@ -545,7 +569,7 @@ export default function AppPhase6() {
   const NavIcon = navIcon
 
   return <div className="apollo-app">
-    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} />
+    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} removeNotebook={removeNotebook} />
     <section className="app-shell">
       <TopBar
         active={active}
@@ -557,7 +581,7 @@ export default function AppPhase6() {
         setResearchMode={setResearchMode}
       />
       {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll">
-        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'Create a notebook to get started.'}</p></div><button className="upload-button" onClick={newChat} disabled={!notebook}><MessageSquarePlus size={15} /> New chat</button></div>
+        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'Create a notebook to get started.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
         <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
       </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>
         {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} />}
