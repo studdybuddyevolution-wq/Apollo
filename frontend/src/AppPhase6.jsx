@@ -589,6 +589,7 @@ export default function AppPhase6() {
     const mergedModes = Object.fromEntries(nextSources.map((source) => [source.name, savedModes[source.name] || 'full']))
     setSources(nextSources)
     setSourceModes(mergedModes)
+    saveSourceModes(uid, id, mergedModes)
   }
 
   const loadSessionsAndNotes = async (id) => {
