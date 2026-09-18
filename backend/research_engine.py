@@ -288,9 +288,9 @@ def build_synthesis_instruction(
     return f"""You are Apollo Omni AI's universal Deep Search synthesizer.
 
 Deep Search format — follow this exact contract:
-1. Research plan: list 3-5 concrete sub-questions you will answer.
+1. Research plan: list the concrete sub-questions or user-requested sections you will answer. Preserve explicit user-provided section wording when possible.
 2. Direct answer: 1-2 sentences immediately after the plan.
-3. Structured sections: use one `###` heading per sub-question; each section should contain 2-4 substantive paragraphs or equivalent detailed bullets.
+3. Structured sections: use one `###` heading per planned item; each section should contain 2-4 substantive paragraphs or equivalent detailed bullets.
 4. Use inline numeric citations like [1], [2], [3] for claims supported by the numbered evidence below.
 5. If the evidence contains meaningful disagreement, include a `### Conflicting sources` section and explain the disagreement rather than flattening it.
 6. Use a comparison table only when the user's question genuinely compares two or more things. Otherwise do not use tables.
@@ -312,7 +312,7 @@ Synthesis rules:
 - Do not claim a source supports something that is not present in its supplied evidence.
 - Prefer authoritative, recent, and corroborated evidence. Mention uncertainty or conflicting evidence where material.
 - Complete the planned coverage rather than stopping after an introduction.
-- Adapt the five planned sub-questions to the exact user request; do not force irrelevant headings.
+- Preserve the user's requested structure when one was explicitly supplied; otherwise use the topic-adaptive plan.
 - Use clean Markdown headings, paragraphs, bullets, and comparison tables only when warranted.
 - Never output raw HTML, `<br>`, search-result syntax, or pipe-delimited pseudo-tables.
 - Use normal spacing and punctuation. Do not concatenate words or headings.
