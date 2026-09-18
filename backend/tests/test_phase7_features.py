@@ -76,3 +76,46 @@ def test_refresh_url_source_reuses_existing_source_name(monkeypatch):
     assert result["kind"] == "url"
     assert result["source_url"] == "https://example.com/page"
     assert b"Hello world" in result["payload"]
+
+
+def test_outline_section_boundaries():
+    fewer = "Explain Apollo with:\n1. Architecture\n2. Retrieval\n3. Deployment"
+    exactly_five = "Research this:\n1. One\n2. Two\n3. Three\n4. Four\n5. Five"
+    more_than_five = "Research this:\n1. One\n2. Two\n3. Three\n4. Four\n5. Five\n6. Six\n7. Seven\n8. Eight\n9. Nine"
+    too_many = "Research this:\n" + "\n".join(f"{i}. Section {i}" for i in range(1, 15))
+    malformed = "Research this:"
+
+    assert len(research_engine.build_outline("conceptual", fewer)) == 3
+    assert len(research_engine.build_outline("conceptual", exactly_five)) == 5
+    assert len(research_engine.build_outline("conceptual", more_than_five)) == 9
+    assert len(research_engine.build_outline("conceptual", too_many)) == research_engine.MAX_RESEARCH_SECTIONS
+    assert research_engine.build_outline("conceptual", malformed) == research_engine.TOPIC_TEMPLATES["conceptual"]
+    assert len(research_engine.decompose_query(more_than_five, "conceptual")) == 9
+
+
+def test_filesystem_source_payload_and_delete_are_not_orphaned(monkeypatch, tmp_path):
+    monkeypatch.setattr("rag_service.STORE", None)
+    monkeypatch.setattr("rag_service.DATA_DIR", tmp_path)
+    monkeypatch.setattr("rag_service.NOTEBOOKS_FILE", tmp_path / "notebooks.json")
+
+    notebook = __import__("rag_service").create_notebook("u1", "Test")
+    result = __import__("rag_service").add_source("u1", notebook["id"], "notes.txt", b"alpha beta gamma")
+    payload_path = tmp_path / "notebooks" / notebook["id"] / "payloads"
+    assert any(payload_path.iterdir())
+
+    assert __import__("rag_service").remove_source("u1", notebook["id"], "notes.txt") is True
+    assert not any(payload_path.iterdir())
+
+
+def test_filesystem_notebook_delete_removes_source_data(monkeypatch, tmp_path):
+    rag = __import__("rag_service")
+    monkeypatch.setattr(rag, "STORE", None)
+    monkeypatch.setattr(rag, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(rag, "NOTEBOOKS_FILE", tmp_path / "notebooks.json")
+
+    notebook = rag.create_notebook("u1", "Test")
+    rag.add_source("u1", notebook["id"], "notes.txt", b"alpha beta gamma")
+    notebook_dir = tmp_path / "notebooks" / notebook["id"]
+    assert notebook_dir.exists()
+    assert rag.delete_notebook("u1", notebook["id"]) is True
+    assert not notebook_dir.exists()
