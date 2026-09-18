@@ -10,7 +10,7 @@ import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource, getCapabilities,
+  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource, getCapabilities, searchNotebook,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import SourceImportBar from './SourceImportBar'
@@ -227,9 +227,34 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
   const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [knowledgeQuery, setKnowledgeQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searching, setSearching] = useState(false)
   const nb = notebooks.find((n) => n.id === activeId)
-  const visibleSources = sources.filter((source) => source.name.toLowerCase().includes(query.toLowerCase()))
+  const recentSources = readRecent('sources', userId, activeId)
+  const visibleSources = sources
+    .filter((source) => source.name.toLowerCase().includes(query.toLowerCase()))
+    .filter((source) => statusFilter === 'all' || (statusFilter === 'ready' ? ['indexed', 'completed'].includes(source.status) : source.status === statusFilter))
+    .sort((a, b) => {
+      const aIndex = recentSources.indexOf(a.name)
+      const bIndex = recentSources.indexOf(b.name)
+      if (aIndex === -1 && bIndex === -1) return a.name.localeCompare(b.name)
+      if (aIndex === -1) return 1
+      if (bIndex === -1) return -1
+      return aIndex - bIndex
+    })
   const enabledCount = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').length
+  const runContentSearch = async () => {
+    if (!activeId || !knowledgeQuery.trim()) return
+    setSearching(true)
+    try {
+      const result = await searchNotebook(activeId, knowledgeQuery.trim(), { topK: 6, sourceNames: sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name), userId })
+      setSearchResults(result.results || [])
+    } finally {
+      setSearching(false)
+    }
+  }
 
   const onFile = async (e) => {
     const file = e.target.files?.[0]
@@ -253,6 +278,22 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
           <button onClick={() => setAllSourceMode('insights')}>Insights</button>
           <button onClick={() => setAllSourceMode('off')}>None</button>
         </div>
+      </div>
+      <div className="source-search-tools">
+        <div className="knowledge-search">
+          <Search size={14} />
+          <input value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runContentSearch() } }} placeholder="Search inside indexed sources…" />
+          <button onClick={runContentSearch} disabled={searching || !knowledgeQuery.trim()}>{searching ? '…' : 'Ask'}</button>
+        </div>
+        <div className="source-filter-row">
+          {['all', 'ready', 'processing', 'failed'].map((filter) => <button key={filter} className={statusFilter === filter ? 'selected' : ''} onClick={() => setStatusFilter(filter)}>{filter === 'all' ? 'All' : filter === 'ready' ? 'Ready' : filter[0].toUpperCase() + filter.slice(1)}</button>)}
+        </div>
+        {searchResults.length > 0 && <div className="search-result-list">
+          {searchResults.map((result, index) => <button key={(result.id || result.source || 'result') + '-' + index} className="search-result" onClick={() => { if (result.source) { rememberRecent('sources', result.source, userId, activeId); setQuery(result.source) } }}>
+            <strong>{result.source}</strong>
+            <span>{String(result.text || '').slice(0, 220)}{String(result.text || '').length > 220 ? '…' : ''}</span>
+          </button>)}
+        </div>}
       </div>
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
       <div className="source-list">{visibleSources.map((s) => {
