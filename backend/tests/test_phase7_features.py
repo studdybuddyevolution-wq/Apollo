@@ -82,6 +82,7 @@ def test_outline_section_boundaries():
     fewer = "Explain Apollo with:\n1. Architecture\n2. Retrieval\n3. Deployment"
     exactly_five = "Research this:\n1. One\n2. Two\n3. Three\n4. Four\n5. Five"
     more_than_five = "Research this:\n1. One\n2. Two\n3. Three\n4. Four\n5. Five\n6. Six\n7. Seven\n8. Eight\n9. Nine"
+    custom_subsections = "Report structure:\n1. Architecture\n1.1 Frontend\n1.2 Backend\n2. Retrieval"
     too_many = "Research this:\n" + "\n".join(f"{i}. Section {i}" for i in range(1, 15))
     malformed = "Research this:"
 
@@ -91,6 +92,7 @@ def test_outline_section_boundaries():
     assert len(research_engine.build_outline("conceptual", too_many)) == research_engine.MAX_RESEARCH_SECTIONS
     assert research_engine.build_outline("conceptual", malformed) == research_engine.TOPIC_TEMPLATES["conceptual"]
     assert len(research_engine.decompose_query(more_than_five, "conceptual")) == 9
+    assert research_engine.extract_requested_sections(custom_subsections) == ["Architecture", "Frontend", "Backend", "Retrieval"]
 
 
 def test_filesystem_source_payload_and_delete_are_not_orphaned(monkeypatch, tmp_path):
