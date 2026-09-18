@@ -9,8 +9,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from jobs import enqueue_embedding_job
-from rag_service import get_notebook
-from source_ingestion import ingest_url, ingest_youtube
+from rag_service import add_source, get_notebook, get_source_metadata, get_source_payload
+from source_ingestion import ingest_url, ingest_youtube, refresh_url_source, refresh_youtube_source
 from storage import STORE
 
 _REGISTERED_APPS: weakref.WeakSet[FastAPI] = weakref.WeakSet()
@@ -75,6 +75,54 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"URL ingestion failed: {exc}") from exc
+
+    @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/retry")
+    async def notebook_source_retry(notebook_id: str, source_name: str, request: URLSourceRequest):
+        _check_notebook(request.user_id, notebook_id)
+        try:
+            metadata = get_source_metadata(request.user_id, notebook_id, source_name)
+            payload = get_source_payload(request.user_id, notebook_id, source_name)
+            if not metadata or payload is None:
+                raise HTTPException(status_code=404, detail="Source payload is no longer available for retry")
+            result = add_source(
+                request.user_id,
+                notebook_id,
+                source_name,
+                payload,
+                kind=str(metadata.get("kind") or "file"),
+                source_url=metadata.get("source_url"),
+            )
+            result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, source_name)
+            return result
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Source retry failed: {exc}") from exc
+
+    @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/refresh")
+    async def notebook_source_refresh(notebook_id: str, source_name: str, request: URLSourceRequest):
+        _check_notebook(request.user_id, notebook_id)
+        metadata = get_source_metadata(request.user_id, notebook_id, source_name) or {}
+        kind = str(metadata.get("kind") or "")
+        try:
+            if kind == "url":
+                result = refresh_url_source(request.user_id, notebook_id, source_name)
+            elif kind == "youtube":
+                result = refresh_youtube_source(request.user_id, notebook_id, source_name)
+            else:
+                raise HTTPException(status_code=400, detail="Only web and YouTube sources can be refreshed")
+            result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, source_name)
+            return result
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Source refresh failed: {exc}") from exc
 
     @app.post("/api/notebooks/{notebook_id}/sources/youtube")
     async def notebook_youtube_source(notebook_id: str, request: YouTubeSourceRequest):
