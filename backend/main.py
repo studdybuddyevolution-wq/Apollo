@@ -240,11 +240,9 @@ def _stream_gemini_resilient(*, prompt: str, system_instruction: str, output_tok
                 reason = "; ".join(reasons)
                 last_error = RuntimeError(f"Gemini {model} returned an incomplete response: {reason}")
                 if is_last:
-                    status_code, message = classify_error(last_error)
-                    yield _event({"type": "error", "status_code": status_code, "message": message})
+                    yield _event({"type": "error", "message": str(last_error)})
                     return
-                _, message = classify_error(last_error)
-                yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": message})
+                yield _event({"type": "restart", "from_model": model, "to_model": models[index + 1], "reason": str(last_error)})
                 continue
 
             yield _event({"type": "done", "model": model, **event_meta})
@@ -425,7 +423,8 @@ async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...),
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Source indexing failed: {exc}") from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 @app.delete("/api/notebooks/{notebook_id}/sources/{source_name}")
@@ -621,7 +620,8 @@ def notebook_source_insight(notebook_id: str, source_name: str, request: Insight
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code, message = classify_error(exc)
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 @app.get("/api/notebooks/{notebook_id}/sources/{source_name}/insights")
