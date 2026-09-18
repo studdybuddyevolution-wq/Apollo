@@ -26,7 +26,7 @@ export async function generateStudioOutput(
   notebookId,
   tool,
   activeSources = [],
-  { transformationType = null, customPrompt = null, userId = 'default', signal } = {},
+  { transformationType = null, customPrompt = null, model = null, userId = 'default', signal } = {},
 ) {
   if (!notebookId) throw new Error('No active notebook selected')
   if (tool === 'slides') {
@@ -42,6 +42,7 @@ export async function generateStudioOutput(
     active_sources: activeSources,
     transformation_type: transformationType,
     custom_prompt: customPrompt,
+    model,
     user_id: userId,
   }, signal)
 }

@@ -3,14 +3,14 @@ import {
   ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
   CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
   LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
-  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2,
+  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2, RefreshCw, Square, Pencil,
 } from 'lucide-react'
 import { streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource, deleteNotebook,
+  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource, getCapabilities, searchNotebook,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
 import SourceImportBar from './SourceImportBar'
@@ -43,6 +43,7 @@ const STUDIO_TOOLS = [
 
 const SOURCE_MODES = [
   { id: 'full', label: 'Full source', description: 'Use source text + saved insights' },
+  { id: 'summary', label: 'Summary', description: 'Use the saved source summary only' },
   { id: 'insights', label: 'Insights only', description: 'Use only saved AI insights' },
   { id: 'off', label: 'Off', description: 'Exclude this source' },
 ]
@@ -57,7 +58,42 @@ function getUserId() {
   return value
 }
 
-function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, removeNotebook }) {
+function recentKey(type, userId, notebookId = '') {
+  return type === 'notebooks'
+    ? `apollo-recent-notebooks:${userId}`
+    : `apollo-recent-sources:${userId}:${notebookId}`
+}
+
+function readRecent(type, userId, notebookId = '') {
+  try {
+    const value = JSON.parse(localStorage.getItem(recentKey(type, userId, notebookId)) || '[]')
+    return Array.isArray(value) ? value : []
+  } catch {
+    return []
+  }
+}
+
+function rememberRecent(type, id, userId, notebookId = '') {
+  if (!id) return
+  const key = recentKey(type, userId, notebookId)
+  const current = readRecent(type, userId, notebookId).filter((value) => value !== id)
+  localStorage.setItem(key, JSON.stringify([id, ...current].slice(0, 12)))
+}
+
+function readSourceModes(userId, notebookId) {
+  try {
+    const value = JSON.parse(localStorage.getItem(`apollo-source-modes:${userId}:${notebookId}`) || '{}')
+    return value && typeof value === 'object' ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveSourceModes(userId, notebookId, modes) {
+  localStorage.setItem(`apollo-source-modes:${userId}:${notebookId}`, JSON.stringify(modes))
+}
+
+function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, activeId, setNotebook, create, renameNotebookUi, removeNotebook }) {
   const [open, setOpen] = useState(true)
   return (
     <aside className={`apollo-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
@@ -92,7 +128,7 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
                 onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setNotebook(nb.id) } }}
               >
                 <span className="notebook-title"><BookOpen size={15} />{nb.title}</span>
-                <span className="notebook-row-right"><span className="source-count">{nb.source_count || 0} src</span><button className="notebook-delete" title={`Delete ${nb.title}`} aria-label={`Delete ${nb.title}`} onClick={(event) => { event.stopPropagation(); removeNotebook(nb) }}><Trash2 size={13} /></button></span>
+                <span className="notebook-row-right"><span className="source-count">{nb.source_count || 0} src</span><button className="notebook-rename" title={`Rename ${nb.title}`} aria-label={`Rename ${nb.title}`} onClick={(event) => { event.stopPropagation(); renameNotebookUi(nb) }}><Pencil size={12} /></button><button className="notebook-delete" title={`Delete ${nb.title}`} aria-label={`Delete ${nb.title}`} onClick={(event) => { event.stopPropagation(); removeNotebook(nb) }}><Trash2 size={13} /></button></span>
               </div>
             ))}
             {!notebooks.length && <div className="notebook-row"><span className="notebook-title">No notebooks yet</span></div>}
@@ -134,7 +170,7 @@ function TopBar({ active, toggleSources, toggleStudio, toggleSessions, toggleNot
   )
 }
 
-function Bubble({ message, onSaveNote }) {
+function Bubble({ message, onSaveNote, canSaveNote = true }) {
   const me = message.role === 'user'
   return (
     <article className={`message-row ${me ? 'user' : 'assistant'}`}>
@@ -145,13 +181,13 @@ function Bubble({ message, onSaveNote }) {
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
         </div>}
-        {!me && message.content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
+        {!me && canSaveNote && message.content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
       </div>
     </article>
   )
 }
 
-function Composer({ send, busy, researchMode }) {
+function Composer({ send, stop, busy, researchMode }) {
   const [value, setValue] = useState('')
   const mode = RESEARCH_MODES.find((item) => item.id === researchMode) || RESEARCH_MODES[0]
   const submit = () => {
@@ -165,9 +201,9 @@ function Composer({ send, busy, researchMode }) {
         <button className="composer-icon" disabled><Paperclip size={18} /></button>
         <button className="composer-icon" disabled><ImagePlus size={18} /></button>
         <input value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} placeholder={`${mode.label} — message Apollo…`} />
-        <button className="send-button" onClick={submit} disabled={busy || !value.trim()}><ArrowUp size={18} /></button>
+        {busy ? <button className="send-button stop-button" onClick={stop} title="Stop response" aria-label="Stop response"><Square size={16} /></button> : <button className="send-button" onClick={submit} disabled={!value.trim()}><ArrowUp size={18} /></button>}
       </div>
-      <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{mode.description}</span></div>
+      <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{busy ? 'Generation in progress — press stop to cancel' : mode.description}</span></div>
     </div>
   )
 }
@@ -187,19 +223,69 @@ function downloadBase64File(base64, filename, mimeType) {
   URL.revokeObjectURL(url)
 }
 
-function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close, userId, refreshSources }) {
+function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setAllSourceMode, setActiveId, create, upload, close, userId, refreshSources, removeSource, retrySource, refreshSource }) {
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
   const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [knowledgeQuery, setKnowledgeQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searching, setSearching] = useState(false)
+  const [actionMessage, setActionMessage] = useState('')
   const nb = notebooks.find((n) => n.id === activeId)
-  const visibleSources = sources.filter((source) => source.name.toLowerCase().includes(query.toLowerCase()))
-  const enabledCount = sources.filter((source) => sourceModes[source.name] !== 'off').length
+  const recentSources = readRecent('sources', userId, activeId)
+  const visibleSources = sources
+    .filter((source) => source.name.toLowerCase().includes(query.toLowerCase()))
+    .filter((source) => statusFilter === 'all' || (statusFilter === 'ready' ? ['indexed', 'completed'].includes(source.status) : source.status === statusFilter))
+    .sort((a, b) => {
+      const aIndex = recentSources.indexOf(a.name)
+      const bIndex = recentSources.indexOf(b.name)
+      if (aIndex === -1 && bIndex === -1) return a.name.localeCompare(b.name)
+      if (aIndex === -1) return 1
+      if (bIndex === -1) return -1
+      return aIndex - bIndex
+    })
+  const enabledCount = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').length
+  const runContentSearch = async () => {
+    if (!activeId || !knowledgeQuery.trim()) return
+    setSearching(true)
+    try {
+      const result = await searchNotebook(activeId, knowledgeQuery.trim(), { topK: 6, sourceNames: sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name), userId })
+      setSearchResults(result.results || [])
+    } catch (error) {
+      setSearchResults([])
+      setActionMessage(error?.message || 'Search failed.')
+    } finally {
+      setSearching(false)
+    }
+  }
+
   const onFile = async (e) => {
     const file = e.target.files?.[0]
     if (!file || !nb) return
     setUploading(true)
-    try { await upload(file) } finally { setUploading(false); e.target.value = '' }
+    setActionMessage('')
+    try {
+      await upload(file)
+      setActionMessage('Source added and queued for indexing.')
+    } catch (error) {
+      setActionMessage(error?.message || 'Source upload failed.')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
   }
+
+  const runSourceAction = async (action, source, successMessage) => {
+    setActionMessage('')
+    try {
+      await action(source)
+      setActionMessage(successMessage)
+    } catch (error) {
+      setActionMessage(error?.message || 'Source action failed.')
+    }
+  }
+
   return (
     <aside className="context-panel source-panel">
       <div className="context-header"><div><div className="context-kicker">KNOWLEDGE BASE</div><h2><FolderOpen size={17} /> Sources</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
@@ -207,25 +293,58 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sources..." /></div>
       <SourceImportBar notebookId={activeId} userId={userId} onImported={refreshSources} />
+      <div className="source-bulk-controls">
+        <span className="muted-label">CONTEXT PRESET</span>
+        <div className="segmented-control source-presets">
+          <button onClick={() => setAllSourceMode('full')}>All full</button>
+          <button onClick={() => setAllSourceMode('summary')}>Summaries</button>
+          <button onClick={() => setAllSourceMode('insights')}>Insights</button>
+          <button onClick={() => setAllSourceMode('off')}>None</button>
+        </div>
+      </div>
+      <div className="source-search-tools">
+        <div className="knowledge-search">
+          <Search size={14} />
+          <input value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runContentSearch() } }} placeholder="Search inside indexed sources…" />
+          <button onClick={runContentSearch} disabled={searching || !knowledgeQuery.trim()}>{searching ? '…' : 'Ask'}</button>
+        </div>
+        <div className="source-filter-row">
+          {['all', 'ready', 'processing', 'failed'].map((filter) => <button key={filter} className={statusFilter === filter ? 'selected' : ''} onClick={() => setStatusFilter(filter)}>{filter === 'all' ? 'All' : filter === 'ready' ? 'Ready' : filter[0].toUpperCase() + filter.slice(1)}</button>)}
+        </div>
+        {searchResults.length > 0 && <div className="search-result-list">
+          {searchResults.map((result, index) => <button key={(result.id || result.source || 'result') + '-' + index} className="search-result" onClick={() => { if (result.source) { rememberRecent('sources', result.source, userId, activeId); setQuery(result.source) } }}>
+            <strong>{result.source}</strong>
+            <span>{String(result.text || '').slice(0, 220)}{String(result.text || '').length > 220 ? '…' : ''}</span>
+          </button>)}
+        </div>}
+      </div>
       <input ref={input} hidden type="file" accept=".pdf,.docx,.txt,.md,.csv" onChange={onFile} />
       <div className="source-list">{visibleSources.map((s) => {
         const mode = sourceModes[s.name] || 'full'
         const modeLabel = SOURCE_MODES.find((item) => item.id === mode)?.label || 'Full source'
+        const failed = s.status === 'failed'
+        const processing = ['pending', 'processing'].includes(s.status)
+        const refreshable = s.kind === 'url' || s.kind === 'youtube'
         return <div key={s.name} className={`source-card ${mode !== 'off' ? 'selected' : ''}`} style={{ cursor: 'default' }}>
           <div className="source-icon"><FileText size={16} /></div>
-          <div className="source-card-copy"><strong>{s.name}</strong><span>{s.chunks} chunks · {s.kind || 'file'} · {s.status || 'indexed'}</span></div>
-          <select aria-label={`Context mode for ${s.name}`} value={mode} onChange={(e) => setSourceMode(s.name, e.target.value)} style={{ width: 98, fontSize: 10, borderRadius: 7, padding: '5px 4px' }}>
+          <div className="source-card-copy"><strong title={s.name}>{s.name}</strong><span>{s.chunks} chunks · {s.kind || 'file'} · {s.status || 'indexed'}</span>{s.error && <small className="source-error">{s.error}</small>}</div>
+          <select aria-label={`Context mode for ${s.name}`} value={mode} onChange={(e) => setSourceMode(s.name, e.target.value)} style={{ width: 94, fontSize: 10, borderRadius: 7, padding: '5px 4px' }}>
             {SOURCE_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
           </select>
-          <span className="source-check" title={modeLabel}>{mode === 'full' ? '●' : mode === 'insights' ? '◐' : '○'}</span>
+          <div className="source-actions">
+            {(failed || processing) && <button className="icon-button" title={processing ? 'Retry indexing' : 'Retry source'} onClick={() => runSourceAction(retrySource, s, 'Source retry queued.') }><RefreshCw size={13} /></button>}
+            {refreshable && <button className="icon-button" title="Refresh source" onClick={() => runSourceAction(refreshSource, s, 'Source refreshed and queued for indexing.') }><RefreshCw size={13} /></button>}
+            <button className="icon-button" title="Delete source" onClick={() => runSourceAction(removeSource, s, 'Source deleted.')}><Trash2 size={13} /></button>
+          </div>
+          <span className="source-check" title={modeLabel}>{mode === 'full' ? '●' : mode === 'summary' ? '◉' : mode === 'insights' ? '◐' : '○'}</span>
         </div>
       })}{!visibleSources.length && <div className="source-empty-state"><FolderOpen size={22} /><strong>{sources.length ? 'No matching sources' : 'No sources connected'}</strong><span>{sources.length ? 'Try another source name.' : 'Upload a PDF, DOCX, TXT, Markdown or CSV file.'}</span></div>}</div>
+      {actionMessage && <div className="source-action-message" role="status">{actionMessage}</div>}
       <div className="source-footer"><div className="source-stats"><span><strong>{enabledCount}</strong> enabled</span><span><strong>{sources.length}</strong> total</span></div><button className="upload-button" disabled={!nb || uploading} onClick={() => input.current?.click()}><Upload size={15} /> {uploading ? 'Indexing…' : 'Add sources'}</button></div>
       <button className="new-notebook" onClick={create}><Plus size={15} /> New Notebook</button>
     </aside>
   )
 }
-
 function SessionPanel({ sessions, activeSessionId, selectSession, createNew, rename, remove, close }) {
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">CONVERSATIONS</div><h2><History size={17} /> Chats</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
@@ -264,6 +383,8 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   const [error, setError] = useState('')
   const [transformation, setTransformation] = useState('summary')
   const [customPrompt, setCustomPrompt] = useState('')
+  const [availableModels, setAvailableModels] = useState([])
+  const [selectedModel, setSelectedModel] = useState('')
   const [speaking, setSpeaking] = useState(false)
   const abortRef = useRef(null)
 
@@ -282,13 +403,17 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     ['custom', 'Custom'],
   ]
 
+  useEffect(() => {
+    getCapabilities().then((data) => setAvailableModels(data?.ai_models || [])).catch(() => {})
+  }, [])
+
   useEffect(() => () => {
     abortRef.current?.abort()
     window.speechSynthesis?.cancel()
   }, [])
 
   const generate = async () => {
-    if (!activeId || !activeSources.length || generating || tool === 'video') return
+    if (!activeId || !activeSources.length || generating) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -305,6 +430,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         const result = await generateStudioOutput(activeId, tool, activeSources, {
           transformationType: tool === 'transform' ? transformation : null,
           customPrompt: tool === 'transform' && transformation === 'custom' ? customPrompt : null,
+          model: tool === 'transform' ? (selectedModel || null) : null,
           userId,
           signal: controller.signal,
         })
@@ -338,7 +464,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   }
 
   const activeNames = sources.filter((source) => activeSources.includes(source.name)).map((source) => source.name)
-  const canGenerate = Boolean(activeId && activeSources.length && !generating && tool !== 'video')
+  const canGenerate = Boolean(activeId && activeSources.length && !generating)
 
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
@@ -357,6 +483,11 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         <label className="muted-label" htmlFor="apollo-transformation">TRANSFORMATION</label>
         <select id="apollo-transformation" value={transformation} onChange={(e) => setTransformation(e.target.value)} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
           {transformations.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <label className="muted-label" htmlFor="apollo-studio-model">MODEL</label>
+        <select id="apollo-studio-model" value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
+          <option value="">Auto (configured fallback)</option>
+          {availableModels.map((value) => <option key={value} value={value}>{value}</option>)}
         </select>
         {transformation === 'custom' && <textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} placeholder="Describe the transformation you want…" rows={4} style={{ width: '100%', resize: 'vertical', padding: 9, borderRadius: 8 }} />}
       </div>}
@@ -400,11 +531,11 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         </div>
       </div>}
 
-      {tool === 'video' && <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}><strong style={{ display: 'block', marginBottom: 5 }}>Video Overview</strong>Storyboard generation is intentionally deferred until the Slide Deck and Podcast pipelines are stable. The selected source context is already ready for that next step.</div>}
+      {output?.tool === 'video' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}><div style={{ padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{output.data?.title || 'Video Overview'}</strong><span style={{ color: 'var(--tertiary)', fontSize: 10 }}>{output.data?.duration_seconds ? `${output.data.duration_seconds}s storyboard` : 'Storyboard'} · Model: {output.model_used || 'Gemini'}</span></div>{(output.data?.scenes || []).map((scene, index) => <article key={`${scene.timecode || index}-${scene.title || ''}`} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ display: 'block', marginBottom: 4 }}>{scene.timecode || `Scene ${index + 1}`} · {scene.title}</strong><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Narration:</b> {scene.narration}</div><div style={{ fontSize: 10, lineHeight: 1.45, marginBottom: 4 }}><b>Visual:</b> {scene.visual}</div><div style={{ fontSize: 10, lineHeight: 1.45 }}><b>On screen:</b> {scene.on_screen_text}</div></article>)}</div>}
     </>}
 
     <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
-    <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : tool === 'video' ? 'Planned' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
+    <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
 
@@ -428,22 +559,37 @@ export default function AppPhase6() {
   const [model, setModel] = useState('')
   const [tool, setTool] = useState('slides')
   const uid = useMemo(() => getUserId(), [])
+  const streamAbortRef = useRef(null)
   const notebook = notebooks.find((n) => n.id === activeId) || null
   const activeSources = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name)
 
   const refresh = async (preferred) => {
     const data = await listNotebooks(uid)
     const items = data.notebooks || []
-    setNotebooks(items)
-    setActiveId(preferred || activeId || items[0]?.id || '')
+    const recent = readRecent('notebooks', uid)
+    const ranked = [...items].sort((a, b) => {
+      const aIndex = recent.indexOf(a.id)
+      const bIndex = recent.indexOf(b.id)
+      if (aIndex === -1 && bIndex === -1) return String(b.updated || '').localeCompare(String(a.updated || ''))
+      if (aIndex === -1) return 1
+      if (bIndex === -1) return -1
+      return aIndex - bIndex
+    })
+    setNotebooks(ranked)
+    const nextId = preferred || activeId || recent[0] || ranked[0]?.id || ''
+    if (nextId) rememberRecent('notebooks', nextId, uid)
+    setActiveId(nextId)
   }
 
   const loadSources = async (id) => {
     if (!id) { setSources([]); setSourceModes({}); return }
     const data = await listSources(id, uid)
     const nextSources = data.sources || []
+    const savedModes = readSourceModes(uid, id)
+    const mergedModes = Object.fromEntries(nextSources.map((source) => [source.name, savedModes[source.name] || 'full']))
     setSources(nextSources)
-    setSourceModes(Object.fromEntries(nextSources.map((source) => [source.name, 'full'])))
+    setSourceModes(mergedModes)
+    saveSourceModes(uid, id, mergedModes)
   }
 
   const loadSessionsAndNotes = async (id) => {
@@ -459,10 +605,30 @@ export default function AppPhase6() {
     setNotes(noteData.notes || [])
   }
 
-  useEffect(() => { refresh('').catch(console.error) }, [])
-  useEffect(() => { loadSources(activeId).catch(console.error); loadSessionsAndNotes(activeId).catch(console.error) }, [activeId])
+  useEffect(() => {
+    refresh('').catch(console.error)
+    return () => streamAbortRef.current?.abort()
+  }, [])
 
-  const create = async () => { const name = prompt('Notebook name', 'My Notebook'); if (!name?.trim()) return; const nb = await createNotebook(name, uid); await refresh(nb.id) }
+  useEffect(() => {
+    loadSources(activeId).catch(console.error)
+    loadSessionsAndNotes(activeId).catch(console.error)
+  }, [activeId])
+
+  const create = async () => {
+    const name = prompt('Notebook name', 'My Notebook')
+    if (!name?.trim()) return
+    const nb = await createNotebook(name, uid)
+    rememberRecent('notebooks', nb.id, uid)
+    await refresh(nb.id)
+  }
+
+  const renameNotebookUi = async (nb) => {
+    const title = prompt('Notebook name', nb?.title || 'Untitled Notebook')
+    if (!nb?.id || !title?.trim()) return
+    const updated = await renameNotebook(nb.id, title.trim(), uid)
+    setNotebooks((current) => current.map((item) => item.id === nb.id ? { ...item, ...updated } : item))
+  }
   const removeNotebook = async (nb) => {
     if (!nb?.id || !confirm(`Delete notebook “${nb.title}”? This will remove its sources, chats, notes, and saved study data.`)) return
     await deleteNotebook(nb.id, uid)
@@ -479,8 +645,58 @@ export default function AppPhase6() {
       setNotes([])
     }
   }
-  const upload = async (file) => { if (!activeId) return; await uploadSource(activeId, file, uid); await loadSources(activeId); await refresh(activeId) }
-  const setSourceMode = (name, mode) => setSourceModes((current) => ({ ...current, [name]: mode }))
+  const upload = async (file) => {
+    if (!activeId) return
+    await uploadSource(activeId, file, uid)
+    rememberRecent('notebooks', activeId, uid)
+    await loadSources(activeId)
+    await refresh(activeId)
+  }
+
+  const setSourceMode = (name, mode) => {
+    if (activeId) rememberRecent('sources', name, uid, activeId)
+    setSourceModes((current) => {
+      const next = { ...current, [name]: mode }
+      if (activeId) saveSourceModes(uid, activeId, next)
+      return next
+    })
+  }
+
+  const setAllSourceMode = (mode) => {
+    if (!activeId) return
+    const next = Object.fromEntries(sources.map((source) => [source.name, mode]))
+    sources.forEach((source) => rememberRecent('sources', source.name, uid, activeId))
+    setSourceModes(next)
+    saveSourceModes(uid, activeId, next)
+  }
+
+  const removeSourceUi = async (source) => {
+    if (!activeId || !source?.name) return
+    if (!confirm(`Delete “${source.name}” from this notebook?`)) return
+    await deleteSource(activeId, source.name, uid)
+    await loadSources(activeId)
+    await refresh(activeId)
+  }
+
+  const retrySourceUi = async (source) => {
+    if (!activeId || !source?.name) return
+    rememberRecent('sources', source.name, uid, activeId)
+    try {
+      await retrySource(activeId, source.name, uid)
+      await loadSources(activeId)
+      window.setTimeout(() => loadSources(activeId).catch(() => {}), 1200)
+    } catch (error) {
+      await loadSources(activeId)
+      throw error
+    }
+  }
+
+  const refreshSourceUi = async (source) => {
+    if (!activeId || !source?.name) return
+    rememberRecent('sources', source.name, uid, activeId)
+    await refreshSource(activeId, source.name, uid)
+    await loadSources(activeId)
+  }
 
   const newChat = async () => {
     if (!activeId) return
@@ -544,32 +760,44 @@ export default function AppPhase6() {
     await refreshNotes()
   }
 
+  const stop = () => {
+    streamAbortRef.current?.abort()
+  }
+
   const send = async (text) => {
-    if (!notebook || busy) { if (!notebook) setSourceOpen(true); return }
-    if (!sessionId) {
+    if (busy || !text?.trim()) return
+    const currentNotebook = notebook
+    if (currentNotebook) rememberRecent('notebooks', currentNotebook.id, uid)
+    if (!currentNotebook && researchMode === 'study') {
+      // Study mode is still useful without notebook context; it becomes web-only research.
+    }
+    if (currentNotebook && !sessionId) {
       const session = await createSession(activeId, 'New chat', uid)
       setSessionId(session.id)
       setSessions((current) => [session, ...current])
     }
-    const user = { id: `${Date.now()}u`, role: 'user', content: text }
+    const user = { id: `${Date.now()}u`, role: 'user', content: text.trim() }
     const assistantId = `${Date.now()}a`
     const history = [...messages.map((m) => ({ role: m.role, content: m.content })), user]
     const needsWeb = researchMode === 'web' || researchMode === 'deep' || researchMode === 'study'
     const requestMode = researchMode
+    const controller = new AbortController()
+    streamAbortRef.current = controller
     setMessages((v) => [...v, user, { id: assistantId, role: 'assistant', content: '', model, streaming: true, sources: [], researchMode: requestMode }])
     setBusy(true)
     try {
       await streamChat({
         messages: history,
-        model: 'openai/gpt-oss-120b',
-        notebookId: notebook.id,
-        notebookTitle: notebook.title,
-        activeSources,
-        sourceModes,
-        sessionId,
+        model: model || 'openai/gpt-oss-120b',
+        notebookId: currentNotebook?.id || null,
+        notebookTitle: currentNotebook?.title || null,
+        activeSources: currentNotebook ? activeSources : [],
+        sourceModes: currentNotebook ? sourceModes : {},
+        sessionId: currentNotebook ? sessionId : null,
         userId: uid,
         webEnabled: needsWeb,
         researchMode: requestMode,
+        signal: controller.signal,
         onSession: (session) => {
           if (!session) return
           setSessionId(session.id)
@@ -579,20 +807,32 @@ export default function AppPhase6() {
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
-        onDone: () => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)); setBusy(false); listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {}) },
-        onError: (message) => { setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m)); setBusy(false) },
+        onDone: () => {
+          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m))
+          setBusy(false)
+          if (currentNotebook) listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {})
+        },
+        onError: (message) => {
+          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m))
+          setBusy(false)
+        },
       })
     } catch (error) {
-      setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
+      if (error?.name === 'AbortError') {
+        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Generation stopped.)_` : 'Generation stopped.', streaming: false } : m))
+      } else {
+        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
+      }
       setBusy(false)
+    } finally {
+      if (streamAbortRef.current === controller) streamAbortRef.current = null
     }
   }
-
   const navIcon = (NAV_ITEMS.find((n) => n.id === active) || NAV_ITEMS[0]).icon
   const NavIcon = navIcon
 
   return <div className="apollo-app">
-    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { setActiveId(id); setMessages([]) }} create={create} removeNotebook={removeNotebook} />
+    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]) }} create={create} renameNotebookUi={renameNotebookUi} removeNotebook={removeNotebook} />
     <section className="app-shell">
       <TopBar
         active={active}
@@ -604,10 +844,10 @@ export default function AppPhase6() {
         setResearchMode={setResearchMode}
       />
       {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll">
-        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'Create a notebook to get started.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
-        <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Create a notebook'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Open Sources and create your first notebook.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
-      </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} busy={busy} researchMode={researchMode}/></div></main>
-        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setActiveId={(id) => { setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} />}
+        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'No notebook required for quick or web chat. Create one to save sources, chats and notes.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
+        <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Ask Apollo directly'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Quick and Web modes work without a notebook. Deep/Study modes can research the web and add notebook context when one is selected.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote} canSaveNote={Boolean(notebook)}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
+      </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} stop={stop} busy={busy} researchMode={researchMode}/></div></main>
+        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setAllSourceMode={setAllSourceMode} setActiveId={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} removeSource={removeSourceUi} retrySource={retrySourceUi} refreshSource={refreshSourceUi} />}
         {sessionOpen && <SessionPanel sessions={sessions} activeSessionId={sessionId} selectSession={selectSession} createNew={newChat} rename={rename} remove={remove} close={() => setSessionOpen(false)} />}
         {notesOpen && <NotesPanel notes={notes} remove={removeNote} close={() => setNotesOpen(false)} />}
         {studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} activeId={activeId} sources={sources} activeSources={activeSources} userId={uid} openSources={() => { setStudioOpen(false); setSourceOpen(true) }} />}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import io
 import json
 import math
@@ -57,6 +58,40 @@ def _notebook_dir(notebook_id: str) -> Path:
 
 def _metadata_path(notebook_id: str) -> Path:
     return _notebook_dir(notebook_id) / "chunks.json"
+
+def _source_meta_path(notebook_id: str) -> Path:
+    return _notebook_dir(notebook_id) / "sources.json"
+
+def _source_payload_path(notebook_id: str, filename: str) -> Path:
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    return _notebook_dir(notebook_id) / "payloads" / (digest + ".bin")
+
+def _load_source_meta(notebook_id: str) -> dict[str, dict[str, Any]]:
+    path = _source_meta_path(notebook_id)
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+def _save_source_meta(notebook_id: str, meta: dict[str, dict[str, Any]]) -> None:
+    notebook = _notebook_dir(notebook_id)
+    notebook.mkdir(parents=True, exist_ok=True)
+    _source_meta_path(notebook_id).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+def _save_source_payload_fs(notebook_id: str, filename: str, raw: bytes) -> None:
+    path = _source_payload_path(notebook_id, filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+def _load_source_payload_fs(notebook_id: str, filename: str) -> bytes | None:
+    path = _source_payload_path(notebook_id, filename)
+    return path.read_bytes() if path.exists() else None
+
+def _delete_source_payload_fs(notebook_id: str, filename: str) -> None:
+    _source_payload_path(notebook_id, filename).unlink(missing_ok=True)
 
 
 def _tokens(text: str) -> list[str]:
@@ -187,41 +222,113 @@ def list_sources(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]:
             return rows
         return STORE.list_sources(notebook_id)
     chunks = _load_chunks(notebook_id)
+    metadata = _load_source_meta(notebook_id)
     grouped: dict[str, dict[str, Any]] = {}
     for chunk in chunks:
         source = chunk["source"]
-        grouped.setdefault(source, {"name": source, "kind": chunk.get("kind", "file"), "chunks": 0, "status": "indexed"})
+        meta = metadata.get(source, {})
+        grouped.setdefault(
+            source,
+            {
+                "name": source,
+                "kind": meta.get("kind") or chunk.get("kind", "file"),
+                "chunks": 0,
+                "status": meta.get("status", "indexed"),
+                "error": meta.get("error"),
+                "source_url": meta.get("source_url"),
+            },
+        )
         grouped[source]["chunks"] += 1
-    return list(grouped.values())
+    for source, meta in metadata.items():
+        grouped.setdefault(
+            source,
+            {
+                "name": source,
+                "kind": meta.get("kind", "file"),
+                "chunks": 0,
+                "status": meta.get("status", "pending"),
+                "error": meta.get("error"),
+                "source_url": meta.get("source_url"),
+            },
+        )
+    return sorted(grouped.values(), key=lambda item: item["name"].lower())
 
 
-def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes) -> dict[str, Any]:
+def get_source_payload(user_id: str | None, notebook_id: str, filename: str) -> bytes | None:
+    if not get_notebook(user_id, notebook_id):
+        return None
+    if STORE:
+        try:
+            return STORE.get_source_payload(notebook_id, filename)
+        except Exception:
+            return None
+    return _load_source_payload_fs(notebook_id, filename)
+
+
+def get_source_metadata(user_id: str | None, notebook_id: str, filename: str) -> dict[str, Any] | None:
+    if not get_notebook(user_id, notebook_id):
+        return None
+    if STORE:
+        try:
+            return STORE.get_source_metadata(notebook_id, filename)
+        except Exception:
+            return None
+    return _load_source_meta(notebook_id).get(filename)
+
+
+def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes, *, kind: str = "file", source_url: str | None = None) -> dict[str, Any]:
     if not get_notebook(user_id, notebook_id):
         raise KeyError("Notebook not found")
-    text = _extract_text(filename, raw)
-    tokenized = chunk_text(text, filename=filename)
-    if not tokenized:
-        raise ValueError("No readable text found in source")
-    new_chunks = [
-        {"id": uuid.uuid4().hex, "source": filename, "kind": "file", "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
-        for item in tokenized
-    ]
+
     now = _now()
     if STORE:
-        STORE.upsert_source_status(notebook_id, filename, "file", "processing")
+        STORE.upsert_source_status(notebook_id, filename, kind, "processing", now=now, source_url=source_url)
         try:
+            STORE.save_source_payload(notebook_id, filename, raw, now)
+            text = _extract_text(filename, raw)
+            tokenized = chunk_text(text, filename=filename)
+            if not tokenized:
+                raise ValueError("No readable text found in source")
+            new_chunks = [
+                {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
+                for item in tokenized
+            ]
             STORE.replace_source(notebook_id, filename, new_chunks)
             STORE.update_counts(notebook_id, now, len(STORE.list_sources(notebook_id)), len(STORE.list_chunks(notebook_id)))
-            STORE.upsert_source_status(notebook_id, filename, "file", "indexed", now=now)
+            STORE.upsert_source_status(notebook_id, filename, kind, "indexed", now=now, source_url=source_url)
+            return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
         except Exception as exc:
-            STORE.upsert_source_status(notebook_id, filename, "file", "failed", str(exc)[:500], now=now)
+            STORE.upsert_source_status(notebook_id, filename, kind, "failed", str(exc)[:500], now=_now(), source_url=source_url)
             raise
-        return {"name": filename, "kind": "file", "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed"}
+
+    with _LOCK:
+        metadata = _load_source_meta(notebook_id)
+        metadata[filename] = {"kind": kind, "status": "processing", "error": None, "source_url": source_url, "updated": now}
+        _save_source_meta(notebook_id, metadata)
+        _save_source_payload_fs(notebook_id, filename, raw)
+    try:
+        text = _extract_text(filename, raw)
+        tokenized = chunk_text(text, filename=filename)
+        if not tokenized:
+            raise ValueError("No readable text found in source")
+        new_chunks = [
+            {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
+            for item in tokenized
+        ]
+    except Exception as exc:
+        with _LOCK:
+            metadata = _load_source_meta(notebook_id)
+            metadata[filename] = {"kind": kind, "status": "failed", "error": str(exc)[:500], "source_url": source_url, "updated": _now()}
+            _save_source_meta(notebook_id, metadata)
+        raise
 
     with _LOCK:
         existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
         all_chunks = existing + new_chunks
         _save_chunks(notebook_id, all_chunks)
+        metadata = _load_source_meta(notebook_id)
+        metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
+        _save_source_meta(notebook_id, metadata)
         key = _user_key(user_id)
         manifest = _load_manifest()
         for notebook in manifest.get(key, []):
@@ -231,7 +338,7 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes)
                 notebook["node_count"] = len(all_chunks)
                 break
         _save_manifest(manifest)
-    return {"name": filename, "kind": "file", "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed"}
+    return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
 
 
 def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
@@ -245,9 +352,14 @@ def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
     with _LOCK:
         existing = _load_chunks(notebook_id)
         chunks = [c for c in existing if c.get("source") != filename]
-        if len(chunks) == len(existing):
+        metadata = _load_source_meta(notebook_id)
+        existed = len(chunks) != len(existing) or filename in metadata or _load_source_payload_fs(notebook_id, filename) is not None
+        if not existed:
             return False
         _save_chunks(notebook_id, chunks)
+        metadata.pop(filename, None)
+        _save_source_meta(notebook_id, metadata)
+        _delete_source_payload_fs(notebook_id, filename)
     return True
 
 

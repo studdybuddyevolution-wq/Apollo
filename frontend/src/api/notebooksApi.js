@@ -15,6 +15,10 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+export function getCapabilities() {
+  return request('/api/capabilities')
+}
+
 export function listNotebooks(userId = 'default') {
   return request(`/api/notebooks?user_id=${encodeURIComponent(userId)}`)
 }
@@ -60,6 +64,21 @@ export function deleteSource(notebookId, sourceName, userId = 'default') {
   })
 }
 
+export function retrySource(notebookId, sourceName, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sources/${encodeURIComponent(sourceName)}/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  })
+}
+
+export function refreshSource(notebookId, sourceName, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sources/${encodeURIComponent(sourceName)}/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  })
+}
 export function searchNotebook(notebookId, query, options = {}) {
   const { topK = 5, sourceNames = [], userId = 'default' } = options
   return request(`/api/notebooks/${encodeURIComponent(notebookId)}/search`, {

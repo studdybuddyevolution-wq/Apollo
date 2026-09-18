@@ -21,7 +21,7 @@ from storage import STORE
 from transformations import TRANSFORMATION_PROMPTS
 
 
-STUDIO_OUTPUT_TYPES = {"slides", "report", "podcast", "transform"}
+STUDIO_OUTPUT_TYPES = {"slides", "report", "podcast", "transform", "video"}
 
 
 class Phase3MindMapRequest(BaseModel):
@@ -31,7 +31,8 @@ class Phase3MindMapRequest(BaseModel):
 
 
 class StudioGenerateRequest(BaseModel):
-    tool: Literal["slides", "report", "podcast", "transform"]
+    tool: Literal["slides", "report", "podcast", "transform", "video"]
+    model: str | None = None
     active_sources: list[str] = Field(default_factory=list)
     transformation_type: str | None = None
     custom_prompt: str | None = None
@@ -83,13 +84,17 @@ def _context_or_400(user_id: str | None, notebook_id: str, active_sources: list[
     return context, sources
 
 
-def _safe_generation(prompt: str, *, system: str, output_tokens: int, max_models: int = 3) -> tuple[str, str]:
+def _safe_generation(prompt: str, *, system: str, output_tokens: int, max_models: int = 3, preferred_model: str | None = None) -> tuple[str, str]:
     try:
+        configured = gemini_model_chain(max_models=None)
+        primary = preferred_model or os.getenv("APOLLO_STUDIO_MODEL", os.getenv("APOLLO_WEB_SYNTHESIS_MODEL"))
+        if preferred_model and preferred_model not in configured:
+            raise HTTPException(status_code=400, detail="Selected Studio model is not enabled on this Apollo deployment.")
         text, model, _ = generate_gemini_text(
             prompt,
             system_instruction=system,
             output_tokens=output_tokens,
-            primary_model=os.getenv("APOLLO_STUDIO_MODEL", os.getenv("APOLLO_WEB_SYNTHESIS_MODEL")),
+            primary_model=primary,
             max_models=max_models,
             retry_primary_once=True,
             request_timeout_ms=int(os.getenv("APOLLO_STUDIO_GEMINI_TIMEOUT_MS", "12000")),
@@ -97,7 +102,6 @@ def _safe_generation(prompt: str, *, system: str, output_tokens: int, max_models
         return text, model
     except FriendlyGeminiError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
-
 
 def _mindmap_attempt(prompt: str, context: str, model_chain: list[str]) -> tuple[Any, str]:
     text, model, _ = generate_gemini_text(
@@ -195,6 +199,15 @@ def _studio_prompt(tool: str, context: str, source_names: list[str]) -> tuple[st
             f"ALLOWED SOURCES: {allowed_sources}\n\nSOURCE CONTEXT:\n{context}"
         )
         return prompt, system, 3200
+    if tool == "video":
+        system = "You design source-grounded educational video storyboards for Apollo. Never invent facts or visuals that imply unsupported claims."
+        prompt = (
+            "Return ONLY valid JSON with keys title, duration_seconds, scenes. scenes must be an array of 6-10 objects with keys "
+            "timecode, title, narration, visual, on_screen_text, source_refs. Each source_refs entry must be a source name from the allowed list. "
+            "The output is a storyboard only; do not claim that a video file was rendered. Keep narration concise and visually actionable. "
+            f"ALLOWED SOURCES: {allowed_sources}\n\nSOURCE CONTEXT:\n{context}"
+        )
+        return prompt, system, 3000
     raise ValueError(f"Unsupported Studio tool: {tool}")
 
 
@@ -250,7 +263,12 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
             request.transformation_type or "",
             request.custom_prompt,
         )
-        text, model = _safe_generation(prompt, system=system, output_tokens=output_tokens)
+        text, model = _safe_generation(
+            prompt,
+            system=system,
+            output_tokens=output_tokens,
+            preferred_model=request.model,
+        )
         insight = _persist_output(notebook_id, request.transformation_type or "custom", text, model)
         return {"tool": "transform", "transformation_type": request.transformation_type or "custom", "content": text, "insight": insight, "model_used": model, "sources": source_names}
 
@@ -271,6 +289,13 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
             raise HTTPException(status_code=502, detail="Apollo produced an empty slide deck. Please try again.")
         insight = _persist_output(notebook_id, "slide_deck", json.dumps(data, ensure_ascii=False), model)
         return {"tool": "slides", "data": data, "insight": insight, "model_used": model, "sources": source_names}
+
+    if request.tool == "video":
+        scenes = data.get("scenes") or []
+        if not scenes:
+            raise HTTPException(status_code=502, detail="Apollo produced an empty video storyboard. Please try again.")
+        insight = _persist_output(notebook_id, "video_storyboard", json.dumps(data, ensure_ascii=False), model)
+        return {"tool": "video", "data": data, "insight": insight, "model_used": model, "sources": source_names}
 
     script = _podcast_script(data)
     insight = _persist_output(notebook_id, "podcast_script", script, model)

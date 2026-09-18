@@ -109,13 +109,35 @@ def _importance_terms(question: str) -> list[str]:
     return [w for w in words if w.lower() not in stop][:8]
 
 
+def extract_requested_sections(question: str) -> list[str]:
+    """Extract explicit user-requested sections from numbered or bulleted lines."""
+    sections: list[str] = []
+    for line in question.splitlines():
+        match = re.match(r"^\s*(?:\d+[.)]|[-*])\s+(.{4,140})\s*$", line)
+        if not match:
+            continue
+        value = re.sub(r"\s+", " ", match.group(1)).strip(" .:;")
+        if value and value.lower() not in {item.lower() for item in sections}:
+            sections.append(value)
+    if len(sections) >= 2:
+        return sections[:8]
+
+    inline = re.search(r"(?:sections?|cover(?:ing)?|focus on)\s*:\s*(.+)$", question, re.IGNORECASE | re.MULTILINE)
+    if inline:
+        parts = [re.sub(r"\s+", " ", item).strip(" .:;") for item in re.split(r";|\|", inline.group(1))]
+        parts = [item for item in parts if len(item) >= 4]
+        if len(parts) >= 2:
+            return parts[:8]
+    return []
+
+
 def decompose_query(question: str, topic: str, study: bool = False) -> list[dict[str, str]]:
-    """Create focused, topic-adaptive sub-questions without hardcoding one subject."""
+    """Create focused, topic-adaptive sub-questions, honoring explicit user sections."""
     focus = " ".join(_importance_terms(question))
-    template = TOPIC_TEMPLATES.get(topic, TOPIC_TEMPLATES["conceptual"])
-    limit = 6
+    requested = extract_requested_sections(question)
+    template = requested or TOPIC_TEMPLATES.get(topic, TOPIC_TEMPLATES["conceptual"])
     result: list[dict[str, str]] = []
-    for item in template[:limit]:
+    for item in template[:8]:
         prefix = "For study notes, prioritize clear facts and examples: " if study else ""
         result.append({"aspect": item, "query": f"{prefix}{question}; investigate {item}. Focus: {focus}".strip()})
     return result
@@ -227,6 +249,9 @@ def verify_evidence(evidence: list[EvidenceItem]) -> dict[str, Any]:
 
 
 def build_outline(topic: str, question: str) -> list[str]:
+    requested = extract_requested_sections(question)
+    if requested:
+        return requested
     return TOPIC_TEMPLATES.get(topic, TOPIC_TEMPLATES["conceptual"]).copy()
 
 
@@ -253,7 +278,7 @@ def build_synthesis_instruction(
     requested_detail: bool,
     study: bool,
 ) -> str:
-    sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline[:6]))
+    sections = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(outline[:8]))
     detail = "The user explicitly requested detailed/exhaustive coverage, so use the available budget for substantive detail." if requested_detail else "Match the requested depth; do not inflate a simple question just to fill the budget."
     study_note = "Optimize explanations for studying: definitions, examples, memory-friendly distinctions, and exam-relevant takeaways." if study else ""
     if requested_detail or study:
@@ -263,9 +288,9 @@ def build_synthesis_instruction(
     return f"""You are Apollo Omni AI's universal Deep Search synthesizer.
 
 Deep Search format — follow this exact contract:
-1. Research plan: list 3-5 concrete sub-questions you will answer.
+1. Research plan: list the concrete sub-questions or user-requested sections you will answer. Preserve explicit user-provided section wording when possible.
 2. Direct answer: 1-2 sentences immediately after the plan.
-3. Structured sections: use one `###` heading per sub-question; each section should contain 2-4 substantive paragraphs or equivalent detailed bullets.
+3. Structured sections: use one `###` heading per planned item; each section should contain 2-4 substantive paragraphs or equivalent detailed bullets.
 4. Use inline numeric citations like [1], [2], [3] for claims supported by the numbered evidence below.
 5. If the evidence contains meaningful disagreement, include a `### Conflicting sources` section and explain the disagreement rather than flattening it.
 6. Use a comparison table only when the user's question genuinely compares two or more things. Otherwise do not use tables.
@@ -287,7 +312,7 @@ Synthesis rules:
 - Do not claim a source supports something that is not present in its supplied evidence.
 - Prefer authoritative, recent, and corroborated evidence. Mention uncertainty or conflicting evidence where material.
 - Complete the planned coverage rather than stopping after an introduction.
-- Adapt the five planned sub-questions to the exact user request; do not force irrelevant headings.
+- Preserve the user's requested structure when one was explicitly supplied; otherwise use the topic-adaptive plan.
 - Use clean Markdown headings, paragraphs, bullets, and comparison tables only when warranted.
 - Never output raw HTML, `<br>`, search-result syntax, or pipe-delimited pseudo-tables.
 - Use normal spacing and punctuation. Do not concatenate words or headings.

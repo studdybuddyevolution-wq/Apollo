@@ -9,7 +9,7 @@ from rag_service import format_context, get_notebook_chunks, retrieve_hybrid
 from storage import STORE
 
 DEFAULT_CONTEXT_TOKENS = 1800
-SOURCE_MODES = {"off", "insights", "full"}
+SOURCE_MODES = {"off", "summary", "insights", "full"}
 
 
 def _normalize_sources(source_names: list[str] | None, source_modes: dict[str, str] | None) -> tuple[list[str], list[str], list[str]]:
@@ -24,13 +24,15 @@ def _normalize_sources(source_names: list[str] | None, source_modes: dict[str, s
     return allowed, full, insight
 
 
-def _insight_blocks(notebook_id: str, source_names: list[str]) -> list[dict[str, Any]]:
+def _insight_blocks(notebook_id: str, source_names: list[str], insight_types: set[str] | None = None) -> list[dict[str, Any]]:
     if not STORE:
         return []
     insights: list[dict[str, Any]] = []
     allowed = set(source_names or [])
     for insight in STORE.list_insights(notebook_id):
         if allowed and insight.get("source_name") not in allowed:
+            continue
+        if insight_types and insight.get("insight_type") not in insight_types:
             continue
         insights.append(insight)
     return insights
@@ -48,10 +50,13 @@ def build_context(
 ) -> dict[str, Any]:
     """Return context plus provenance using one consistent retrieval contract.
 
-    Source modes are ``full`` (retrieve source chunks), ``insights`` (use only
-    persisted insights), and ``off`` (exclude the source entirely).
+    Source modes are ``full`` (retrieve source chunks plus saved insights),
+    ``summary`` (use only saved ``summary`` insights), ``insights`` (use only
+    saved AI insights), and ``off`` (exclude the source entirely).
     """
     allowed_sources, full_sources, insight_sources = _normalize_sources(source_names, source_modes)
+    modes = source_modes or {}
+    summary_sources = [name for name in allowed_sources if modes.get(name) == "summary"]
     q = (query or "").strip()
     results = retrieve_hybrid(user_id, notebook_id, q, top_k=top_k, source_names=full_sources) if q and full_sources else []
 
@@ -89,6 +94,23 @@ def build_context(
             context = f"{context}\n\n{insight_context}".strip()
             used_tokens = token_count(context)
 
+    if include_insights and summary_sources and used_tokens < token_budget:
+        summary_results: list[dict[str, Any]] = []
+        remaining = token_budget - used_tokens
+        used_summary_tokens = 0
+        for insight in _insight_blocks(notebook_id, summary_sources, {"summary"}):
+            block = f"[Summary: {insight.get('source_name')}]\n{insight.get('content', '')}"
+            block_tokens = token_count(block)
+            if summary_results and used_summary_tokens + block_tokens > remaining:
+                break
+            summary_results.append({"source": f"Summary: {insight.get('source_name')}", "text": insight.get("content", ""), "score": 0.0})
+            used_summary_tokens += block_tokens
+        if summary_results:
+            summary_context = format_context(summary_results, max_chars=12000, max_tokens=max(1, remaining))
+            context = f"{context}\n\n{summary_context}".strip() if context else summary_context
+            used_tokens = token_count(context)
+            used_sources.extend([str(item.get("source_name") or "") for item in _insight_blocks(notebook_id, summary_sources, {"summary"})])
+
     return {
         "context": context,
         "results": results,
@@ -96,6 +118,7 @@ def build_context(
         "enabled_sources": allowed_sources,
         "full_sources": full_sources,
         "insight_sources": insight_sources,
+        "summary_sources": summary_sources,
         "token_count": used_tokens,
         "token_budget": token_budget,
     }

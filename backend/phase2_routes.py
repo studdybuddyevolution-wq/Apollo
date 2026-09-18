@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import os
 import weakref
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from jobs import enqueue_embedding_job
-from rag_service import get_notebook
-from source_ingestion import ingest_url, ingest_youtube
+from rag_service import add_source, get_notebook, get_source_metadata, get_source_payload
+from phase3_common import gemini_model_chain
+from source_ingestion import ingest_url, ingest_youtube, refresh_url_source, refresh_youtube_source
 from storage import STORE
 
 _REGISTERED_APPS: weakref.WeakSet[FastAPI] = weakref.WeakSet()
@@ -24,6 +27,10 @@ class URLSourceRequest(BaseModel):
 class YouTubeSourceRequest(BaseModel):
     url: str = Field(min_length=12, max_length=2048)
     languages: list[str] = Field(default_factory=lambda: ["en"], max_length=8)
+    user_id: str | None = None
+
+
+class SourceLifecycleRequest(BaseModel):
     user_id: str | None = None
 
 
@@ -62,13 +69,27 @@ def register(app: FastAPI) -> None:
                 "deep": True,
                 "study": True,
             },
+            "ai_models": gemini_model_chain(max_models=3),
+            "providers": {
+                "gemini": {
+                    "configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+                    "models": gemini_model_chain(max_models=8),
+                },
+                "groq": {
+                    "configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
+                    "primary_model": os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b"),
+                },
+                "tavily": {
+                    "configured": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+                },
+            },
         }
 
     @app.post("/api/notebooks/{notebook_id}/sources/url")
     async def notebook_url_source(notebook_id: str, request: URLSourceRequest):
         _check_notebook(request.user_id, notebook_id)
         try:
-            result = ingest_url(request.user_id, notebook_id, request.url)
+            result = await asyncio.to_thread(ingest_url, request.user_id, notebook_id, request.url)
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
             return result
         except ValueError as exc:
@@ -76,11 +97,60 @@ def register(app: FastAPI) -> None:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"URL ingestion failed: {exc}") from exc
 
+    @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/retry")
+    async def notebook_source_retry(notebook_id: str, source_name: str, request: SourceLifecycleRequest):
+        _check_notebook(request.user_id, notebook_id)
+        try:
+            metadata = get_source_metadata(request.user_id, notebook_id, source_name)
+            payload = get_source_payload(request.user_id, notebook_id, source_name)
+            if not metadata or payload is None:
+                raise HTTPException(status_code=404, detail="Source payload is no longer available for retry")
+            result = await asyncio.to_thread(
+                add_source,
+                request.user_id,
+                notebook_id,
+                source_name,
+                payload,
+                kind=str(metadata.get("kind") or "file"),
+                source_url=metadata.get("source_url"),
+            )
+            result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, source_name)
+            return result
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Source retry failed: {exc}") from exc
+
+    @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/refresh")
+    async def notebook_source_refresh(notebook_id: str, source_name: str, request: SourceLifecycleRequest):
+        _check_notebook(request.user_id, notebook_id)
+        metadata = get_source_metadata(request.user_id, notebook_id, source_name) or {}
+        kind = str(metadata.get("kind") or "")
+        try:
+            if kind == "url":
+                result = await asyncio.to_thread(refresh_url_source, request.user_id, notebook_id, source_name)
+            elif kind == "youtube":
+                result = await asyncio.to_thread(refresh_youtube_source, request.user_id, notebook_id, source_name)
+            else:
+                raise HTTPException(status_code=400, detail="Only web and YouTube sources can be refreshed")
+            result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, source_name)
+            return result
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Source refresh failed: {exc}") from exc
+
     @app.post("/api/notebooks/{notebook_id}/sources/youtube")
     async def notebook_youtube_source(notebook_id: str, request: YouTubeSourceRequest):
         _check_notebook(request.user_id, notebook_id)
         try:
-            result = ingest_youtube(request.user_id, notebook_id, request.url, request.languages)
+            result = await asyncio.to_thread(ingest_youtube, request.user_id, notebook_id, request.url, request.languages)
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
             return result
         except ValueError as exc:
