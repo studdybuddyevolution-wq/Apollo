@@ -411,7 +411,7 @@ def notebook_sources(notebook_id: str, user_id: str = "default"):
 
 
 @app.post("/api/notebooks/{notebook_id}/sources")
-async def notebook_source_upload(notebook_id: str, file: UploadFile = File(...), user_id: str = Query("default"), request: Request):
+async def notebook_source_upload(notebook_id: str, request: Request, file: UploadFile = File(...), user_id: str = Query("default")):
     content_length = request.headers.get("content-length")
     if content_length:
         try:
