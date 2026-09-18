@@ -380,12 +380,8 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   ]
 
   useEffect(() => {
-    getCapabilities().then((data) => {
-      const models = data?.ai_models || []
-      setAvailableModels(models)
-      if (selectedModel && !models.includes(selectedModel)) setSelectedModel('')
-    }).catch(() => {})
-  }, [selectedModel])
+    getCapabilities().then((data) => setAvailableModels(data?.ai_models || [])).catch(() => {})
+  }, [])
 
   useEffect(() => () => {
     abortRef.current?.abort()
