@@ -222,15 +222,61 @@ def list_sources(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]:
             return rows
         return STORE.list_sources(notebook_id)
     chunks = _load_chunks(notebook_id)
+    metadata = _load_source_meta(notebook_id)
     grouped: dict[str, dict[str, Any]] = {}
     for chunk in chunks:
         source = chunk["source"]
-        grouped.setdefault(source, {"name": source, "kind": chunk.get("kind", "file"), "chunks": 0, "status": "indexed"})
+        meta = metadata.get(source, {})
+        grouped.setdefault(
+            source,
+            {
+                "name": source,
+                "kind": meta.get("kind") or chunk.get("kind", "file"),
+                "chunks": 0,
+                "status": meta.get("status", "indexed"),
+                "error": meta.get("error"),
+                "source_url": meta.get("source_url"),
+            },
+        )
         grouped[source]["chunks"] += 1
-    return list(grouped.values())
+    for source, meta in metadata.items():
+        grouped.setdefault(
+            source,
+            {
+                "name": source,
+                "kind": meta.get("kind", "file"),
+                "chunks": 0,
+                "status": meta.get("status", "pending"),
+                "error": meta.get("error"),
+                "source_url": meta.get("source_url"),
+            },
+        )
+    return sorted(grouped.values(), key=lambda item: item["name"].lower())
 
 
-def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes) -> dict[str, Any]:
+def get_source_payload(user_id: str | None, notebook_id: str, filename: str) -> bytes | None:
+    if not get_notebook(user_id, notebook_id):
+        return None
+    if STORE:
+        try:
+            return STORE.get_source_payload(notebook_id, filename)
+        except Exception:
+            return None
+    return _load_source_payload_fs(notebook_id, filename)
+
+
+def get_source_metadata(user_id: str | None, notebook_id: str, filename: str) -> dict[str, Any] | None:
+    if not get_notebook(user_id, notebook_id):
+        return None
+    if STORE:
+        try:
+            return STORE.get_source_metadata(notebook_id, filename)
+        except Exception:
+            return None
+    return _load_source_meta(notebook_id).get(filename)
+
+
+def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes, *, kind: str = "file", source_url: str | None = None) -> dict[str, Any]:
     if not get_notebook(user_id, notebook_id):
         raise KeyError("Notebook not found")
     text = _extract_text(filename, raw)
