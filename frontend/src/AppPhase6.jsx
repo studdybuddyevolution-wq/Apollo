@@ -172,6 +172,21 @@ function Composer({ send, busy, researchMode }) {
   )
 }
 
+function downloadBase64File(base64, filename, mimeType) {
+  const binary = window.atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  const blob = new Blob([bytes], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode, setActiveId, create, upload, close, userId, refreshSources }) {
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
@@ -355,8 +370,16 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
       </div>}
 
       {output?.tool === 'slides' && <div style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto', marginBottom: 12 }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>{output.data?.title || 'Slide Deck'}</div>
-        {(output.data?.slides || []).map((slide, index) => <article key={`${slide.title}-${index}`} style={{ padding: 10, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>{output.title || output.data?.title || 'Slide Deck'}</div>
+          {output.pptx_base64 && <button
+            className="upload-button"
+            style={{ width: 'auto', padding: '0 10px' }}
+            onClick={() => downloadBase64File(output.pptx_base64, output.filename || 'Apollo-Slide-Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')}
+          >Download PPTX</button>}
+        </div>
+        <div style={{ color: 'var(--tertiary)', fontSize: 10 }}>Grounded in: {(output.source_names || activeNames || []).join(', ') || 'selected notebook sources'}</div>
+        {(output.slides || output.data?.slides || []).map((slide, index) => <article key={`${slide.title}-${index}`} style={{ padding: 10, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
           <strong style={{ display: 'block', marginBottom: 6 }}>{index + 1}. {slide.title}</strong>
           {(slide.bullets || []).map((bullet, bulletIndex) => <div key={bulletIndex} style={{ fontSize: 11, lineHeight: 1.45, marginBottom: 3 }}>• {bullet}</div>)}
           {slide.speaker_notes && <div style={{ marginTop: 6, fontSize: 10, color: 'var(--tertiary)' }}>Notes: {slide.speaker_notes}</div>}
