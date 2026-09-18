@@ -106,7 +106,7 @@ def build_context(
             summary_results.append({"source": f"Summary: {insight.get('source_name')}", "text": insight.get("content", ""), "score": 0.0})
             used_summary_tokens += block_tokens
         if summary_results:
-            summary_context = format_context(summary_results, max_chars=12000, max_tokens=max(128, remaining))
+            summary_context = format_context(summary_results, max_chars=12000, max_tokens=max(1, remaining))
             context = f"{context}\n\n{summary_context}".strip() if context else summary_context
             used_tokens = token_count(context)
             used_sources.extend([str(item.get("source_name") or "") for item in _insight_blocks(notebook_id, summary_sources, {"summary"})])
