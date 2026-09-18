@@ -44,8 +44,11 @@ const markdownComponents = {
   },
   a: ({ href, children, ...props }) => {
     if (!/^https?:\/\//i.test(String(href || ''))) return <span>{children}</span>
-    return <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
+    const citation = /^\d+$/.test(String(children).trim())
+    return <a className={citation ? 'md-citation' : undefined} href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
   },
+  table: ({ children }) => <div className="md-table-wrap"><table className="md-table">{children}</table></div>,
+  blockquote: ({ children }) => <blockquote className="md-blockquote">{children}</blockquote>,
 }
 
 export default function MarkdownMessage({ content, sources = [] }) {
