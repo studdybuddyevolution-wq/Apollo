@@ -231,6 +231,7 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
   const [knowledgeQuery, setKnowledgeQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searching, setSearching] = useState(false)
+  const [actionMessage, setActionMessage] = useState('')
   const nb = notebooks.find((n) => n.id === activeId)
   const recentSources = readRecent('sources', userId, activeId)
   const visibleSources = sources
@@ -251,6 +252,9 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
     try {
       const result = await searchNotebook(activeId, knowledgeQuery.trim(), { topK: 6, sourceNames: sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name), userId })
       setSearchResults(result.results || [])
+    } catch (error) {
+      setSearchResults([])
+      setActionMessage(error?.message || 'Search failed.')
     } finally {
       setSearching(false)
     }
@@ -260,7 +264,26 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
     const file = e.target.files?.[0]
     if (!file || !nb) return
     setUploading(true)
-    try { await upload(file) } finally { setUploading(false); e.target.value = '' }
+    setActionMessage('')
+    try {
+      await upload(file)
+      setActionMessage('Source added and queued for indexing.')
+    } catch (error) {
+      setActionMessage(error?.message || 'Source upload failed.')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  const runSourceAction = async (action, source, successMessage) => {
+    setActionMessage('')
+    try {
+      await action(source)
+      setActionMessage(successMessage)
+    } catch (error) {
+      setActionMessage(error?.message || 'Source action failed.')
+    }
   }
 
   return (
@@ -309,13 +332,14 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
             {SOURCE_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
           </select>
           <div className="source-actions">
-            {(failed || processing) && <button className="icon-button" title={processing ? 'Retry indexing' : 'Retry source'} onClick={() => retrySource(s)}><RefreshCw size={13} /></button>}
-            {refreshable && <button className="icon-button" title="Refresh source" onClick={() => refreshSource(s)}><RefreshCw size={13} /></button>}
-            <button className="icon-button" title="Delete source" onClick={() => removeSource(s)}><Trash2 size={13} /></button>
+            {(failed || processing) && <button className="icon-button" title={processing ? 'Retry indexing' : 'Retry source'} onClick={() => runSourceAction(retrySource, s, 'Source retry queued.') }><RefreshCw size={13} /></button>}
+            {refreshable && <button className="icon-button" title="Refresh source" onClick={() => runSourceAction(refreshSource, s, 'Source refreshed and queued for indexing.') }><RefreshCw size={13} /></button>}
+            <button className="icon-button" title="Delete source" onClick={() => runSourceAction(removeSource, s, 'Source deleted.')}><Trash2 size={13} /></button>
           </div>
           <span className="source-check" title={modeLabel}>{mode === 'full' ? '●' : mode === 'summary' ? '◉' : mode === 'insights' ? '◐' : '○'}</span>
         </div>
       })}{!visibleSources.length && <div className="source-empty-state"><FolderOpen size={22} /><strong>{sources.length ? 'No matching sources' : 'No sources connected'}</strong><span>{sources.length ? 'Try another source name.' : 'Upload a PDF, DOCX, TXT, Markdown or CSV file.'}</span></div>}</div>
+      {actionMessage && <div className="source-action-message" role="status">{actionMessage}</div>}
       <div className="source-footer"><div className="source-stats"><span><strong>{enabledCount}</strong> enabled</span><span><strong>{sources.length}</strong> total</span></div><button className="upload-button" disabled={!nb || uploading} onClick={() => input.current?.click()}><Upload size={15} /> {uploading ? 'Indexing…' : 'Add sources'}</button></div>
       <button className="new-notebook" onClick={create}><Plus size={15} /> New Notebook</button>
     </aside>
