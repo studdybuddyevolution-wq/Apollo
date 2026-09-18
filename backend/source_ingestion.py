@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import re
 import socket
@@ -9,6 +10,11 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3 import PoolManager
+from urllib3.util import connection as urllib3_connection
 
 from rag_service import add_source
 
@@ -50,7 +56,80 @@ class _TextExtractor(HTMLParser):
             self.parts.append(text)
 
 
-def _validate_public_url(url: str) -> str:
+class _PinnedHTTPConnection(HTTPConnection):
+    """HTTP connection that dials a validated IP but keeps the original host."""
+
+    def __init__(self, host: str, port: int | None = None, *, pinned_ip: str, **kwargs):
+        super().__init__(host=host, port=port, **kwargs)
+        self._dns_host = pinned_ip
+
+    @property
+    def host(self) -> str:
+        return self._pinned_host.rstrip(".")
+
+    @host.setter
+    def host(self, value: str) -> None:
+        self._pinned_host = value
+
+
+class _PinnedHTTPSConnection(HTTPSConnection):
+    """HTTPS connection that dials a validated IP while preserving TLS SNI/hostname checks."""
+
+    def __init__(self, host: str, port: int | None = None, *, pinned_ip: str, **kwargs):
+        super().__init__(host=host, port=port, **kwargs)
+        self._dns_host = pinned_ip
+
+    @property
+    def host(self) -> str:
+        return self._pinned_host.rstrip(".")
+
+    @host.setter
+    def host(self, value: str) -> None:
+        self._pinned_host = value
+
+
+class _PinnedHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _PinnedHTTPConnection
+
+    def __init__(self, *args, pinned_ip: str, **kwargs):
+        self._pinned_ip = pinned_ip
+        super().__init__(*args, **kwargs, pinned_ip=pinned_ip)
+
+
+class _PinnedHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _PinnedHTTPSConnection
+
+    def __init__(self, *args, pinned_ip: str, **kwargs):
+        self._pinned_ip = pinned_ip
+        super().__init__(*args, **kwargs, pinned_ip=pinned_ip)
+
+
+class _PinnedIPAdapter(HTTPAdapter):
+    """requests adapter whose pools connect to one validated IP address.
+
+    The requested URL still contains the original hostname, so HTTP Host and
+    HTTPS SNI/certificate verification remain bound to the validated hostname.
+    """
+
+    def __init__(self, pinned_ip: str, *args, **kwargs):
+        self._pinned_ip = str(ipaddress.ip_address(pinned_ip))
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            **pool_kwargs,
+        )
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": functools.partial(_PinnedHTTPConnectionPool, pinned_ip=self._pinned_ip),
+            "https": functools.partial(_PinnedHTTPSConnectionPool, pinned_ip=self._pinned_ip),
+        }
+
+
+def _validate_public_url(url: str) -> tuple[str, str]:
+    """Return (validated_ip, original_url) for a public HTTP(S) URL."""
     parsed = urlparse(url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("Only public http:// or https:// URLs are supported")
@@ -58,28 +137,50 @@ def _validate_public_url(url: str) -> str:
     if host in {"localhost", "localhost.localdomain"}:
         raise ValueError("Localhost URLs are not allowed")
     try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(
+                host,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        }
     except OSError as exc:
         raise ValueError("Could not resolve the URL host") from exc
+    if not addresses:
+        raise ValueError("Could not resolve the URL host")
+
+    safe_ip: str | None = None
     for address in addresses:
         ip = ipaddress.ip_address(address)
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
             raise ValueError("Private or local network URLs are not allowed")
-    return parsed.geturl()
+        safe_ip = safe_ip or address
+
+    if safe_ip is None:
+        raise ValueError("Could not resolve the URL host")
+    return safe_ip, parsed.geturl()
 
 
-def _download(url: str) -> tuple[bytes, str]:
-    current = _validate_public_url(url)
+def _download(safe_ip: str, current: str) -> tuple[bytes, str]:
     with requests.Session() as session:
+        # Proxies resolve the target on the proxy side, defeating the local IP pin.
+        # Disable environment-provided proxies so every connection is pinned here.
+        session.trust_env = False
         session.headers.update({"User-Agent": USER_AGENT})
         for _ in range(MAX_REDIRECTS + 1):
+            adapter = _PinnedIPAdapter(safe_ip)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
             response = session.get(current, timeout=REQUEST_TIMEOUT, allow_redirects=False, stream=True)
             if response.is_redirect:
                 location = response.headers.get("Location")
                 if not location:
+                    response.close()
                     raise ValueError("URL redirect did not provide a destination")
-                current = _validate_public_url(urljoin(current, location))
+                redirect_url = urljoin(current, location)
                 response.close()
+                safe_ip, current = _validate_public_url(redirect_url)
                 continue
             response.raise_for_status()
             chunks: list[bytes] = []
@@ -134,8 +235,8 @@ def extract_youtube_video_id(url: str) -> str:
 
 
 def ingest_url(user_id: str | None, notebook_id: str, url: str) -> dict:
-    safe_url = _validate_public_url(url)
-    raw, content_type = _download(safe_url)
+    safe_ip, safe_url = _validate_public_url(url)
+    raw, content_type = _download(safe_ip, safe_url)
     if "application/pdf" in content_type or safe_url.lower().endswith(".pdf"):
         title = urlparse(safe_url).path.rstrip("/").split("/")[-1] or "web-document"
         filename = _slug_title(title.rsplit(".", 1)[0], safe_url, "URL") + ".pdf"
