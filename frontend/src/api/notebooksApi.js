@@ -60,6 +60,21 @@ export function deleteSource(notebookId, sourceName, userId = 'default') {
   })
 }
 
+export function retrySource(notebookId, sourceName, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sources/${encodeURIComponent(sourceName)}/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  })
+}
+
+export function refreshSource(notebookId, sourceName, userId = 'default') {
+  return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sources/${encodeURIComponent(sourceName)}/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  })
+}
 export function searchNotebook(notebookId, query, options = {}) {
   const { topK = 5, sourceNames = [], userId = 'default' } = options
   return request(`/api/notebooks/${encodeURIComponent(notebookId)}/search`, {
