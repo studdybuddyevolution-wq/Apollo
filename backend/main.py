@@ -403,6 +403,8 @@ def health() -> dict[str, object]:
         "embedding_dimensions": int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768")),
         "pgvector": bool(STORE and STORE.vector_available()),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
+        "storage_backend": "postgres" if STORE else "filesystem",
+        "durable_storage": bool(STORE),
     }
 
 
