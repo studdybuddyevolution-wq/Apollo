@@ -279,32 +279,53 @@ def get_source_metadata(user_id: str | None, notebook_id: str, filename: str) ->
 def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes, *, kind: str = "file", source_url: str | None = None) -> dict[str, Any]:
     if not get_notebook(user_id, notebook_id):
         raise KeyError("Notebook not found")
-    text = _extract_text(filename, raw)
-    tokenized = chunk_text(text, filename=filename)
-    if not tokenized:
-        raise ValueError("No readable text found in source")
-    new_chunks = [
-        {"id": uuid.uuid4().hex, "source": filename, "kind": "file", "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
-        for item in tokenized
-    ]
+
     now = _now()
     if STORE:
-        STORE.upsert_source_status(notebook_id, filename, kind, "processing", source_url=source_url)
+        STORE.upsert_source_status(notebook_id, filename, kind, "processing", now=now, source_url=source_url)
         try:
             STORE.save_source_payload(notebook_id, filename, raw, now)
+            text = _extract_text(filename, raw)
+            tokenized = chunk_text(text, filename=filename)
+            if not tokenized:
+                raise ValueError("No readable text found in source")
+            new_chunks = [
+                {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
+                for item in tokenized
+            ]
             STORE.replace_source(notebook_id, filename, new_chunks)
             STORE.update_counts(notebook_id, now, len(STORE.list_sources(notebook_id)), len(STORE.list_chunks(notebook_id)))
             STORE.upsert_source_status(notebook_id, filename, kind, "indexed", now=now, source_url=source_url)
+            return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
         except Exception as exc:
-            STORE.upsert_source_status(notebook_id, filename, kind, "failed", str(exc)[:500], now=now, source_url=source_url)
+            STORE.upsert_source_status(notebook_id, filename, kind, "failed", str(exc)[:500], now=_now(), source_url=source_url)
             raise
-        return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
+
+    with _LOCK:
+        metadata = _load_source_meta(notebook_id)
+        metadata[filename] = {"kind": kind, "status": "processing", "error": None, "source_url": source_url, "updated": now}
+        _save_source_meta(notebook_id, metadata)
+        _save_source_payload_fs(notebook_id, filename, raw)
+    try:
+        text = _extract_text(filename, raw)
+        tokenized = chunk_text(text, filename=filename)
+        if not tokenized:
+            raise ValueError("No readable text found in source")
+        new_chunks = [
+            {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
+            for item in tokenized
+        ]
+    except Exception as exc:
+        with _LOCK:
+            metadata = _load_source_meta(notebook_id)
+            metadata[filename] = {"kind": kind, "status": "failed", "error": str(exc)[:500], "source_url": source_url, "updated": _now()}
+            _save_source_meta(notebook_id, metadata)
+        raise
 
     with _LOCK:
         existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
         all_chunks = existing + new_chunks
         _save_chunks(notebook_id, all_chunks)
-        _save_source_payload_fs(notebook_id, filename, raw)
         metadata = _load_source_meta(notebook_id)
         metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
         _save_source_meta(notebook_id, metadata)
