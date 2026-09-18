@@ -31,6 +31,11 @@ def test_workspace_stream_persists_partial_response_on_client_cancel(monkeypatch
         "build_context",
         lambda *args, **kwargs: {"context": "source context", "full_sources": ["notes.txt"]},
     )
+    monkeypatch.setattr(
+        phase1_routes,
+        "StreamingResponse",
+        lambda body_iterator, **kwargs: SimpleNamespace(body_iterator=body_iterator),
+    )
     monkeypatch.setattr(main, "_check_rate_limit", lambda key: (True, 0))
     monkeypatch.setattr(
         main,
