@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -102,27 +103,47 @@ class PostgresStore:
                         notebook_id = notebook.get("id")
                         if not notebook_id:
                             continue
-                        cur.execute("SELECT 1 FROM apollo_notebooks WHERE id=%s", (notebook_id,))
-                        if cur.fetchone():
-                            continue
                         cur.execute(
-                            "INSERT INTO apollo_notebooks (id,user_id,title,created,updated,source_count,node_count) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                            "INSERT INTO apollo_notebooks (id,user_id,title,created,updated,source_count,node_count) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING",
                             (notebook_id, user_id, notebook.get("title", "Untitled Notebook"), notebook.get("created", ""), notebook.get("updated", ""), int(notebook.get("source_count", 0)), int(notebook.get("node_count", 0))),
                         )
-                        chunks_path = data_dir / "notebooks" / notebook_id / "chunks.json"
-                        if not chunks_path.exists():
-                            continue
-                        try:
-                            chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
-                        except Exception:
-                            continue
-                        for index, chunk in enumerate(chunks or []):
-                            if not chunk.get("id"):
-                                continue
-                            cur.execute(
-                                "INSERT INTO apollo_chunks (id,notebook_id,source,kind,text,chunk_index,content_type) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING",
-                                (chunk["id"], notebook_id, chunk.get("source", "unknown"), chunk.get("kind", "file"), chunk.get("text", ""), int(chunk.get("chunk_index", index)), chunk.get("content_type", "plain")),
-                            )
+                        notebook_dir = data_dir / "notebooks" / notebook_id
+                        chunks_path = notebook_dir / "chunks.json"
+                        if chunks_path.exists():
+                            try:
+                                chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
+                            except Exception:
+                                chunks = []
+                            for index, chunk in enumerate(chunks or []):
+                                if not chunk.get("id"):
+                                    continue
+                                cur.execute(
+                                    "INSERT INTO apollo_chunks (id,notebook_id,source,kind,text,chunk_index,content_type) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING",
+                                    (chunk["id"], notebook_id, chunk.get("source", "unknown"), chunk.get("kind", "file"), chunk.get("text", ""), int(chunk.get("chunk_index", index)), chunk.get("content_type", "plain")),
+                                )
+                        metadata_path = notebook_dir / "sources.json"
+                        if metadata_path.exists():
+                            try:
+                                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                            except Exception:
+                                metadata = {}
+                            for source_name, meta in (metadata.items() if isinstance(metadata, dict) else []):
+                                kind = str(meta.get("kind") or "file")
+                                status = str(meta.get("status") or "indexed")
+                                error = meta.get("error")
+                                source_url = meta.get("source_url")
+                                cur.execute(
+                                    "INSERT INTO apollo_sources (id,notebook_id,name,kind,processing_status,error_message,source_url,created,updated) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (notebook_id,name) DO UPDATE SET kind=EXCLUDED.kind, processing_status=EXCLUDED.processing_status, error_message=EXCLUDED.error_message, source_url=EXCLUDED.source_url, updated=EXCLUDED.updated",
+                                    (f"src_{notebook_id}_{source_name}", notebook_id, source_name, kind, status, error, source_url, str(meta.get("updated") or ""), str(meta.get("updated") or "")),
+                                )
+                                digest = hashlib.sha256(source_name.encode("utf-8")).hexdigest()
+                                payload_path = notebook_dir / "payloads" / f"{digest}.bin"
+                                if payload_path.exists():
+                                    cur.execute(
+                                        "INSERT INTO apollo_source_payloads(notebook_id,source_name,payload,updated) VALUES (%s,%s,%s,%s) ON CONFLICT (notebook_id,source_name) DO NOTHING",
+                                        (notebook_id, source_name, payload_path.read_bytes(), str(meta.get("updated") or "")),
+                                    )
+                        cur.execute("UPDATE apollo_notebooks SET source_count=(SELECT COUNT(DISTINCT source) FROM apollo_chunks WHERE notebook_id=%s), node_count=(SELECT COUNT(*) FROM apollo_chunks WHERE notebook_id=%s) WHERE id=%s", (notebook_id, notebook_id, notebook_id))
 
     def _connect_row(self, query: str, params: tuple[Any, ...]):
         with self._connect() as conn:
