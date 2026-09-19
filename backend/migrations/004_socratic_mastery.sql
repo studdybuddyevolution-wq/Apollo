@@ -1,5 +1,8 @@
--- Apollo Socratic Study mastery profile.
--- Additive and safe to re-run.
+-- Apollo Socratic Study persistence.
+-- Uses the existing chat session record for dialogue state; mastery is stored separately by user/topic.
+
+ALTER TABLE apollo_chat_sessions
+  ADD COLUMN IF NOT EXISTS socratic_state_json TEXT;
 
 CREATE TABLE IF NOT EXISTS apollo_socratic_mastery (
   user_id TEXT NOT NULL,
