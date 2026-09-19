@@ -71,6 +71,47 @@ def classify_error(exception: BaseException) -> tuple[int, str]:
     )
     return 502, f"AI service error: {_truncate(str(exception))}"
 
+_SOURCE_PERMANENT_MARKERS = (
+    "invalid url",
+    "unsupported",
+    "no transcript",
+    "no readable text",
+    "empty source",
+    "source not found",
+    "client error 400",
+    "client error 401",
+    "client error 403",
+    "client error 404",
+    "not found",
+)
+
+
+def classify_source_error(exception: BaseException) -> tuple[bool, int, str]:
+    """Return (retryable, status_code, user_message) for source/job failures.
+
+    Value/validation errors and known permanent source failures should surface
+    immediately. Provider/network/timeouts and other 5xx-class failures are
+    retryable without changing Apollo's existing job architecture.
+    """
+    explicit_status = getattr(exception, "status_code", None)
+    detail = getattr(exception, "detail", None)
+
+    if isinstance(explicit_status, int):
+        if explicit_status in {408, 429} or explicit_status >= 500:
+            _status, message = classify_error(exception)
+            return True, 503 if explicit_status >= 500 else explicit_status, message
+        if 400 <= explicit_status < 500:
+            return False, explicit_status, str(detail or exception)
+
+    text = str(exception).lower()
+    if isinstance(exception, ValueError) or any(marker in text for marker in _SOURCE_PERMANENT_MARKERS):
+        return False, 400, _truncate(str(exception))
+
+    status_code, message = classify_error(exception)
+    retryable = status_code in {408, 429} or status_code >= 500
+    return retryable, (503 if retryable and status_code >= 500 else status_code), message
+
+
 
 def _truncate(text: str, max_length: int = 200) -> str:
     return text if len(text) <= max_length else text[:max_length] + "..."
