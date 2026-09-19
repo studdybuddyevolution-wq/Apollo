@@ -49,6 +49,29 @@ const SOURCE_MODES = [
   { id: 'off', label: 'Off', description: 'Exclude this source' },
 ]
 
+function toDisplayText(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(toDisplayText).filter(Boolean).join('\n')
+  if (typeof value === 'object') {
+    const preferred = ['text', 'content', 'message', 'answer', 'feedback', 'verdict', 'question']
+    for (const key of preferred) {
+      if (value[key] != null) {
+        const rendered = toDisplayText(value[key])
+        if (rendered) return rendered
+      }
+    }
+    try { return JSON.stringify(value, null, 2) } catch { return '' }
+  }
+  return String(value)
+}
+
+function normalizeMessage(message) {
+  if (!message || typeof message !== 'object') return message
+  return { ...message, content: toDisplayText(message.content) }
+}
+
 function getUserId() {
   const key = 'apollo-user-id'
   let value = localStorage.getItem(key)
@@ -173,12 +196,13 @@ function TopBar({ active, toggleSources, toggleStudio, toggleSessions, toggleNot
 
 function Bubble({ message, onSaveNote, canSaveNote = true }) {
   const me = message.role === 'user'
+  const content = toDisplayText(message.content)
   return (
     <article className={`message-row ${me ? 'user' : 'assistant'}`}>
       <div className={`message-avatar ${me ? 'user-avatar' : ''}`}>{me ? <User size={15} /> : <img src="/apollo-logo-mark.svg" alt="Apollo" width="22" height="22" />}</div>
       <div className="message-content">
         <div className="message-meta"><span>{me ? 'You' : 'Apollo'}</span>{!me && message.model && <span className="message-model">{message.model}</span>}</div>
-        <div className="message-text">{message.content ? <MarkdownMessage content={message.content} sources={message.sources} /> : (message.streaming && <span className="streaming-caret" />)}</div>
+        <div className="message-text">{content ? <MarkdownMessage content={content} sources={message.sources} /> : (message.streaming && <span className="streaming-caret" />)}</div>
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
         </div>}
@@ -187,7 +211,7 @@ function Bubble({ message, onSaveNote, canSaveNote = true }) {
           <span>{message.groundingWarning}</span>
           {typeof message.overlapRatio === 'number' && <span>Source overlap: {Math.round(message.overlapRatio * 100)}%</span>}
         </div>}
-        {!me && canSaveNote && message.content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
+        {!me && canSaveNote && content && !message.streaming && <button className="citation-pill" onClick={() => onSaveNote(message)} title="Save this answer to notebook notes"><Save size={11} /> Save note</button>}
       </div>
     </article>
   )
@@ -940,7 +964,7 @@ export default function AppPhase6() {
       getSessionMessages(activeId, id, uid),
       getSocraticState(activeId, id, uid).catch(() => ({ state: null })),
     ])
-    setMessages(data.messages || [])
+    setMessages((data.messages || []).map(normalizeMessage))
     setSocraticState(socraticData.state || null)
     setSessionOpen(false)
   }
@@ -1013,7 +1037,7 @@ export default function AppPhase6() {
     }
     const user = { id: `${Date.now()}u`, role: 'user', content: text.trim() }
     const assistantId = `${Date.now()}a`
-    const history = [...messages.map((m) => ({ role: m.role, content: m.content })), user]
+    const history = [...messages.map((m) => ({ role: m.role, content: toDisplayText(m.content) })), { ...user, content: toDisplayText(user.content) }]
     const needsWeb = requestMode === 'web' || requestMode === 'deep' || requestMode === 'study'
     const controller = new AbortController()
     streamAbortRef.current = controller
@@ -1042,7 +1066,7 @@ export default function AppPhase6() {
         },
         onStart: (p) => { setModel(p.model || ''); setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, model: p.model } : m)) },
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
-        onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
+        onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${toDisplayText(m.content)}${toDisplayText(token)}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
         onGroundingCheck: (payload) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, groundingWarning: payload.warning || null, overlapRatio: payload.overlap_ratio } : m)),
         onSocraticState: (payload) => setSocraticState(payload),
@@ -1052,7 +1076,8 @@ export default function AppPhase6() {
           if (currentNotebook) listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {})
         },
         onError: (message) => {
-          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m))
+          const safeMessage = toDisplayText(message) || 'Apollo returned an unknown error.'
+          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${toDisplayText(m.content)}\n\n_(Response interrupted: ${safeMessage})_` : safeMessage, streaming: false } : m))
           setBusy(false)
         },
       })
@@ -1060,7 +1085,8 @@ export default function AppPhase6() {
       if (error?.name === 'AbortError') {
         setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Generation stopped.)_` : 'Generation stopped.', streaming: false } : m))
       } else {
-        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
+        const safeMessage = toDisplayText(error?.message) || 'Apollo backend request failed.'
+        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: safeMessage, streaming: false } : m))
       }
       setBusy(false)
     } finally {
