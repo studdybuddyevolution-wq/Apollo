@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from starlette.middleware.base import BaseHTTPMiddleware
 from jwt.exceptions import InvalidTokenError
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
@@ -24,6 +26,7 @@ from storage import STORE
 
 password_hash = PasswordHash((Argon2Hasher(), BcryptHasher()))
 ALGORITHM = "HS256"
+_AUTH_USER_ID: ContextVar[str | None] = ContextVar("apollo_authenticated_user_id", default=None)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 
 
@@ -222,6 +225,35 @@ def request_user_id(
         detail="Authentication required.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+
+
+def get_authenticated_user_id() -> str | None:
+    return _AUTH_USER_ID.get()
+
+
+class AuthIdentityMiddleware(BaseHTTPMiddleware):
+    """Validate an Authorization bearer token once and expose its user id to storage helpers."""
+
+    async def dispatch(self, request, call_next):
+        authorization = request.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+            user = current_user_from_token(token)
+            if user is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Authentication required.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            request.state.apollo_user = user
+            marker = _AUTH_USER_ID.set(str(user["id"]))
+            try:
+                return await call_next(request)
+            finally:
+                _AUTH_USER_ID.reset(marker)
+        return await call_next(request)
 
 
 def public_user(user: dict[str, Any]) -> dict[str, Any]:
