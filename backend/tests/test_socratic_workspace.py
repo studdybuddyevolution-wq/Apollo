@@ -65,3 +65,46 @@ def test_socratic_route_is_registered():
     assert "/api/socratic/quick-check/grade" in routes
     assert "/api/socratic/mastery" in routes
     assert "/api/notebooks/{notebook_id}/sessions/{session_id}/socratic-state" in routes
+
+
+
+def test_socratic_workspace_persists_partial_response_on_cancel(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_service, "STORE", None)
+    monkeypatch.setattr(workspace_service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(workspace_service, "WORKSPACE_FILE", tmp_path / "workspace.json")
+    monkeypatch.setattr(phase1_routes, "get_notebook", lambda _user_id, notebook_id: {"id": notebook_id, "title": "Physics"})
+    monkeypatch.setattr(main, "_check_rate_limit", lambda _key: (True, 0))
+    monkeypatch.setattr(
+        context_builder,
+        "build_context",
+        lambda *args, **kwargs: {"context": "", "full_sources": []},
+    )
+
+    def cancelled_stream(request, _context, _sources):
+        yield 'data: {"type":"start","model":"openai/gpt-oss-120b","research":"socratic"}\n\n'
+        yield 'data: {"type":"token","text":"Partial Socratic response"}\n\n'
+        raise GeneratorExit
+
+    monkeypatch.setattr(main, "_stream_model", cancelled_stream)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/chat/workspace",
+        json={
+            "messages": [{"role": "user", "content": "I think practice is enough to master physics."}],
+            "notebook_id": "nb_cancel",
+            "notebook_title": "Physics",
+            "user_id": "u_cancel",
+            "research_mode": "socratic",
+            "socratic_topic": "How should I learn physics?",
+        },
+    )
+
+    assert response.status_code == 200
+    sessions = workspace_service.list_sessions("u_cancel", "nb_cancel")
+    assert len(sessions) == 1
+    session_id = sessions[0]["id"]
+    messages = workspace_service.list_messages("u_cancel", "nb_cancel", session_id)
+    assert messages[-1]["content"] == "Partial Socratic response"
+    state = workspace_service.get_socratic_state("u_cancel", "nb_cancel", session_id)
+    assert state["phase"] == "elenchus"
