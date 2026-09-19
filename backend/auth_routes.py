@@ -5,7 +5,7 @@ from __future__ import annotations
 import weakref
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 
@@ -94,9 +94,7 @@ def register(app: FastAPI) -> None:
         return _login(http_request, request.email, request.password)
 
     @app.post("/api/auth/token")
-    def auth_token(form_data: OAuth2PasswordRequestForm = __import__("fastapi").Depends(), http_request: Request = None):
-        if http_request is None:
-            raise HTTPException(status_code=400, detail="Invalid request.")
+    def auth_token(http_request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
         return _login(http_request, form_data.username, form_data.password)
 
     @app.get("/api/auth/me")
