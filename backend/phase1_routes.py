@@ -144,6 +144,7 @@ def _register_chat(app: FastAPI) -> None:
                     "mastery_score": round(socratic_state.mastery_score, 1),
                     "mastery_tier": socratic_state.mastery_tier,
                     "user_response_count": socratic_state.user_response_count,
+                    "topic": socratic_state.topic,
                 })
 
             main_request = type("WorkspaceChat", (), raw)()
