@@ -1,6 +1,4 @@
-from types import SimpleNamespace
-
-import pytest
+import asyncio
 
 import main
 from request_limits import (
@@ -70,8 +68,7 @@ def test_upload_limit_config_falls_back_safely(monkeypatch):
     assert get_max_upload_bytes() == DEFAULT_MAX_UPLOAD_BYTES
 
 
-@pytest.mark.asyncio
-async def test_content_length_rejects_before_app_runs():
+def test_content_length_rejects_before_app_runs():
     called = False
 
     async def inner(scope, receive, send):
@@ -81,58 +78,48 @@ async def test_content_length_rejects_before_app_runs():
 
     app = RequestBodyLimitMiddleware(inner, 10)
     sender = Send()
-    await app(scope({"content-length": "11"}), Receive([b"x" * 11]), sender)
+    asyncio.run(app(scope({"content-length": "11"}), Receive([b"x" * 11]), sender))
 
     assert sender.status == 413
     assert called is False
 
 
-@pytest.mark.asyncio
-async def test_exact_limit_passes():
+def test_exact_limit_passes():
     sender = Send()
     app = RequestBodyLimitMiddleware(_echo, 10)
-    await app(scope({"content-length": "10"}), Receive([b"x" * 10]), sender)
-
+    asyncio.run(app(scope({"content-length": "10"}), Receive([b"x" * 10]), sender))
     assert sender.status == 200
 
 
-@pytest.mark.asyncio
-async def test_one_byte_over_limit_fails():
+def test_one_byte_over_limit_fails():
     sender = Send()
     app = RequestBodyLimitMiddleware(_echo, 10)
-    await app(scope({"content-length": "11"}), Receive([b"x" * 11]), sender)
-
+    asyncio.run(app(scope({"content-length": "11"}), Receive([b"x" * 11]), sender))
     assert sender.status == 413
 
 
-@pytest.mark.asyncio
-async def test_chunked_body_is_still_limited():
+def test_chunked_body_is_still_limited():
     sender = Send()
     app = RequestBodyLimitMiddleware(_echo, 10)
-    await app(scope(), Receive([b"a" * 5, b"b" * 5, b"c" * 1]), sender)
-
+    asyncio.run(app(scope(), Receive([b"a" * 5, b"b" * 5, b"c" * 1]), sender))
     assert sender.status == 413
 
 
-@pytest.mark.asyncio
-async def test_malformed_content_length_falls_back_to_streaming_check():
+def test_malformed_content_length_falls_back_to_streaming_check():
     sender = Send()
     app = RequestBodyLimitMiddleware(_echo, 10)
-    await app(scope({"content-length": "not-a-number"}), Receive([b"x" * 11]), sender)
-
+    asyncio.run(app(scope({"content-length": "not-a-number"}), Receive([b"x" * 11]), sender))
     assert sender.status == 413
 
 
-@pytest.mark.asyncio
-async def test_non_http_scope_passes_through():
+def test_non_http_scope_passes_through():
     called = []
 
     async def inner(scope, receive, send):
         called.append(scope["type"])
 
     app = RequestBodyLimitMiddleware(inner, 10)
-    await app({"type": "lifespan"}, Receive([]), Send())
-
+    asyncio.run(app({"type": "lifespan"}, Receive([]), Send()))
     assert called == ["lifespan"]
 
 
