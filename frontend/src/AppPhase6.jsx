@@ -912,6 +912,7 @@ export default function AppPhase6() {
     if (session.notebook_id === activeId) {
       await loadSessionsAndNotes(activeId)
     }
+    await loadPastSessions()
   }
 
   const removeNotebook = async (nb) => {
