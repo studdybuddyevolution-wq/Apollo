@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from rag_service import get_notebook
-from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, get_socratic_state, list_messages, list_notes, list_sessions, rename_session, save_socratic_state, update_note
+from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, get_socratic_state, list_all_sessions, list_messages, list_notes, list_sessions, rename_session, save_socratic_state, update_note
 
 
 class Phase1ChatMessage(BaseModel):
@@ -195,6 +195,10 @@ def _register_chat(app: FastAPI) -> None:
 
 
 def _register_sessions(app: FastAPI) -> None:
+    @app.get("/api/sessions")
+    def all_sessions(user_id: str = "default", limit: int = 200):
+        return {"sessions": list_all_sessions(user_id, limit=limit)}
+
     @app.get("/api/notebooks/{notebook_id}/sessions")
     def sessions(notebook_id: str, user_id: str = "default"):
         _check_notebook(user_id, notebook_id)
