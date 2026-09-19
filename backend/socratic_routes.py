@@ -1,35 +1,29 @@
-"""FastAPI routes for Apollo Socratic Study."""
+"""FastAPI helpers for Apollo Socratic mastery and Quick Checks.
+
+Core Socratic conversation turns remain on the existing workspace chat route.
+These endpoints cover explicit Quick Check interactions and mastery inspection.
+Placement generation is intentionally deferred until the core loop is stable.
+"""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from main import _check_rate_limit
 from rag_service import get_notebook
-from socratic_service import (
-    build_socratic_system_prompt,
-    generate_placement,
-    generate_quick_check,
+from socratic_engine import (
     get_mastery,
+    generate_quick_check,
     grade_quick_check,
     list_mastery,
-    score_placement,
+    source_context,
     tier_for_score,
     upsert_mastery,
-    source_context,
 )
-
-
-class SocraticPlacementRequest(BaseModel):
-    topic: str = Field(min_length=1, max_length=240)
-    notebook_id: str | None = None
-    active_sources: list[str] = Field(default_factory=list, max_length=40)
-    user_id: str | None = None
-    model: str | None = None
+from workspace_service import get_socratic_state, save_socratic_state
 
 
 class SocraticQuickCheckRequest(BaseModel):
@@ -38,6 +32,7 @@ class SocraticQuickCheckRequest(BaseModel):
     score: float = Field(ge=0, le=100)
     notebook_id: str | None = None
     active_sources: list[str] = Field(default_factory=list, max_length=40)
+    source_modes: dict[str, str] = Field(default_factory=dict, max_length=40)
     user_id: str | None = None
     model: str | None = None
 
@@ -48,15 +43,10 @@ class SocraticGradeRequest(BaseModel):
     expected_answer: str = Field(min_length=1, max_length=4000)
     student_answer: str = Field(min_length=1, max_length=4000)
     current_score: float = Field(ge=0, le=100)
+    notebook_id: str | None = None
+    session_id: str | None = None
     user_id: str | None = None
     model: str | None = None
-
-
-class SocraticPlacementSubmitRequest(BaseModel):
-    topic: str = Field(min_length=1, max_length=240)
-    questions: list[dict[str, Any]] = Field(min_length=5, max_length=5)
-    answers: dict[str, int] = Field(default_factory=dict)
-    user_id: str | None = None
 
 
 _REGISTERED_APPS: set[int] = set()
@@ -89,55 +79,6 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="No mastery record for this topic")
         return {"mastery": record, "tier": tier_for_score(record["score"])}
 
-    @app.post("/api/socratic/placement")
-    async def placement(request: SocraticPlacementRequest, http_request: Request):
-        _rate_limit(http_request, request.user_id)
-        if request.notebook_id and get_notebook(request.user_id, request.notebook_id) is None:
-            raise HTTPException(status_code=404, detail="Notebook not found")
-        try:
-            context = await asyncio.to_thread(
-                source_context,
-                request.user_id,
-                request.notebook_id,
-                request.active_sources,
-                request.topic,
-            )
-            questions, model = await asyncio.to_thread(
-                generate_placement,
-                request.topic,
-                context,
-                preferred_model=request.model,
-            )
-            return {"topic": request.topic.strip(), "questions": questions, "model_used": model}
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail="Apollo could not prepare the placement check. Please try again.") from exc
-
-    @app.post("/api/socratic/placement/submit")
-    def placement_submit(request: SocraticPlacementSubmitRequest, http_request: Request):
-        _rate_limit(http_request, request.user_id)
-        try:
-            score, correct, total = score_placement(request.questions, request.answers)
-            record = upsert_mastery(
-                request.user_id,
-                request.topic,
-                score,
-                correct_delta=correct,
-                attempt_delta=1,
-            )
-            return {
-                "mastery": record,
-                "score": score,
-                "correct": correct,
-                "total": total,
-                "tier": tier_for_score(score),
-            }
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     @app.post("/api/socratic/quick-check")
     async def quick_check(request: SocraticQuickCheckRequest, http_request: Request):
         _rate_limit(http_request, request.user_id)
@@ -150,6 +91,7 @@ def register(app: FastAPI) -> None:
                 request.notebook_id,
                 request.active_sources,
                 request.topic,
+                request.source_modes,
                 top_k=4,
                 token_budget=3000,
             )
@@ -180,17 +122,18 @@ def register(app: FastAPI) -> None:
             if correct is True:
                 delta = 8 if tier_for_score(request.current_score) in {"Beginner", "Developing"} else 6
                 new_score = min(100.0, request.current_score + delta)
-                verdict = f"Correct! Mastery +{delta}"
                 correct_delta = 1
+                verdict = f"Correct! Mastery +{delta}"
             elif correct is False:
                 delta = -6
                 new_score = max(0.0, request.current_score + delta)
-                verdict = f"Not quite. Mastery {delta}"
                 correct_delta = 0
+                verdict = f"Not quite. Mastery {delta}"
             else:
                 new_score = request.current_score
-                verdict = "Could not confidently grade that response; mastery unchanged."
                 correct_delta = 0
+                verdict = "Could not confidently grade that response; mastery unchanged."
+
             record = upsert_mastery(
                 request.user_id,
                 request.topic,
@@ -198,13 +141,22 @@ def register(app: FastAPI) -> None:
                 correct_delta=correct_delta,
                 attempt_delta=1,
             )
+
+            if request.notebook_id and request.session_id:
+                persisted = get_socratic_state(request.user_id, request.notebook_id, request.session_id)
+                if persisted is not None:
+                    persisted = dict(persisted)
+                    persisted["mastery_score"] = record["score"]
+                    persisted["mastery_tier"] = record["tier"]
+                    save_socratic_state(request.user_id, request.notebook_id, request.session_id, persisted)
+
             return {
                 "correct": correct,
                 "feedback": feedback,
                 "verdict": verdict,
                 "mastery": record,
                 "score": record["score"],
-                "tier": tier_for_score(record["score"]),
+                "tier": record["tier"],
                 "model_used": model,
             }
         except ValueError as exc:
@@ -215,10 +167,12 @@ def register(app: FastAPI) -> None:
     @app.get("/api/socratic/config")
     def config():
         from phase3_common import gemini_model_chain
+        from socratic_engine import _TIERS, MAIEUTICS_MAX_CONSECUTIVE
 
         return {
             "models": gemini_model_chain(max_models=8),
-            "tiers": [{"name": name, "min": lo, "max": hi - 1, "style": note} for lo, hi, name, note in __import__("socratic_service")._Tiers],
+            "maieutics_max_consecutive": MAIEUTICS_MAX_CONSECUTIVE,
+            "tiers": [{"name": name, "min": lo, "max": hi - 1, "style": note} for lo, hi, name, note in _TIERS],
         }
 
     _REGISTERED_APPS.add(marker)
