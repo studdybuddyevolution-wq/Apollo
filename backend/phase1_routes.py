@@ -28,7 +28,10 @@ class Phase1ChatRequest(BaseModel):
     source_modes: dict[str, str] = Field(default_factory=dict)
     user_id: str | None = None
     web_enabled: bool = False
-    research_mode: Literal["quick", "web", "deep", "study"] = "quick"
+    research_mode: Literal["quick", "web", "deep", "study", "socratic"] = "quick"
+    socratic_topic: str | None = None
+    socratic_tier: str | None = None
+    socratic_score: float | None = None
     session_id: str | None = None
 
 
