@@ -1,6 +1,16 @@
 import { authFetch } from './authApi'
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
+function displayErrorDetail(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'object') {
+    return String(value.detail || value.message || value.error || value.title || '')
+  }
+  return String(value)
+}
+
 function cleanResearchText(value) {
   return String(value || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -101,8 +111,9 @@ async function openChat({
     if (payload.type === 'sources') onSources?.(payload.sources || [])
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
-      onError?.(payload.message || 'Apollo backend error')
-      throw new Error(payload.message || 'Apollo backend error')
+      const safeMessage = displayErrorDetail(payload.message) || 'Apollo backend error'
+      onError?.(safeMessage)
+      throw new Error(safeMessage)
     }
   }
 
@@ -327,7 +338,12 @@ export async function generateSocraticQuickCheck({
       model,
     }),
   })
-  if (!response.ok) throw new Error(await parseError(response, 'Quick Check generation failed'))
+  if (!response.ok) {
+    const fallback = response.status === 404
+      ? 'Socratic Quick Check is not available on the currently deployed Apollo backend. The backend Socratic routes need to be deployed.'
+      : 'Quick Check generation failed'
+    throw new Error(await parseError(response, fallback))
+  }
   return response.json()
 }
 

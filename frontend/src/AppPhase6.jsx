@@ -1,95 +1,3 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  ArrowUp, BookOpen, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight,
-  CircleHelp, FileText, FolderOpen, Globe, History, ImagePlus, LayoutDashboard,
-  LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
-  Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2, RefreshCw, Square, Pencil,
-} from 'lucide-react'
-import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, streamChat } from './api/apolloApi'
-import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
-import PastSessionsPage from './PastSessionsPage'
-import PlannerPage from './PlannerPage'
-import AccountPage from './AccountPage'
-import {
-  createNote, createNotebook, createSession, deleteNote, deleteSession,
-  getSessionMessages, listAllSessions, listNotes, listNotebooks, listSessions, listSources,
-  renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource, getCapabilities, searchNotebook,
-} from './api/notebooksApi'
-import MarkdownMessage from './MarkdownMessage'
-import SourceImportBar from './SourceImportBar'
-import './console-clean.css'
-
-const NAV_ITEMS = [
-  { id: 'console', label: 'Console & Tools', icon: Sparkles },
-  { id: 'tutor', label: 'Socratic Tutor', icon: BrainCircuit },
-  { id: 'progress', label: 'Progress Dashboard', icon: LayoutDashboard },
-  { id: 'planner', label: 'Study Planner', icon: Activity },
-  { id: 'sessions', label: 'Past Sessions', icon: History },
-  { id: 'settings', label: 'User Settings & Profile', icon: Settings },
-]
-
-const RESEARCH_MODES = [
-  { id: 'quick', label: 'Quick answer', icon: Sparkles, description: 'Fast answer from Apollo' },
-  { id: 'socratic', label: 'Socratic Tutor', icon: BrainCircuit, description: 'Guided reasoning instead of direct answers' },
-  { id: 'web', label: 'Web search', icon: Globe, description: 'Current information + sources' },
-  { id: 'deep', label: 'Deep Research', icon: SlidersHorizontal, description: 'Multi-step web research' },
-  { id: 'study', label: 'Study Research', icon: BookOpen, description: 'Notebook + web synthesis' },
-]
-
-const STUDIO_TOOLS = [
-  { id: 'slides', label: 'Slide Deck', description: 'Build a grounded presentation', icon: FileText },
-  { id: 'report', label: 'Study Report', description: 'Create structured revision notes', icon: FileText },
-  { id: 'mindmap', label: 'Mind Map', description: 'Build a visual concept structure', icon: BrainCircuit },
-  { id: 'transform', label: 'Transformations', description: 'Extract reusable study insights', icon: WandSparkles },
-  { id: 'podcast', label: 'Podcast / Audio', description: 'Create a narrated source overview', icon: Mic },
-  { id: 'video', label: 'Video Overview', description: 'Storyboard support coming next', icon: Video },
-]
-
-const SOURCE_MODES = [
-  { id: 'full', label: 'Full source', description: 'Use source text + saved insights' },
-  { id: 'summary', label: 'Summary', description: 'Use the saved source summary only' },
-  { id: 'insights', label: 'Insights only', description: 'Use only saved AI insights' },
-  { id: 'off', label: 'Off', description: 'Exclude this source' },
-]
-
-function getUserId() {
-  const key = 'apollo-user-id'
-  let value = localStorage.getItem(key)
-  if (!value) {
-    value = `user_${crypto.randomUUID()}`
-    localStorage.setItem(key, value)
-  }
-  return value
-}
-
-function recentKey(type, userId, notebookId = '') {
-  return type === 'notebooks'
-    ? `apollo-recent-notebooks:${userId}`
-    : `apollo-recent-sources:${userId}:${notebookId}`
-}
-
-function readRecent(type, userId, notebookId = '') {
-  try {
-    const value = JSON.parse(localStorage.getItem(recentKey(type, userId, notebookId)) || '[]')
-    return Array.isArray(value) ? value : []
-  } catch {
-    return []
-  }
-}
-
-function rememberRecent(type, id, userId, notebookId = '') {
-  if (!id) return
-  const key = recentKey(type, userId, notebookId)
-  const current = readRecent(type, userId, notebookId).filter((value) => value !== id)
-  localStorage.setItem(key, JSON.stringify([id, ...current].slice(0, 12)))
-}
-
-function readSourceModes(userId, notebookId) {
-  try {
-    const value = JSON.parse(localStorage.getItem(`apollo-source-modes:${userId}:${notebookId}`) || '{}')
-    return value && typeof value === 'object' ? value : {}
-  } catch {
-    return {}
   }
 }
 
@@ -181,7 +89,7 @@ function Bubble({ message, onSaveNote, canSaveNote = true }) {
       <div className={`message-avatar ${me ? 'user-avatar' : ''}`}>{me ? <User size={15} /> : <img src="/apollo-logo-mark.svg" alt="Apollo" width="22" height="22" />}</div>
       <div className="message-content">
         <div className="message-meta"><span>{me ? 'You' : 'Apollo'}</span>{!me && message.model && <span className="message-model">{message.model}</span>}</div>
-        <div className="message-text">{message.content ? <MarkdownMessage content={message.content} sources={message.sources} /> : (message.streaming && <span className="streaming-caret" />)}</div>
+        <div className="message-text">{toDisplayText(message.content) ? <MarkdownMessage content={toDisplayText(message.content)} sources={message.sources} /> : (message.streaming && <span className="streaming-caret" />)}</div>
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
         </div>}
@@ -834,7 +742,7 @@ export default function AppPhase6() {
       getSocraticState(notebookId, id, uid).catch(() => ({ state: null })),
     ])
     setSessionId(id)
-    setMessages(data.messages || [])
+    setMessages((data.messages || []).map(normalizeMessage))
     setSocraticState(socraticData.state || null)
   }
 
@@ -1041,9 +949,9 @@ export default function AppPhase6() {
 
   const saveNote = async (message) => {
     if (!activeId || !message?.content) return
-    const firstLine = message.content.split('\n').map((line) => line.replace(/^#+\s*/, '').trim()).find(Boolean) || 'Apollo answer'
+    const firstLine = toDisplayText(message.content).split('\n').map((line) => line.replace(/^#+\s*/, '').trim()).find(Boolean) || 'Apollo answer'
     const title = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine
-    await createNote(activeId, { title, content: message.content, source_type: 'chat', source_ref: sessionId }, uid)
+    await createNote(activeId, { title, content: toDisplayText(message.content), source_type: 'chat', source_ref: sessionId }, uid)
     await refreshNotes()
     setNotesOpen(true)
     setSourceOpen(false)
@@ -1078,7 +986,7 @@ export default function AppPhase6() {
     }
     const user = { id: `${Date.now()}u`, role: 'user', content: text.trim() }
     const assistantId = `${Date.now()}a`
-    const history = [...messages.map((m) => ({ role: m.role, content: m.content })), user]
+    const history = [...messages.map((m) => ({ role: m.role, content: toDisplayText(m.content) })), { ...user, content: toDisplayText(user.content) }]
     const needsWeb = requestMode === 'web' || requestMode === 'deep' || requestMode === 'study'
     const controller = new AbortController()
     streamAbortRef.current = controller
@@ -1107,7 +1015,7 @@ export default function AppPhase6() {
         },
         onStart: (p) => { setModel(p.model || ''); setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, model: p.model } : m)) },
         onSources: (webSources) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, sources: webSources } : m)),
-        onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
+        onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${toDisplayText(m.content)}${toDisplayText(token)}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
         onGroundingCheck: (payload) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, groundingWarning: payload.warning || null, overlapRatio: payload.overlap_ratio } : m)),
         onSocraticState: (payload) => setSocraticState(payload),
@@ -1120,7 +1028,8 @@ export default function AppPhase6() {
           }
         },
         onError: (message) => {
-          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m))
+          const safeMessage = toDisplayText(message) || 'Apollo returned an unknown error.'
+          setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${toDisplayText(m.content)}\n\n_(Response interrupted: ${safeMessage})_` : safeMessage, streaming: false } : m))
           setBusy(false)
         },
       })
@@ -1128,7 +1037,8 @@ export default function AppPhase6() {
       if (error?.name === 'AbortError') {
         setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Generation stopped.)_` : 'Generation stopped.', streaming: false } : m))
       } else {
-        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: error?.message || 'Apollo backend request failed.', streaming: false } : m))
+        const safeMessage = toDisplayText(error?.message) || 'Apollo backend request failed.'
+        setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: safeMessage, streaming: false } : m))
       }
       setBusy(false)
     } finally {
