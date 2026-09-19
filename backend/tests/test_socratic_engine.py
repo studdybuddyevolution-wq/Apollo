@@ -91,3 +91,17 @@ def test_workspace_socratic_state_persists(monkeypatch, tmp_path):
     state = {"phase": "aporia", "in_dialectic_loop": False, "mastery_score": 52, "mastery_tier": "Proficient"}
     assert workspace_service.save_socratic_state("u1", "nb1", session["id"], state) is True
     assert workspace_service.get_socratic_state("u1", "nb1", session["id"]) == state
+
+
+
+def test_invalid_phase_state_recovers_to_elicitation():
+    state = socratic_engine.state_from_dict({"phase": "not-a-real-phase"})
+    assert state.phase == "not-a-real-phase"
+    assert socratic_engine.next_phase(state, "I have an idea") == socratic_engine.SocraticPhase.ELENCHUS
+
+
+def test_mastery_score_is_bounded():
+    low = socratic_engine.upsert_mastery("u1", "Topic A", -100)
+    high = socratic_engine.upsert_mastery("u1", "Topic B", 1000)
+    assert low["score"] == 0
+    assert high["score"] == 100
