@@ -106,10 +106,13 @@ def register(app: FastAPI) -> None:
             _record_auth_attempt(ip, request.email, "register", True)
             return {"access_token": create_access_token(str(user["id"])), "token_type": "bearer", "user": public_user(user)}
         except HTTPException:
+            _record_auth_attempt(ip, request.email, "register", False)
             raise
         except ValueError as exc:
+            _record_auth_attempt(ip, request.email, "register", False)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
+            _record_auth_attempt(ip, request.email, "register", False)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.post("/api/auth/login")
