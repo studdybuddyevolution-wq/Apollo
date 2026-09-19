@@ -76,6 +76,7 @@ _SOURCE_PERMANENT_MARKERS = (
     "unsupported",
     "no transcript",
     "no readable text",
+    "could not extract",
     "empty source",
     "source not found",
     "client error 400",
