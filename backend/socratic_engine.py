@@ -18,7 +18,7 @@ from rag_service import get_notebook, get_notebook_chunks
 from storage import STORE
 
 MAIEUTICS_MAX_CONSECUTIVE = 2
-MASTERy_FILE = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data")) / "socratic_mastery.json"
+MASTERY_FILE = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data")) / "socratic_mastery.json"
 _LOCK = threading.RLock()
 
 
