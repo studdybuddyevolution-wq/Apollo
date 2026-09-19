@@ -22,7 +22,11 @@ def test_permanent_source_failures_do_not_retry(exc):
 
 @pytest.mark.parametrize(
     "exc",
-    [TimeoutError("provider timed out"), RuntimeError("HTTP 503 service unavailable"), RuntimeError("429 rate limit exceeded")],
+    [
+        TimeoutError("provider timed out"),
+        RuntimeError("HTTP 503 service unavailable"),
+        RuntimeError("429 rate limit exceeded"),
+    ],
 )
 def test_transient_source_failures_are_retryable(exc):
     assert error_classifier.is_retryable_source_error(exc) is True
@@ -51,8 +55,7 @@ class FakeStore:
         return None
 
 
-@pytest.mark.asyncio
-async def test_embedding_job_retries_transient_failure(monkeypatch):
+def test_embedding_job_retries_transient_failure(monkeypatch):
     fake_store = FakeStore()
     monkeypatch.setattr(jobs, "STORE", fake_store)
     calls = {"embed": 0}
@@ -70,15 +73,14 @@ async def test_embedding_job_retries_transient_failure(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
 
     job = jobs.Job(id="job_retry", type="embed_source", notebook_id="nb1", created_at=jobs._now())
-    await jobs._embed_job(job, "source.txt")
+    asyncio.run(jobs._embed_job(job, "source.txt"))
 
     assert calls["embed"] == 2
     assert job.status == "completed"
     assert job.progress == 100
 
 
-@pytest.mark.asyncio
-async def test_embedding_job_does_not_retry_permanent_failure(monkeypatch):
+def test_embedding_job_does_not_retry_permanent_failure(monkeypatch):
     fake_store = FakeStore()
     monkeypatch.setattr(jobs, "STORE", fake_store)
     calls = {"embed": 0}
@@ -91,7 +93,7 @@ async def test_embedding_job_does_not_retry_permanent_failure(monkeypatch):
 
     job = jobs.Job(id="job_no_retry", type="embed_source", notebook_id="nb1", created_at=jobs._now())
     with pytest.raises(ValueError):
-        await jobs._embed_job(job, "source.txt")
+        asyncio.run(jobs._embed_job(job, "source.txt"))
 
     assert calls["embed"] == 1
     assert job.status == "failed"
