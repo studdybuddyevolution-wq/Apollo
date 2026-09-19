@@ -70,3 +70,35 @@ def test_failed_parse_keeps_complete_payload_for_retry_and_cleans_claim(monkeypa
     assert rag_service.get_source_payload("u1", notebook["id"], "notes.txt") == b"retry me"
     claims = tmp_path / "notebooks" / notebook["id"] / ".claims"
     assert not list(claims.glob("*.claim"))
+
+
+def test_upload_embedding_job_uses_collision_safe_name(monkeypatch):
+    import asyncio
+    import main
+
+    class FakeUpload:
+        filename = "../report.txt"
+
+        async def read(self, _limit):
+            return b"content"
+
+    async def fake_add_source(*_args, **_kwargs):
+        return {"name": "report (1).txt"}
+
+    enqueued = []
+
+    async def fake_enqueue(notebook_id, user_id, source_name):
+        enqueued.append((notebook_id, user_id, source_name))
+        return {"id": "job_test"}
+
+    monkeypatch.setattr(main, "add_source", fake_add_source)
+    monkeypatch.setattr(main, "enqueue_embedding_job", fake_enqueue)
+
+    scope = {"type": "http", "method": "POST", "path": "/upload", "headers": []}
+    from starlette.requests import Request
+    request = Request(scope)
+
+    result = asyncio.run(main.notebook_source_upload("nb1", request, FakeUpload(), "u1"))
+
+    assert result["name"] == "report (1).txt"
+    assert enqueued == [("nb1", "u1", "report (1).txt")]
