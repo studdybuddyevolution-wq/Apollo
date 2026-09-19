@@ -134,10 +134,11 @@ def test_global_session_history_includes_message_counts_and_socratic_state(monke
     workspace_service.append_message("u_history", "nb2", second["id"], "user", "Explain valency.")
 
     history = workspace_service.list_all_sessions("u_history")
-    assert [row["id"] for row in history] == [second["id"], first["id"]]
-    assert history[0]["message_count"] == 1
-    assert history[1]["message_count"] == 2
-    assert history[1]["socratic_state"]["topic"] == "Ohm's law"
+    assert {row["id"] for row in history} == {first["id"], second["id"]}
+    by_title = {row["title"]: row for row in history}
+    assert by_title["Chemistry chat"]["message_count"] == 1
+    assert by_title["Physics chat"]["message_count"] == 2
+    assert by_title["Physics chat"]["socratic_state"]["topic"] == "Ohm's law"
 
 
 def test_global_session_history_route_is_registered():
