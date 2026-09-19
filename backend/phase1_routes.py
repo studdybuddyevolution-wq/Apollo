@@ -32,6 +32,7 @@ class Phase1ChatRequest(BaseModel):
     socratic_topic: str | None = None
     socratic_tier: str | None = None
     socratic_score: float | None = None
+    socratic_force_advance: bool = False
     session_id: str | None = None
 
 
