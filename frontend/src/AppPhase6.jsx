@@ -8,6 +8,8 @@ import {
 import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import PastSessionsPage from './PastSessionsPage'
+import PlannerPage from './PlannerPage'
+import AccountPage from './AccountPage'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listAllSessions, listNotes, listNotebooks, listSessions, listSources,
@@ -1180,7 +1182,7 @@ export default function AppPhase6() {
         onRename={renamePastSession}
         onDelete={deletePastSession}
         onRefresh={() => loadPastSessions().catch(console.error)}
-      /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      /> : active === 'progress' ? <PlannerPage userId={uid} mode="progress" /> : active === 'planner' ? <PlannerPage userId={uid} mode="planner" /> : active === 'settings' ? <AccountPage /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
