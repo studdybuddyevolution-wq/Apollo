@@ -102,3 +102,29 @@ def test_upload_embedding_job_uses_collision_safe_name(monkeypatch):
 
     assert result["name"] == "report (1).txt"
     assert enqueued == [("nb1", "u1", "report (1).txt")]
+
+
+def test_payload_write_failure_releases_filename_claim(monkeypatch, tmp_path):
+    _isolated_rag(monkeypatch, tmp_path)
+    notebook = rag_service.create_notebook("u1", "Test")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("disk write failed")
+
+    monkeypatch.setattr(rag_service, "_save_source_payload_fs", fail)
+
+    try:
+        rag_service.add_source(
+            "u1",
+            notebook["id"],
+            "notes.txt",
+            b"payload",
+            replace_existing=False,
+        )
+    except OSError as exc:
+        assert "disk write failed" in str(exc)
+    else:
+        raise AssertionError("expected payload write failure")
+
+    claims = tmp_path / "notebooks" / notebook["id"] / ".claims"
+    assert not list(claims.glob("*.claim"))
