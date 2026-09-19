@@ -113,5 +113,12 @@ def classify_source_error(exception: BaseException) -> tuple[bool, int, str]:
 
 
 
+def is_retryable_source_error(exception: BaseException) -> bool:
+    """Return whether a source/job failure is safe to retry."""
+    retryable, _status_code, _message = classify_source_error(exception)
+    return retryable
+
+
+
 def _truncate(text: str, max_length: int = 200) -> str:
     return text if len(text) <= max_length else text[:max_length] + "..."
