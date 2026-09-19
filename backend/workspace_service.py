@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from storage import STORE
+from auth import get_authenticated_user_id
 
 DATA_DIR = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
 WORKSPACE_FILE = DATA_DIR / "workspace.json"
@@ -40,6 +41,9 @@ def _now() -> str:
 
 
 def _user_key(user_id: str | None) -> str:
+    authenticated = get_authenticated_user_id()
+    if authenticated:
+        return authenticated
     return (user_id or "default").strip() or "default"
 
 

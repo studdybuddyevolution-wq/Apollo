@@ -23,6 +23,7 @@ from pypdf import PdfReader
 from chunking import chunk_text, token_count
 from embeddings import embed_text_sync
 from storage import STORE
+from auth import get_authenticated_user_id
 
 DATA_DIR = Path(os.getenv("APOLLO_DATA_DIR", Path(__file__).resolve().parent / "data"))
 NOTEBOOKS_FILE = DATA_DIR / "notebooks.json"
@@ -50,6 +51,9 @@ def _save_manifest(manifest: dict[str, list[dict[str, Any]]]) -> None:
 
 
 def _user_key(user_id: str | None) -> str:
+    authenticated = get_authenticated_user_id()
+    if authenticated:
+        return authenticated
     return (user_id or "default").strip() or "default"
 
 
@@ -193,7 +197,15 @@ def _extract_text(filename: str, raw: bytes) -> str:
     lower = filename.lower()
     if lower.endswith(".pdf"):
         reader = PdfReader(io.BytesIO(raw))
-        return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        extracted = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        try:
+            from pdf_vision import extract_pdf_text_with_vision
+            vision_text, meta = extract_pdf_text_with_vision(raw)
+            if meta.get("vision_used") and len(vision_text.strip()) >= len(extracted.strip()):
+                return vision_text
+        except Exception:
+            pass
+        return extracted
     if lower.endswith(".docx"):
         document = DocxDocument(io.BytesIO(raw))
         parts = [paragraph.text for paragraph in document.paragraphs]

@@ -18,6 +18,7 @@ from groq import Groq
 from pydantic import BaseModel, Field
 
 from request_limits import RequestBodyLimitMiddleware, get_max_request_body_bytes, get_max_upload_bytes
+from auth import AuthIdentityMiddleware
 
 from context_builder import build_context
 from diagrams import build_diagram_prompt, generate_and_render, content_overlap_ratio
@@ -67,6 +68,7 @@ def _check_rate_limit(key: str) -> tuple[bool, int]:
 
 app = FastAPI(title="Apollo API", version="0.9.0")
 app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_REQUEST_BODY_BYTES)
+app.add_middleware(AuthIdentityMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
