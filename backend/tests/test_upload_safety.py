@@ -82,7 +82,7 @@ def test_upload_embedding_job_uses_collision_safe_name(monkeypatch):
         async def read(self, _limit):
             return b"content"
 
-    async def fake_add_source(*_args, **_kwargs):
+    def fake_add_source(*_args, **_kwargs):
         return {"name": "report (1).txt"}
 
     enqueued = []
