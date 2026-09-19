@@ -23,7 +23,7 @@ def test_concurrent_same_name_uploads_get_distinct_source_names(monkeypatch, tmp
         return rag_service.add_source(
             "u1",
             notebook["id"],
-            "../../report.pdf",
+            "../../report.txt",
             f"content-{index}".encode(),
             replace_existing=False,
         )
@@ -33,8 +33,8 @@ def test_concurrent_same_name_uploads_get_distinct_source_names(monkeypatch, tmp
 
     names = [result["name"] for result in results]
     assert len(set(names)) == 8
-    assert "report.pdf" in names
-    assert "report (1).pdf" in names
+    assert "report.txt" in names
+    assert "report (1).txt" in names
 
     chunks = rag_service.get_notebook_chunks("u1", notebook["id"])
     assert {item["source"] for item in chunks} == set(names)
