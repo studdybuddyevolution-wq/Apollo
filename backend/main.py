@@ -476,7 +476,7 @@ async def notebook_source_upload(notebook_id: str, request: Request, file: Uploa
             raw,
             replace_existing=False,
         )
-        embedding_job = await enqueue_embedding_job(notebook_id, user_id, file.filename or "source.txt")
+        embedding_job = await enqueue_embedding_job(notebook_id, user_id, result["name"])
         result["embedding_job"] = embedding_job
         return result
     except KeyError:
