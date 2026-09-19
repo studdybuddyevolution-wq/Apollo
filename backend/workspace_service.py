@@ -132,6 +132,60 @@ def create_session(user_id: str | None, notebook_id: str, title: str = "New chat
     return record
 
 
+def list_all_sessions(user_id: str | None, limit: int = 200) -> list[dict[str, Any]]:
+    key = _user_key(user_id)
+    safe_limit = max(1, min(int(limit), 500))
+    if STORE:
+        with STORE._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        s.id,
+                        s.notebook_id,
+                        s.user_id,
+                        s.title,
+                        s.created,
+                        s.updated,
+                        s.socratic_state_json,
+                        COUNT(m.id) AS message_count
+                    FROM apollo_chat_sessions s
+                    LEFT JOIN apollo_chat_messages m ON m.session_id = s.id
+                    WHERE s.user_id = %s
+                    GROUP BY s.id, s.notebook_id, s.user_id, s.title, s.created, s.updated, s.socratic_state_json
+                    ORDER BY s.updated DESC
+                    LIMIT %s
+                    """,
+                    (key, safe_limit),
+                )
+                rows = cur.fetchall()
+        keys = ("id", "notebook_id", "user_id", "title", "created", "updated", "socratic_state_json", "message_count")
+        result = []
+        for row in rows:
+            item = dict(zip(keys, row))
+            try:
+                item["socratic_state"] = json.loads(item.pop("socratic_state_json") or "null")
+            except Exception:
+                item["socratic_state"] = None
+            item["message_count"] = int(item.get("message_count") or 0)
+            result.append(item)
+        return result
+
+    with _LOCK:
+        data = _load()
+        rows = []
+        messages = data["messages"]
+        for row in data["sessions"].values():
+            if row.get("user_id") != key:
+                continue
+            item = dict(row)
+            item.setdefault("socratic_state", None)
+            item["message_count"] = len(messages.get(item["id"], []))
+            rows.append(item)
+        rows.sort(key=lambda row: row.get("updated", ""), reverse=True)
+        return rows[:safe_limit]
+
+
 def get_session(user_id: str | None, notebook_id: str, session_id: str) -> dict[str, Any] | None:
     key = _user_key(user_id)
     if STORE:

@@ -93,6 +93,10 @@ export function searchNotebook(notebookId, query, options = {}) {
   })
 }
 
+export function listAllSessions(userId = 'default', limit = 200) {
+  return request(`/api/sessions?user_id=${encodeURIComponent(userId)}&limit=${encodeURIComponent(limit)}`)
+}
+
 export function listSessions(notebookId, userId = 'default') {
   return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions?user_id=${encodeURIComponent(userId)}`)
 }

@@ -108,3 +108,44 @@ def test_socratic_workspace_persists_partial_response_on_cancel(monkeypatch, tmp
     assert messages[-1]["content"] == "Partial Socratic response"
     state = workspace_service.get_socratic_state("u_cancel", "nb_cancel", session_id)
     assert state["phase"] == "elenchus"
+
+
+def test_global_session_history_includes_message_counts_and_socratic_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_service, "STORE", None)
+    monkeypatch.setattr(workspace_service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(workspace_service, "WORKSPACE_FILE", tmp_path / "workspace.json")
+
+    first = workspace_service.create_session("u_history", "nb1", "Physics chat")
+    workspace_service.append_message("u_history", "nb1", first["id"], "user", "What is Ohm's law?")
+    workspace_service.append_message("u_history", "nb1", first["id"], "assistant", "V = IR.")
+    workspace_service.save_socratic_state(
+        "u_history",
+        "nb1",
+        first["id"],
+        {
+            "phase": "elenchus",
+            "topic": "Ohm's law",
+            "mastery_score": 62.0,
+            "mastery_tier": "Proficient",
+        },
+    )
+
+    second = workspace_service.create_session("u_history", "nb2", "Chemistry chat")
+    workspace_service.append_message("u_history", "nb2", second["id"], "user", "Explain valency.")
+
+    history = workspace_service.list_all_sessions("u_history")
+    assert {row["id"] for row in history} == {first["id"], second["id"]}
+    by_title = {row["title"]: row for row in history}
+    assert by_title["Chemistry chat"]["message_count"] == 1
+    assert by_title["Physics chat"]["message_count"] == 2
+    assert by_title["Physics chat"]["socratic_state"]["topic"] == "Ohm's law"
+
+
+def test_global_session_history_route_is_registered():
+    routes = {route.path for route in main.app.routes}
+    assert "/api/sessions" in routes
+
+    client = TestClient(main.app)
+    response = client.get("/api/sessions?user_id=history_test")
+    assert response.status_code == 200
+    assert response.json() == {"sessions": []}
