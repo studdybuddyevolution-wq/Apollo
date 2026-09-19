@@ -1,5 +1,28 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
+function toDisplayText(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(toDisplayText).filter(Boolean).join('\n')
+  if (typeof value === 'object') {
+    const preferred = ['text', 'content', 'message', 'answer', 'feedback', 'verdict', 'question']
+    for (const key of preferred) {
+      if (value[key] != null) {
+        const rendered = toDisplayText(value[key])
+        if (rendered) return rendered
+      }
+    }
+    try { return JSON.stringify(value, null, 2) } catch { return '' }
+  }
+  return String(value)
+}
+
+function safeErrorText(value, fallback = 'Apollo backend error') {
+  const text = toDisplayText(value)
+  return text || fallback
+}
+
 function cleanResearchText(value) {
   return String(value || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -95,13 +118,14 @@ async function openChat({
     if (payload.type === 'socratic_state') onSocraticState?.(payload)
     if (payload.type === 'token') {
       const token = serverResearch === 'quick' ? (payload.text || '') : cleanResearchText(payload.text || '')
-      onToken?.(token)
+      onToken?.(toDisplayText(token))
     }
     if (payload.type === 'sources') onSources?.(payload.sources || [])
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
-      onError?.(payload.message || 'Apollo backend error')
-      throw new Error(payload.message || 'Apollo backend error')
+      const safeMessage = safeErrorText(payload.message)
+      onError?.(safeMessage)
+      throw new Error(safeMessage)
     }
   }
 
@@ -296,7 +320,7 @@ export async function getSocraticState(notebookId, sessionId, userId = 'default'
   const response = await fetch(
     `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}/socratic-state?user_id=${encodeURIComponent(userId)}`,
   )
-  if (!response.ok) throw new Error(await parseError(response, 'Socratic session state lookup failed'))
+  if (!response.ok) throw new Error(await parseError(response, response.status === 404 ? 'Socratic session state is not available on the deployed backend yet.' : 'Socratic session state lookup failed'))
   return response.json()
 }
 
@@ -326,7 +350,7 @@ export async function generateSocraticQuickCheck({
       model,
     }),
   })
-  if (!response.ok) throw new Error(await parseError(response, 'Quick Check generation failed'))
+  if (!response.ok) throw new Error(await parseError(response, response.status === 404 ? 'Socratic Quick Check is not available on the deployed backend yet.' : 'Quick Check generation failed'))
   return response.json()
 }
 
