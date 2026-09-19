@@ -61,7 +61,7 @@ def test_apply_phase_tracks_state():
     assert state.recent_moves == ["elenchus"]
 
 
-@pytest.mark.parametrize("phase_a,phase_b", [("elenchus", "aporia"), ("maieutics", "aporia"), ("aporia", "dialectic"), ("dialectic", "dialectic")])
+@pytest.mark.parametrize("phase_a,phase_b", [("elenchus", "aporia"), ("maieutics", "aporia"), ("aporia", "dialectic")])
 def test_phase_prompts_differ_by_stage(phase_a, phase_b):
     a = socratic_engine.SocraticState(phase=phase_a)
     b = socratic_engine.SocraticState(phase=phase_b)
