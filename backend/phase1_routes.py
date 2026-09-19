@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from rag_service import get_notebook
 from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, get_socratic_state, list_all_sessions, list_messages, list_notes, list_sessions, rename_session, save_socratic_state, update_note
+from auth import request_user_id
+from rate_limit import enforce as enforce_rate_limit
 
 
 class Phase1ChatMessage(BaseModel):
@@ -75,23 +77,29 @@ def _register_chat(app: FastAPI) -> None:
 
         if not request.notebook_id:
             raise HTTPException(status_code=400, detail="A notebook is required for workspace chat")
-        _check_notebook(request.user_id, request.notebook_id)
-        if request.session_id and not get_session(request.user_id, request.notebook_id, request.session_id):
+        authorization = http_request.headers.get("authorization", "")
+        token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else None
+        user_id = request_user_id(token, request.user_id, allow_legacy=True)
+        _check_notebook(user_id, request.notebook_id)
+        if request.session_id and not get_session(user_id, request.notebook_id, request.session_id):
             raise HTTPException(status_code=404, detail="Chat session not found")
-        session = get_session(request.user_id, request.notebook_id, request.session_id) if request.session_id else create_session(request.user_id, request.notebook_id)
+        session = get_session(user_id, request.notebook_id, request.session_id) if request.session_id else create_session(user_id, request.notebook_id)
         last_user = next((message.content for message in reversed(request.messages) if message.role == "user"), "").strip()
         if not last_user:
             raise HTTPException(status_code=400, detail="No user message supplied")
 
-        rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
-        allowed, retry_after = _check_rate_limit(rate_key)
-        if not allowed:
-            raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+        enforce_rate_limit(
+            http_request,
+            user_id=user_id,
+            bucket="workspace_chat",
+            limit=int(__import__("os").getenv("APOLLO_RATE_LIMIT_MAX", "20")),
+            window_seconds=int(__import__("os").getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "600")),
+        )
 
         def stream():
             if not request.session_id:
                 yield _event({"type": "session", "session": session})
-            append_message(request.user_id, request.notebook_id, session["id"], "user", last_user)
+            append_message(user_id, request.notebook_id, session["id"], "user", last_user)
             built = build_context(
                 request.user_id,
                 request.notebook_id,
@@ -122,7 +130,7 @@ def _register_chat(app: FastAPI) -> None:
                 socratic_state = state_from_dict(persisted)
                 topic = (request.socratic_topic or socratic_state.topic or request.notebook_title or "").strip() or last_user[:120]
                 if socratic_state.topic == "":
-                    mastery = get_mastery(request.user_id, topic)
+                    mastery = get_mastery(user_id, topic)
                     if mastery:
                         socratic_state.mastery_score = float(mastery.get("score", 30.0))
                         socratic_state.mastery_tier = str(mastery.get("tier") or tier_for_score(socratic_state.mastery_score))
