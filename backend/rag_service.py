@@ -388,48 +388,49 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes,
             if claim_path:
                 claim_path.unlink(missing_ok=True)
 
-    with _LOCK:
-        metadata = _load_source_meta(notebook_id)
-        metadata[filename] = {"kind": kind, "status": "processing", "error": None, "source_url": source_url, "updated": now}
-        _save_source_meta(notebook_id, metadata)
-        _save_source_payload_fs(notebook_id, filename, raw)
     try:
-        text = _extract_text(filename, raw)
-        tokenized = chunk_text(text, filename=filename)
-        if not tokenized:
-            raise ValueError("No readable text found in source")
-        new_chunks = [
-            {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
-            for item in tokenized
-        ]
-    except Exception as exc:
         with _LOCK:
             metadata = _load_source_meta(notebook_id)
-            metadata[filename] = {"kind": kind, "status": "failed", "error": str(exc)[:500], "source_url": source_url, "updated": _now()}
+            metadata[filename] = {"kind": kind, "status": "processing", "error": None, "source_url": source_url, "updated": now}
             _save_source_meta(notebook_id, metadata)
+            _save_source_payload_fs(notebook_id, filename, raw)
+
+        try:
+            text = _extract_text(filename, raw)
+            tokenized = chunk_text(text, filename=filename)
+            if not tokenized:
+                raise ValueError("No readable text found in source")
+            new_chunks = [
+                {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
+                for item in tokenized
+            ]
+        except Exception as exc:
+            with _LOCK:
+                metadata = _load_source_meta(notebook_id)
+                metadata[filename] = {"kind": kind, "status": "failed", "error": str(exc)[:500], "source_url": source_url, "updated": _now()}
+                _save_source_meta(notebook_id, metadata)
+            raise
+
+        with _LOCK:
+            existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
+            all_chunks = existing + new_chunks
+            _save_chunks(notebook_id, all_chunks)
+            metadata = _load_source_meta(notebook_id)
+            metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
+            _save_source_meta(notebook_id, metadata)
+            key = _user_key(user_id)
+            manifest = _load_manifest()
+            for notebook in manifest.get(key, []):
+                if notebook["id"] == notebook_id:
+                    notebook["updated"] = now
+                    notebook["source_count"] = len(list_sources(user_id, notebook_id))
+                    notebook["node_count"] = len(all_chunks)
+                    break
+            _save_manifest(manifest)
+        return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
+    finally:
         if claim_path:
             claim_path.unlink(missing_ok=True)
-        raise
-
-    with _LOCK:
-        existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
-        all_chunks = existing + new_chunks
-        _save_chunks(notebook_id, all_chunks)
-        metadata = _load_source_meta(notebook_id)
-        metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
-        _save_source_meta(notebook_id, metadata)
-        key = _user_key(user_id)
-        manifest = _load_manifest()
-        for notebook in manifest.get(key, []):
-            if notebook["id"] == notebook_id:
-                notebook["updated"] = now
-                notebook["source_count"] = len(list_sources(user_id, notebook_id))
-                notebook["node_count"] = len(all_chunks)
-                break
-        _save_manifest(manifest)
-    if claim_path:
-        claim_path.unlink(missing_ok=True)
-    return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
 
 
 def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:
