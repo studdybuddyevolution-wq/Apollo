@@ -369,9 +369,9 @@ def _stream_gemini(request: ChatRequest, system_content: str, model: str):
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
-    if request.research_mode == "socratic":
+    if request.research_mode == "socratic" and not request.socratic_state:
         from socratic_engine import phase_label, phase_status, state_from_dict
-        state = state_from_dict(request.socratic_state)
+        state = state_from_dict(None)
         yield _event({
             "type": "socratic_state",
             "phase": state.phase,
@@ -386,7 +386,7 @@ def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     if request.research_mode in {"deep", "study"}:
         yield from _stream_deep_research(request, system["content"], context, source_names)
         return
-    if request.web_enabled:
+    if request.web_enabled and request.research_mode != "socratic":
         yield from _stream_web(request, system["content"])
         return
     groq_model = request.model or PRIMARY_MODEL
