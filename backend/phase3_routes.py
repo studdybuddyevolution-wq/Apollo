@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from context_builder import build_context
 from diagrams import build_diagram_prompt, content_overlap_ratio, generate_and_render
-from main import _check_rate_limit
+from rate_limit import enforce as enforce_rate_limit
 from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text, gemini_model_chain
 from rag_service import get_notebook, get_notebook_chunks
 from storage import STORE
@@ -44,14 +44,13 @@ def _now() -> str:
 
 
 def _enforce_rate_limit(request: Request, user_id: str | None) -> None:
-    rate_key = user_id or (request.client.host if request.client else "anonymous")
-    allowed, retry_after = _check_rate_limit(rate_key)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
-            headers={"Retry-After": str(retry_after)},
-        )
+    enforce_rate_limit(
+        request,
+        user_id=user_id,
+        bucket="studio_generation",
+        limit=int(os.getenv("APOLLO_STUDIO_RATE_LIMIT_MAX", "8")),
+        window_seconds=int(os.getenv("APOLLO_STUDIO_RATE_LIMIT_WINDOW_SECONDS", "600")),
+    )
 
 
 def _persist_output(notebook_id: str, insight_type: str, content: str, model_used: str, source_name: str = "__studio__") -> dict[str, Any]:
