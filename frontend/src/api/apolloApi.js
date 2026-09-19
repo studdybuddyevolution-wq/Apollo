@@ -1,3 +1,4 @@
+import { authFetch } from './authApi'
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
 function cleanResearchText(value) {
@@ -36,7 +37,7 @@ async function openChat({
   signal,
 }) {
   const workspace = Boolean(notebookId)
-  const response = await fetch(`${API_BASE}${workspace ? '/api/chat/workspace' : '/api/chat'}`, {
+  const response = await authFetch(`${API_BASE}${workspace ? '/api/chat/workspace' : '/api/chat'}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -176,7 +177,7 @@ export async function streamChat({
 }
 
 export async function checkHealth() {
-  const response = await fetch(`${API_BASE}/api/health`)
+  const response = await authFetch(`${API_BASE}/api/health`)
   if (!response.ok) throw new Error(`Health check failed: ${response.status}`)
   return response.json()
 }
@@ -217,7 +218,7 @@ function sleepWithSignal(ms, signal) {
 }
 
 export async function generatePortfolioDiagram(content, diagramHint, userId = 'default', signal) {
-  const response = await fetch(`${API_BASE}/api/portfolio/diagram`, {
+  const response = await authFetch(`${API_BASE}/api/portfolio/diagram`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -236,7 +237,7 @@ export async function generateNotebookDiagram(notebookId, activeSources = [], di
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const response = await fetch(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/mindmap`, {
+      const response = await authFetch(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/mindmap`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal,
@@ -261,7 +262,7 @@ export async function generateNotebookDiagram(notebookId, activeSources = [], di
 }
 
 export async function getJob(jobId, signal) {
-  const response = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, { signal })
+  const response = await authFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, { signal })
   if (!response.ok) throw new Error(await parseError(response, 'Job lookup failed'))
   return response.json()
 }
@@ -293,7 +294,7 @@ export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
 
 
 export async function getSocraticState(notebookId, sessionId, userId = 'default') {
-  const response = await fetch(
+  const response = await authFetch(
     `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}/socratic-state?user_id=${encodeURIComponent(userId)}`,
   )
   if (!response.ok) throw new Error(await parseError(response, 'Socratic session state lookup failed'))
@@ -311,7 +312,7 @@ export async function generateSocraticQuickCheck({
   model = null,
   signal,
 }) {
-  const response = await fetch(`${API_BASE}/api/socratic/quick-check`, {
+  const response = await authFetch(`${API_BASE}/api/socratic/quick-check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -342,7 +343,7 @@ export async function gradeSocraticQuickCheck({
   model = null,
   signal,
 }) {
-  const response = await fetch(`${API_BASE}/api/socratic/quick-check/grade`, {
+  const response = await authFetch(`${API_BASE}/api/socratic/quick-check/grade`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
