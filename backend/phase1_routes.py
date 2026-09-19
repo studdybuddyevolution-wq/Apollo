@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from rag_service import get_notebook
-from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, list_messages, list_notes, list_sessions, rename_session, update_note
+from workspace_service import append_message, create_note, create_session, delete_note, delete_session, get_session, get_socratic_state, list_messages, list_notes, list_sessions, rename_session, save_socratic_state, update_note
 
 
 class Phase1ChatMessage(BaseModel):
@@ -28,7 +28,11 @@ class Phase1ChatRequest(BaseModel):
     source_modes: dict[str, str] = Field(default_factory=dict)
     user_id: str | None = None
     web_enabled: bool = False
-    research_mode: Literal["quick", "web", "deep", "study"] = "quick"
+    research_mode: Literal["quick", "web", "deep", "study", "socratic"] = "quick"
+    socratic_topic: str | None = None
+    socratic_tier: str | None = None
+    socratic_score: float | None = None
+    socratic_force_advance: bool = False
     session_id: str | None = None
 
 
@@ -102,6 +106,48 @@ def _register_chat(app: FastAPI) -> None:
             source_names = built["full_sources"]
             raw = request.model_dump()
             raw["messages"] = [type("Msg", (), item.model_dump())() for item in request.messages]
+
+            socratic_state = None
+            if request.research_mode == "socratic":
+                from socratic_engine import (
+                    SocraticState,
+                    apply_phase,
+                    next_phase,
+                    state_from_dict,
+                    state_to_dict,
+                    tier_for_score,
+                )
+                from socratic_engine import get_mastery
+                persisted = get_socratic_state(request.user_id, request.notebook_id, session["id"])
+                socratic_state = state_from_dict(persisted)
+                topic = (request.socratic_topic or socratic_state.topic or request.notebook_title or "").strip() or last_user[:120]
+                if socratic_state.topic == "":
+                    mastery = get_mastery(request.user_id, topic)
+                    if mastery:
+                        socratic_state.mastery_score = float(mastery.get("score", 30.0))
+                        socratic_state.mastery_tier = str(mastery.get("tier") or tier_for_score(socratic_state.mastery_score))
+                selected_phase = next_phase(
+                    socratic_state,
+                    last_user,
+                    force_advance=request.socratic_force_advance,
+                )
+                socratic_state = apply_phase(socratic_state, selected_phase, topic)
+                raw["socratic_topic"] = topic
+                raw["socratic_state"] = state_to_dict(socratic_state)
+                raw["socratic_score"] = socratic_state.mastery_score
+                yield _event({
+                    "type": "socratic_state",
+                    "phase": socratic_state.phase,
+                    "phase_label": __import__("socratic_engine").phase_label(socratic_state.phase),
+                    "status": __import__("socratic_engine").phase_status(socratic_state.phase),
+                    "in_dialectic_loop": socratic_state.in_dialectic_loop,
+                    "maieutics_count": socratic_state.maieutics_count,
+                    "mastery_score": round(socratic_state.mastery_score, 1),
+                    "mastery_tier": socratic_state.mastery_tier,
+                    "user_response_count": socratic_state.user_response_count,
+                    "topic": socratic_state.topic,
+                })
+
             main_request = type("WorkspaceChat", (), raw)()
             generated: list[str] = []
             sources: list[dict[str, Any]] = []
@@ -122,6 +168,8 @@ def _register_chat(app: FastAPI) -> None:
                     yield event
                 if generated:
                     append_message(request.user_id, request.notebook_id, session["id"], "assistant", "".join(generated), model_name, sources)
+                if socratic_state is not None:
+                    save_socratic_state(request.user_id, request.notebook_id, session["id"], state_to_dict(socratic_state))
             except GeneratorExit:
                 if generated:
                     append_message(
@@ -133,10 +181,14 @@ def _register_chat(app: FastAPI) -> None:
                         model_name,
                         sources,
                     )
+                if socratic_state is not None:
+                    save_socratic_state(request.user_id, request.notebook_id, session["id"], state_to_dict(socratic_state))
                 return
             except Exception as exc:
                 if generated:
                     append_message(request.user_id, request.notebook_id, session["id"], "assistant", "".join(generated), model_name, sources)
+                if socratic_state is not None:
+                    save_socratic_state(request.user_id, request.notebook_id, session["id"], state_to_dict(socratic_state))
                 yield _event({"type": "error", "message": str(exc)})
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no-cache"})
@@ -167,6 +219,13 @@ def _register_sessions(app: FastAPI) -> None:
         if not delete_session(user_id, notebook_id, session_id):
             raise HTTPException(status_code=404, detail="Chat session not found")
         return {"deleted": True, "id": session_id}
+
+    @app.get("/api/notebooks/{notebook_id}/sessions/{session_id}/socratic-state")
+    def session_socratic_state(notebook_id: str, session_id: str, user_id: str = "default"):
+        _check_notebook(user_id, notebook_id)
+        if not get_session(user_id, notebook_id, session_id):
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        return {"state": get_socratic_state(user_id, notebook_id, session_id)}
 
     @app.get("/api/notebooks/{notebook_id}/sessions/{session_id}/messages")
     def session_messages(notebook_id: str, session_id: str, user_id: str = "default"):

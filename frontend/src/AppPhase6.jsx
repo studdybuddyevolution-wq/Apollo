@@ -5,7 +5,7 @@ import {
   LoaderCircle, Paperclip, Plus, Search, Save, Settings, Sparkles, Upload, User,
   Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2, RefreshCw, Square, Pencil,
 } from 'lucide-react'
-import { streamChat } from './api/apolloApi'
+import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
@@ -27,6 +27,7 @@ const NAV_ITEMS = [
 
 const RESEARCH_MODES = [
   { id: 'quick', label: 'Quick answer', icon: Sparkles, description: 'Fast answer from Apollo' },
+  { id: 'socratic', label: 'Socratic Tutor', icon: BrainCircuit, description: 'Guided reasoning instead of direct answers' },
   { id: 'web', label: 'Web search', icon: Globe, description: 'Current information + sources' },
   { id: 'deep', label: 'Deep Research', icon: SlidersHorizontal, description: 'Multi-step web research' },
   { id: 'study', label: 'Study Research', icon: BookOpen, description: 'Notebook + web synthesis' },
@@ -151,18 +152,18 @@ function TopBar({ active, toggleSources, toggleStudio, toggleSessions, toggleNot
     <header className="topbar">
       <div className="topbar-left"><div className="breadcrumb"><span className="breadcrumb-muted">Apollo</span><span>/</span><strong>{item.label}</strong></div></div>
       <div className="topbar-actions">
-        {active === 'console' && <>
+        {(active === 'console' || active === 'tutor') && <>
           <button className="topbar-tool" onClick={toggleSessions}><History size={16} /> Chats</button>
           <button className="topbar-tool" onClick={toggleNotes}><Save size={16} /> Notes</button>
           <button className="topbar-tool" onClick={toggleSources}><FolderOpen size={16} /> Sources</button>
-          <button className="topbar-tool" onClick={toggleStudio}><WandSparkles size={16} /> Studio</button>
-          <label className="research-mode-select" title="Choose how Apollo researches this question">
+          {active === 'console' && <button className="topbar-tool" onClick={toggleStudio}><WandSparkles size={16} /> Studio</button>}
+          {active === 'console' && <label className="research-mode-select" title="Choose how Apollo researches this question">
             <currentMode.icon size={15} />
             <select value={researchMode} onChange={(e) => setResearchMode(e.target.value)} aria-label="Research mode">
               {RESEARCH_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
             </select>
             <ChevronDown size={13} />
-          </label>
+          </label>}
         </>}
         <button className="topbar-chip"><span className="status-dot" /> Online</button>
       </div>
@@ -553,6 +554,210 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   </aside>
 }
 
+function SocraticTutor({
+  notebook,
+  activeSources,
+  sourceModes,
+  userId,
+  sessionId,
+  messages,
+  busy,
+  model,
+  socraticState,
+  setSocraticState,
+  send,
+  stop,
+  newChat,
+  onSaveNote,
+}) {
+  const [topic, setTopic] = useState(socraticState?.topic || '')
+  const [quickCheck, setQuickCheck] = useState(null)
+  const [quickAnswer, setQuickAnswer] = useState('')
+  const [quickBusy, setQuickBusy] = useState(false)
+  const [quickFeedback, setQuickFeedback] = useState(null)
+
+  useEffect(() => {
+    setTopic(socraticState?.topic || '')
+    setQuickCheck(null)
+    setQuickAnswer('')
+    setQuickFeedback(null)
+  }, [sessionId, socraticState?.topic])
+
+  const phase = socraticState?.phase || 'elicitation'
+  const displayPhases = [
+    ['elenchus', 'Elenchus', 'Question assumptions'],
+    ['maieutics', 'Maieutics', 'Guide discovery'],
+    ['aporia', 'Aporia', 'Test the idea'],
+    ['dialectic', 'Dialectic', 'Synthesize understanding'],
+  ]
+  const phaseIndex = displayPhases.findIndex((item) => item[0] === phase)
+  const progress = phase === 'conclusion' ? 100 : Math.max(0, Math.min(100, ((phaseIndex + 1) / displayPhases.length) * 100))
+  const effectiveTopic = topic.trim() || notebook?.title || 'General study'
+
+  const runQuickCheck = async () => {
+    if (!notebook || !sessionId || quickBusy) return
+    setQuickBusy(true)
+    setQuickFeedback(null)
+    try {
+      const result = await generateSocraticQuickCheck({
+        topic: effectiveTopic,
+        tier: socraticState?.mastery_tier || 'Developing',
+        score: Number(socraticState?.mastery_score ?? 30),
+        notebookId: notebook.id,
+        activeSources,
+        sourceModes,
+        userId,
+        model: model || null,
+      })
+      setQuickCheck(result.question)
+      setQuickAnswer('')
+    } catch (error) {
+      setQuickFeedback({ type: 'error', text: error?.message || 'Quick Check could not be prepared.' })
+    } finally {
+      setQuickBusy(false)
+    }
+  }
+
+  const submitQuickCheck = async () => {
+    if (!quickCheck?.question || !quickAnswer.trim() || quickBusy) return
+    setQuickBusy(true)
+    try {
+      const result = await gradeSocraticQuickCheck({
+        topic: effectiveTopic,
+        question: quickCheck.question,
+        expectedAnswer: quickCheck.expected_answer,
+        studentAnswer: quickAnswer.trim(),
+        currentScore: Number(socraticState?.mastery_score ?? 30),
+        notebookId: notebook.id,
+        sessionId,
+        userId,
+        model: model || null,
+      })
+      setSocraticState((current) => ({
+        ...(current || {}),
+        mastery_score: result.score,
+        mastery_tier: result.tier,
+      }))
+      setQuickFeedback({ type: result.correct ? 'success' : 'info', text: result.verdict + (result.feedback ? ' — ' + result.feedback : '') })
+      setQuickCheck(null)
+      setQuickAnswer('')
+    } catch (error) {
+      setQuickFeedback({ type: 'error', text: error?.message || 'Quick Check grading failed.' })
+    } finally {
+      setQuickBusy(false)
+    }
+  }
+
+  const sendSocratic = (text, options = {}) => {
+    if (!notebook) return
+    send(text, 'socratic', {
+      topic: effectiveTopic,
+      score: Number(socraticState?.mastery_score ?? 30),
+      forceAdvance: Boolean(options.forceAdvance),
+    })
+  }
+
+  return (
+    <main className="main-content" style={{ overflow: 'hidden' }}>
+      <div className="socratic-page" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div className="page-heading" style={{ marginBottom: 10 }}>
+          <div className="page-icon"><BrainCircuit size={22} /></div>
+          <div style={{ minWidth: 0 }}>
+            <div className="eyebrow">SOCRATIC STUDY</div>
+            <h1>Socratic Tutor</h1>
+            <p>{notebook ? 'Apollo guides your reasoning instead of handing over the answer.' : 'Select or create a notebook to start a persistent Socratic session.'}</p>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 7 }}>
+            <button className="upload-button" onClick={newChat} disabled={!notebook || busy}>New Socratic session</button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 250px', gap: 12, minHeight: 0, flex: 1 }}>
+          <section style={{ minHeight: 0, display: 'flex', flexDirection: 'column', border: '1px solid var(--surface-high)', borderRadius: 12, background: 'var(--surface-container-low)', overflow: 'hidden' }}>
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--surface-high)', background: 'var(--surface-container)' }}>
+              <label className="muted-label" htmlFor="socratic-topic">TOPIC / IDEA</label>
+              <input id="socratic-topic" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Why do I think memorizing formulas is the best way to learn physics?" style={{ width: '100%', marginTop: 5, padding: '9px 10px', borderRadius: 8, border: '1px solid var(--surface-high)', background: 'var(--surface-container-low)', color: 'var(--text)' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 7, fontSize: 10, color: 'var(--tertiary)' }}>
+                <span>{notebook ? notebook.title : 'No notebook selected'} · {activeSources.length} active sources</span>
+                <span>{socraticState?.mastery_tier || 'Developing'} · {Math.round(Number(socraticState?.mastery_score ?? 30))}/100</span>
+              </div>
+            </div>
+
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--surface-high)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div>
+                  <div className="muted-label">DIALOGUE PROGRESS</div>
+                  <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 3 }}>{socraticState?.status || (phase === 'conclusion' ? 'Wrapping up what you discovered' : 'Start by sharing a thought or hypothesis')}</div>
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--tertiary)' }}>{Math.round(progress)}%</div>
+              </div>
+              <div style={{ marginTop: 8, height: 5, background: 'var(--surface-high)', borderRadius: 999 }}>
+                <div style={{ width: progress + '%', height: '100%', borderRadius: 999, background: 'var(--primary)' }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginTop: 9 }}>
+                {displayPhases.map(([id, label, hint], index) => (
+                  <div key={id} title={hint} style={{ minWidth: 0, opacity: phase === 'conclusion' || index <= phaseIndex ? 1 : 0.45 }}>
+                    <div style={{ height: 4, borderRadius: 999, background: index <= phaseIndex ? 'var(--primary)' : 'var(--surface-high)' }} />
+                    <div style={{ fontSize: 9, marginTop: 4, color: phase === id ? 'var(--text)' : 'var(--tertiary)', fontWeight: phase === id ? 700 : 500 }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="chat-scroll" style={{ flex: 1, minHeight: 0, padding: 12 }}>
+              {!messages.length ? (
+                <div className="empty-chat-state">
+                  <div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div>
+                  <h2>{notebook ? 'Start with a belief, explanation, or question' : 'Select a notebook first'}</h2>
+                  <p>{notebook ? 'Apollo will probe one assumption at a time, guide discovery, and introduce relevant counterexamples before synthesizing what you learned.' : 'Socratic sessions use Apollo’s existing notebook/session persistence.'}</p>
+                </div>
+              ) : messages.map((message) => <Bubble key={message.id} message={message} onSaveNote={onSaveNote} canSaveNote={Boolean(notebook)} />)}
+              {busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> Apollo is thinking through the next Socratic move…</div>}
+            </div>
+
+            <div style={{ padding: '10px 12px', borderTop: '1px solid var(--surface-high)' }}>
+              {quickCheck && <div style={{ padding: 10, marginBottom: 8, borderRadius: 9, border: '1px solid var(--surface-high)', background: 'var(--surface-container)' }}>
+                <div className="muted-label">QUICK CHECK</div>
+                <strong style={{ display: 'block', marginTop: 4, fontSize: 12 }}>{quickCheck.question}</strong>
+                <textarea value={quickAnswer} onChange={(e) => setQuickAnswer(e.target.value)} disabled={quickBusy} rows={3} placeholder="Explain your reasoning…" style={{ width: '100%', marginTop: 7, resize: 'vertical', padding: 8, borderRadius: 7, border: '1px solid var(--surface-high)', background: 'var(--surface-container-low)', color: 'var(--text)' }} />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6 }}>
+                  <button className="icon-button" onClick={() => { setQuickCheck(null); setQuickAnswer(''); }} disabled={quickBusy}>Cancel</button>
+                  <button className="upload-button" onClick={submitQuickCheck} disabled={quickBusy || !quickAnswer.trim()}>{quickBusy ? 'Grading…' : 'Submit'}</button>
+                </div>
+              </div>}
+              {quickFeedback && <div role="status" style={{ padding: 8, marginBottom: 7, borderRadius: 7, background: 'var(--surface-container)', color: quickFeedback.type === 'error' ? 'var(--error)' : 'var(--text)', fontSize: 10 }}>{quickFeedback.text}</div>}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 7 }}>
+                <button className="upload-button" onClick={runQuickCheck} disabled={!notebook || !sessionId || busy || quickBusy || Boolean(quickCheck)}>{quickBusy && !quickCheck ? 'Preparing…' : 'Quick Check'}</button>
+                {notebook && phase !== 'dialectic' && phase !== 'conclusion' && <button className="upload-button" onClick={() => sendSocratic('Continue to the next stage.', { forceAdvance: true })} disabled={busy}>Move Forward</button>}
+              </div>
+              {notebook ? <Composer send={(value) => sendSocratic(value)} stop={stop} busy={busy} researchMode="socratic" /> : <div style={{ color: 'var(--tertiary)', fontSize: 11, padding: 8 }}>Create/select a notebook to enable persistent Socratic Study.</div>}
+            </div>
+          </section>
+
+          <aside style={{ minWidth: 0, border: '1px solid var(--surface-high)', borderRadius: 12, background: 'var(--surface-container-low)', padding: 12, overflow: 'auto' }}>
+            <div className="muted-label">CURRENT STATE</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginTop: 5 }}>{phase === 'conclusion' ? 'Conclusion' : (displayPhases.find((item) => item[0] === phase)?.[1] || 'Elenchus')}</div>
+            <div style={{ fontSize: 10, lineHeight: 1.45, color: 'var(--tertiary)', marginTop: 3 }}>{socraticState?.status || 'Share your starting idea.'}</div>
+            <div style={{ marginTop: 14, padding: 10, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+              <div className="muted-label">MASTERY</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>{Math.round(Number(socraticState?.mastery_score ?? 30))}<span style={{ fontSize: 11, color: 'var(--tertiary)' }}>/100</span></div>
+              <div style={{ fontSize: 11, marginTop: 1 }}>{socraticState?.mastery_tier || 'Developing'}</div>
+              <div style={{ height: 4, background: 'var(--surface-high)', borderRadius: 999, marginTop: 7 }}><div style={{ width: Math.max(0, Math.min(100, Number(socraticState?.mastery_score ?? 30))) + '%', height: '100%', borderRadius: 999, background: 'var(--primary)' }} /></div>
+            </div>
+            <div style={{ marginTop: 12, display: 'grid', gap: 7 }}>
+              {displayPhases.map(([id, label, hint]) => <div key={id} style={{ padding: 8, borderRadius: 8, border: '1px solid var(--surface-high)', background: phase === id ? 'var(--surface-container)' : 'transparent', opacity: phase === 'conclusion' || displayPhases.findIndex((item) => item[0] === id) <= phaseIndex ? 1 : 0.5 }}><strong style={{ fontSize: 10 }}>{label}</strong><div style={{ fontSize: 9, color: 'var(--tertiary)', marginTop: 2 }}>{hint}</div></div>)}
+            </div>
+            <div style={{ marginTop: 12, fontSize: 10, lineHeight: 1.5, color: 'var(--tertiary)' }}>
+              <strong style={{ color: 'var(--text)' }}>How Apollo teaches</strong>
+              <div style={{ marginTop: 4 }}>Questions → your reasoning → guidance → a useful challenge → synthesis.</div>
+              <div style={{ marginTop: 5 }}>Maieutics is bounded so the session keeps moving.</div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+  )
+}
 export default function AppPhase6() {
   const [active, setActive] = useState('console')
   const [collapsed, setCollapsed] = useState(false)
@@ -571,6 +776,7 @@ export default function AppPhase6() {
   const [notes, setNotes] = useState([])
   const [busy, setBusy] = useState(false)
   const [model, setModel] = useState('')
+  const [socraticState, setSocraticState] = useState(null)
   const [tool, setTool] = useState('slides')
   const uid = useMemo(() => getUserId(), [])
   const streamAbortRef = useRef(null)
@@ -614,8 +820,12 @@ export default function AppPhase6() {
     setSessions(nextSessions)
     const nextSession = nextSessions[0]
     setSessionId(nextSession.id)
-    const messageData = await getSessionMessages(id, nextSession.id, uid)
+    const [messageData, socraticData] = await Promise.all([
+      getSessionMessages(id, nextSession.id, uid),
+      getSocraticState(id, nextSession.id, uid).catch(() => ({ state: null })),
+    ])
     setMessages(messageData.messages || [])
+    setSocraticState(socraticData.state || null)
     setNotes(noteData.notes || [])
   }
 
@@ -652,6 +862,7 @@ export default function AppPhase6() {
       const nextId = remaining[0]?.id || ''
       setActiveId(nextId)
       setMessages([])
+      setSocraticState(null)
       setSources([])
       setSourceModes({})
       setSessions([])
@@ -718,14 +929,19 @@ export default function AppPhase6() {
     setSessions((current) => [session, ...current])
     setSessionId(session.id)
     setMessages([])
+    setSocraticState(null)
     setSessionOpen(false)
   }
 
   const selectSession = async (id) => {
     if (!activeId || id === sessionId) return
     setSessionId(id)
-    const data = await getSessionMessages(activeId, id, uid)
+    const [data, socraticData] = await Promise.all([
+      getSessionMessages(activeId, id, uid),
+      getSocraticState(activeId, id, uid).catch(() => ({ state: null })),
+    ])
     setMessages(data.messages || [])
+    setSocraticState(socraticData.state || null)
     setSessionOpen(false)
   }
 
@@ -745,6 +961,7 @@ export default function AppPhase6() {
       setSessions([created])
       setSessionId(created.id)
       setMessages([])
+      setSocraticState(null)
     } else {
       setSessions(remaining)
       if (session.id === sessionId) await selectSession(remaining[0].id)
@@ -778,11 +995,13 @@ export default function AppPhase6() {
     streamAbortRef.current?.abort()
   }
 
-  const send = async (text) => {
+  const send = async (text, overrideMode = null, socraticOptions = {}) => {
     if (busy || !text?.trim()) return
     const currentNotebook = notebook
+    const requestMode = overrideMode || researchMode
+    if (requestMode === 'socratic' && !currentNotebook) return
     if (currentNotebook) rememberRecent('notebooks', currentNotebook.id, uid)
-    if (!currentNotebook && researchMode === 'study') {
+    if (!currentNotebook && requestMode === 'study') {
       // Study mode is still useful without notebook context; it becomes web-only research.
     }
     let requestSessionId = sessionId
@@ -795,8 +1014,7 @@ export default function AppPhase6() {
     const user = { id: `${Date.now()}u`, role: 'user', content: text.trim() }
     const assistantId = `${Date.now()}a`
     const history = [...messages.map((m) => ({ role: m.role, content: m.content })), user]
-    const needsWeb = researchMode === 'web' || researchMode === 'deep' || researchMode === 'study'
-    const requestMode = researchMode
+    const needsWeb = requestMode === 'web' || requestMode === 'deep' || requestMode === 'study'
     const controller = new AbortController()
     streamAbortRef.current = controller
     setMessages((v) => [...v, user, { id: assistantId, role: 'assistant', content: '', model, streaming: true, sources: [], researchMode: requestMode }])
@@ -813,6 +1031,9 @@ export default function AppPhase6() {
         userId: uid,
         webEnabled: needsWeb,
         researchMode: requestMode,
+        socraticTopic: socraticOptions.topic || '',
+        socraticScore: socraticOptions.score ?? null,
+        socraticForceAdvance: Boolean(socraticOptions.forceAdvance),
         signal: controller.signal,
         onSession: (session) => {
           if (!session) return
@@ -824,6 +1045,7 @@ export default function AppPhase6() {
         onToken: (token) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m)),
         onRestart: () => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: '', streaming: true } : m)),
         onGroundingCheck: (payload) => setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, groundingWarning: payload.warning || null, overlapRatio: payload.overlap_ratio } : m)),
+        onSocraticState: (payload) => setSocraticState(payload),
         onDone: () => {
           setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m))
           setBusy(false)
@@ -849,7 +1071,7 @@ export default function AppPhase6() {
   const NavIcon = navIcon
 
   return <div className="apollo-app">
-    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]) }} create={create} renameNotebookUi={renameNotebookUi} removeNotebook={removeNotebook} />
+    <Sidebar active={active} setActive={setActive} collapsed={collapsed} setCollapsed={setCollapsed} notebooks={notebooks} activeId={activeId} setNotebook={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]); setSocraticState(null) }} create={create} renameNotebookUi={renameNotebookUi} removeNotebook={removeNotebook} />
     <section className="app-shell">
       <TopBar
         active={active}
@@ -864,11 +1086,26 @@ export default function AppPhase6() {
         <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'No notebook required for quick or web chat. Create one to save sources, chats and notes.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
         <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Ask Apollo directly'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Quick and Web modes work without a notebook. Deep/Study modes can research the web and add notebook context when one is selected.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote} canSaveNote={Boolean(notebook)}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
       </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} stop={stop} busy={busy} researchMode={researchMode}/></div></main>
-        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setAllSourceMode={setAllSourceMode} setActiveId={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} removeSource={removeSourceUi} retrySource={retrySourceUi} refreshSource={refreshSourceUi} />}
+        {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setAllSourceMode={setAllSourceMode} setActiveId={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]); setSocraticState(null) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} removeSource={removeSourceUi} retrySource={retrySourceUi} refreshSource={refreshSourceUi} />}
         {sessionOpen && <SessionPanel sessions={sessions} activeSessionId={sessionId} selectSession={selectSession} createNew={newChat} rename={rename} remove={remove} close={() => setSessionOpen(false)} />}
         {notesOpen && <NotesPanel notes={notes} remove={removeNote} close={() => setNotesOpen(false)} />}
         {studioOpen && <StudioPanel close={() => setStudioOpen(false)} tool={tool} setTool={setTool} activeId={activeId} sources={sources} activeSources={activeSources} userId={uid} openSources={() => { setStudioOpen(false); setSourceOpen(true) }} />}
-      </div> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      </div> : active === 'tutor' ? <SocraticTutor
+        notebook={notebook}
+        activeSources={activeSources}
+        sourceModes={sourceModes}
+        userId={uid}
+        sessionId={sessionId}
+        messages={messages}
+        busy={busy}
+        model={model}
+        socraticState={socraticState}
+        setSocraticState={setSocraticState}
+        send={send}
+        stop={stop}
+        newChat={newChat}
+        onSaveNote={saveNote}
+      /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
