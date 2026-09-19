@@ -17,6 +17,8 @@ from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
+from request_limits import RequestBodyLimitMiddleware, get_max_request_body_bytes, get_max_upload_bytes
+
 from context_builder import build_context
 from diagrams import build_diagram_prompt, generate_and_render, content_overlap_ratio
 from jobs import enqueue_job, enqueue_embedding_job, get_job
@@ -42,7 +44,8 @@ WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 RATE_LIMIT_MAX = int(os.getenv("APOLLO_RATE_LIMIT_MAX", "20"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "600"))
-MAX_UPLOAD_BYTES = int(os.getenv("APOLLO_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = get_max_upload_bytes()
+MAX_REQUEST_BODY_BYTES = get_max_request_body_bytes()
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: dict[str, list[float]] = defaultdict(list)
 
@@ -63,6 +66,7 @@ def _check_rate_limit(key: str) -> tuple[bool, int]:
 
 
 app = FastAPI(title="Apollo API", version="0.9.0")
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_REQUEST_BODY_BYTES)
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -403,6 +407,7 @@ def health() -> dict[str, object]:
         "embedding_dimensions": int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768")),
         "pgvector": bool(STORE and STORE.vector_available()),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
+        "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
         "storage_backend": "postgres" if STORE else "filesystem",
         "durable_storage": bool(STORE),
     }
