@@ -100,6 +100,17 @@ Then open the frontend at `http://localhost:5173`.
 
 Web URL ingestion validates every redirect and pins the HTTP connection to the validated public IP. Uploaded files are bounded by `APOLLO_MAX_UPLOAD_BYTES` before indexing. Long embedding work is tracked through Apollo jobs, and source failures expose retry controls in the Sources drawer.
 
+## Phase 8 production hardening
+
+Apollo enforces uploads at two layers. `APOLLO_MAX_UPLOAD_BYTES` is the per-file limit (25 MiB by default), and the raw ASGI request-body middleware rejects an oversized HTTP body before FastAPI multipart parsing. Malformed or non-positive upload-limit configuration falls back to the safe default. The request-body limit allows a bounded 512 KiB multipart envelope above the file limit.
+
+Uploaded source names are sanitized and collision-safe. Concurrent uploads of the same filename receive distinct source names instead of overwriting one another. Filesystem-fallback payload writes use a temporary file plus atomic replacement and clean up temporary files after failures. Production Postgres reservations are atomic at the notebook/source-name uniqueness boundary.
+
+Source lifecycle and embedding failures distinguish permanent validation failures from transient provider/network failures. Transient embedding failures receive bounded in-process retries with exponential backoff; permanent validation failures fail immediately. Manual URL/YouTube refresh and source retry endpoints return retry-oriented status information for transient failures.
+
+The backend health response exposes both `max_upload_bytes` and `max_request_body_bytes`, along with the existing `storage_backend` and `durable_storage` fields. Production should report `storage_backend=postgres` and `durable_storage=true` when `DATABASE_URL` is configured correctly.
+
+
 ## Production entrypoints and legacy code
 
 The active production entrypoints are:

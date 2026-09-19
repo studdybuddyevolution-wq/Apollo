@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from embeddings import embed_texts
+from error_classifier import is_retryable_source_error
 from storage import STORE
 
 
@@ -97,9 +98,16 @@ async def _embed_job(job: Job, source_name: str | None) -> None:
         batch_size = 50
         for start in range(0, total, batch_size):
             batch = chunks[start:start + batch_size]
-            vectors = await embed_texts([item["text"] for item in batch])
-            for item, vector in zip(batch, vectors):
-                STORE.upsert_chunk_embedding(item["id"], vector)
+            for attempt in range(3):
+                try:
+                    vectors = await embed_texts([item["text"] for item in batch])
+                    for item, vector in zip(batch, vectors):
+                        STORE.upsert_chunk_embedding(item["id"], vector)
+                    break
+                except Exception as exc:
+                    if attempt >= 2 or not is_retryable_source_error(exc):
+                        raise
+                    await asyncio.sleep(0.5 * (2 ** attempt))
             job.progress = min(99, int(((start + len(batch)) / total) * 100))
             _save(job)
         job.status = "completed"

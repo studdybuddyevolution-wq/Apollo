@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import threading
 import uuid
 from collections import Counter
@@ -66,6 +67,68 @@ def _source_payload_path(notebook_id: str, filename: str) -> Path:
     digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
     return _notebook_dir(notebook_id) / "payloads" / (digest + ".bin")
 
+def sanitize_source_filename(filename: str) -> str:
+    """Return a safe source name with no path components or control bytes."""
+    raw = str(filename or "").replace("\\", "/").strip()
+    safe = os.path.basename(raw)
+    if not safe or safe in {".", ".."}:
+        raise ValueError("Invalid source filename")
+    if "\x00" in safe or any(ord(char) < 32 for char in safe):
+        raise ValueError("Invalid source filename")
+    return safe
+
+
+def _source_candidate(filename: str, counter: int) -> str:
+    if counter == 0:
+        return filename
+    path = Path(filename)
+    return f"{path.stem} ({counter}){path.suffix}"
+
+
+def _reserve_filesystem_source_name(notebook_id: str, requested_name: str) -> tuple[str, Path]:
+    """Atomically claim a unique local source name for a development fallback."""
+    notebook_dir = _notebook_dir(notebook_id)
+    claims_dir = notebook_dir / ".claims"
+    claims_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata = _load_source_meta(notebook_id)
+    chunks = _load_chunks(notebook_id)
+    used = set(metadata)
+    used.update(str(item.get("source") or "") for item in chunks)
+
+    counter = 0
+    while True:
+        candidate = _source_candidate(requested_name, counter)
+        if candidate in used:
+            counter += 1
+            continue
+        claim_path = claims_dir / (hashlib.sha256(candidate.encode("utf-8")).hexdigest() + ".claim")
+        try:
+            with claim_path.open("x", encoding="utf-8") as handle:
+                handle.write(candidate)
+            return candidate, claim_path
+        except FileExistsError:
+            counter += 1
+
+
+def reserve_source_name(
+    user_id: str | None,
+    notebook_id: str,
+    filename: str,
+    *,
+    kind: str = "file",
+    source_url: str | None = None,
+) -> tuple[str, Path | None]:
+    """Reserve a unique source name before a new upload is processed."""
+    if not get_notebook(user_id, notebook_id):
+        raise KeyError("Notebook not found")
+    requested = sanitize_source_filename(filename)
+    if STORE:
+        return STORE.reserve_source_name(notebook_id, requested, kind, _now(), source_url), None
+    with _LOCK:
+        return _reserve_filesystem_source_name(notebook_id, requested)
+
+
 def _load_source_meta(notebook_id: str) -> dict[str, dict[str, Any]]:
     path = _source_meta_path(notebook_id)
     if not path.exists():
@@ -83,8 +146,24 @@ def _save_source_meta(notebook_id: str, meta: dict[str, dict[str, Any]]) -> None
 
 def _save_source_payload_fs(notebook_id: str, filename: str, raw: bytes) -> None:
     path = _source_payload_path(notebook_id, filename)
+    root = _notebook_dir(notebook_id).resolve()
+    resolved = path.resolve()
+    if not (resolved == root or root in resolved.parents):
+        raise ValueError("Invalid source payload path")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(raw)
+    fd, temp_name = tempfile.mkstemp(prefix=".payload-", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
 
 def _load_source_payload_fs(notebook_id: str, filename: str) -> bytes | None:
     path = _source_payload_path(notebook_id, filename)
@@ -276,9 +355,14 @@ def get_source_metadata(user_id: str | None, notebook_id: str, filename: str) ->
     return _load_source_meta(notebook_id).get(filename)
 
 
-def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes, *, kind: str = "file", source_url: str | None = None) -> dict[str, Any]:
+def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes, *, kind: str = "file", source_url: str | None = None, replace_existing: bool = True) -> dict[str, Any]:
     if not get_notebook(user_id, notebook_id):
         raise KeyError("Notebook not found")
+
+    filename = sanitize_source_filename(filename)
+    claim_path: Path | None = None
+    if not replace_existing:
+        filename, claim_path = reserve_source_name(user_id, notebook_id, filename, kind=kind, source_url=source_url)
 
     now = _now()
     if STORE:
@@ -300,45 +384,53 @@ def add_source(user_id: str | None, notebook_id: str, filename: str, raw: bytes,
         except Exception as exc:
             STORE.upsert_source_status(notebook_id, filename, kind, "failed", str(exc)[:500], now=_now(), source_url=source_url)
             raise
+        finally:
+            if claim_path:
+                claim_path.unlink(missing_ok=True)
 
-    with _LOCK:
-        metadata = _load_source_meta(notebook_id)
-        metadata[filename] = {"kind": kind, "status": "processing", "error": None, "source_url": source_url, "updated": now}
-        _save_source_meta(notebook_id, metadata)
-        _save_source_payload_fs(notebook_id, filename, raw)
     try:
-        text = _extract_text(filename, raw)
-        tokenized = chunk_text(text, filename=filename)
-        if not tokenized:
-            raise ValueError("No readable text found in source")
-        new_chunks = [
-            {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
-            for item in tokenized
-        ]
-    except Exception as exc:
         with _LOCK:
             metadata = _load_source_meta(notebook_id)
-            metadata[filename] = {"kind": kind, "status": "failed", "error": str(exc)[:500], "source_url": source_url, "updated": _now()}
+            metadata[filename] = {"kind": kind, "status": "processing", "error": None, "source_url": source_url, "updated": now}
             _save_source_meta(notebook_id, metadata)
-        raise
+            _save_source_payload_fs(notebook_id, filename, raw)
 
-    with _LOCK:
-        existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
-        all_chunks = existing + new_chunks
-        _save_chunks(notebook_id, all_chunks)
-        metadata = _load_source_meta(notebook_id)
-        metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
-        _save_source_meta(notebook_id, metadata)
-        key = _user_key(user_id)
-        manifest = _load_manifest()
-        for notebook in manifest.get(key, []):
-            if notebook["id"] == notebook_id:
-                notebook["updated"] = now
-                notebook["source_count"] = len(list_sources(user_id, notebook_id))
-                notebook["node_count"] = len(all_chunks)
-                break
-        _save_manifest(manifest)
-    return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
+        try:
+            text = _extract_text(filename, raw)
+            tokenized = chunk_text(text, filename=filename)
+            if not tokenized:
+                raise ValueError("No readable text found in source")
+            new_chunks = [
+                {"id": uuid.uuid4().hex, "source": filename, "kind": kind, "text": item.text, "chunk_index": item.index, "content_type": item.content_type}
+                for item in tokenized
+            ]
+        except Exception as exc:
+            with _LOCK:
+                metadata = _load_source_meta(notebook_id)
+                metadata[filename] = {"kind": kind, "status": "failed", "error": str(exc)[:500], "source_url": source_url, "updated": _now()}
+                _save_source_meta(notebook_id, metadata)
+            raise
+
+        with _LOCK:
+            existing = [c for c in _load_chunks(notebook_id) if c.get("source") != filename]
+            all_chunks = existing + new_chunks
+            _save_chunks(notebook_id, all_chunks)
+            metadata = _load_source_meta(notebook_id)
+            metadata[filename] = {"kind": kind, "status": "indexed", "error": None, "source_url": source_url, "updated": now}
+            _save_source_meta(notebook_id, metadata)
+            key = _user_key(user_id)
+            manifest = _load_manifest()
+            for notebook in manifest.get(key, []):
+                if notebook["id"] == notebook_id:
+                    notebook["updated"] = now
+                    notebook["source_count"] = len(list_sources(user_id, notebook_id))
+                    notebook["node_count"] = len(all_chunks)
+                    break
+            _save_manifest(manifest)
+        return {"name": filename, "kind": kind, "chunks": len(new_chunks), "characters": len(text), "tokens": token_count(text), "status": "indexed", "source_url": source_url}
+    finally:
+        if claim_path:
+            claim_path.unlink(missing_ok=True)
 
 
 def remove_source(user_id: str | None, notebook_id: str, filename: str) -> bool:

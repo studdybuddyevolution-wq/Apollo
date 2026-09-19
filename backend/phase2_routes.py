@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from jobs import enqueue_embedding_job
 from rag_service import add_source, get_notebook, get_source_metadata, get_source_payload
 from phase3_common import gemini_model_chain
+from error_classifier import classify_source_error
 from source_ingestion import ingest_url, ingest_youtube, refresh_url_source, refresh_youtube_source
 from storage import STORE
 
@@ -92,10 +93,10 @@ def register(app: FastAPI) -> None:
             result = await asyncio.to_thread(ingest_url, request.user_id, notebook_id, request.url)
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
             return result
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"URL ingestion failed: {exc}") from exc
+            retryable, status_code, message = classify_source_error(exc)
+            headers = {"Retry-After": "3"} if retryable else None
+            raise HTTPException(status_code=status_code, detail=message, headers=headers) from exc
 
     @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/retry")
     async def notebook_source_retry(notebook_id: str, source_name: str, request: SourceLifecycleRequest):
@@ -118,10 +119,10 @@ def register(app: FastAPI) -> None:
             return result
         except HTTPException:
             raise
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Source retry failed: {exc}") from exc
+            retryable, status_code, message = classify_source_error(exc)
+            headers = {"Retry-After": "3"} if retryable else None
+            raise HTTPException(status_code=status_code, detail=message, headers=headers) from exc
 
     @app.post("/api/notebooks/{notebook_id}/sources/{source_name:path}/refresh")
     async def notebook_source_refresh(notebook_id: str, source_name: str, request: SourceLifecycleRequest):
@@ -139,12 +140,10 @@ def register(app: FastAPI) -> None:
             return result
         except HTTPException:
             raise
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Source refresh failed: {exc}") from exc
+            retryable, status_code, message = classify_source_error(exc)
+            headers = {"Retry-After": "3"} if retryable else None
+            raise HTTPException(status_code=status_code, detail=message, headers=headers) from exc
 
     @app.post("/api/notebooks/{notebook_id}/sources/youtube")
     async def notebook_youtube_source(notebook_id: str, request: YouTubeSourceRequest):
@@ -153,11 +152,9 @@ def register(app: FastAPI) -> None:
             result = await asyncio.to_thread(ingest_youtube, request.user_id, notebook_id, request.url, request.languages)
             result["embedding_job"] = await enqueue_embedding_job(notebook_id, request.user_id, result["name"])
             return result
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"YouTube ingestion failed: {exc}") from exc
+            retryable, status_code, message = classify_source_error(exc)
+            headers = {"Retry-After": "3"} if retryable else None
+            raise HTTPException(status_code=status_code, detail=message, headers=headers) from exc
 
     _REGISTERED_APPS.add(app)

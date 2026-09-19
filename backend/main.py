@@ -17,6 +17,8 @@ from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
+from request_limits import RequestBodyLimitMiddleware, get_max_request_body_bytes, get_max_upload_bytes
+
 from context_builder import build_context
 from diagrams import build_diagram_prompt, generate_and_render, content_overlap_ratio
 from jobs import enqueue_job, enqueue_embedding_job, get_job
@@ -42,7 +44,8 @@ WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 RATE_LIMIT_MAX = int(os.getenv("APOLLO_RATE_LIMIT_MAX", "20"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "600"))
-MAX_UPLOAD_BYTES = int(os.getenv("APOLLO_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = get_max_upload_bytes()
+MAX_REQUEST_BODY_BYTES = get_max_request_body_bytes()
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: dict[str, list[float]] = defaultdict(list)
 
@@ -63,6 +66,7 @@ def _check_rate_limit(key: str) -> tuple[bool, int]:
 
 
 app = FastAPI(title="Apollo API", version="0.9.0")
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_REQUEST_BODY_BYTES)
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -79,7 +83,12 @@ class ChatRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     user_id: str | None = None
     web_enabled: bool = False
-    research_mode: Literal["quick", "web", "deep", "study"] = "quick"
+    research_mode: Literal["quick", "web", "deep", "study", "socratic"] = "quick"
+    socratic_topic: str | None = None
+    socratic_tier: str | None = None
+    socratic_score: float | None = None
+    socratic_force_advance: bool = False
+    socratic_state: dict[str, Any] | None = None
 
 
 class NotebookCreateRequest(BaseModel):
@@ -137,6 +146,15 @@ def _event(payload: dict[str, Any]) -> str:
 def _system_message(request: ChatRequest, context: str, source_names: list[str]) -> dict[str, str]:
     notebook = request.notebook_title or "the active notebook"
     sources = ", ".join(source_names) if source_names else "no active sources"
+    if request.research_mode == "socratic":
+        from socratic_engine import build_socratic_system_prompt, state_from_dict
+        state = state_from_dict(request.socratic_state)
+        if request.socratic_score is not None:
+            state.mastery_score = max(0.0, min(100.0, float(request.socratic_score)))
+            state.mastery_tier = state.mastery_tier or __import__("socratic_engine").tier_for_score(state.mastery_score)
+        topic = (request.socratic_topic or state.topic or notebook or "the current idea").strip()
+        state.topic = topic
+        return {"role": "system", "content": build_socratic_system_prompt(topic, state, context)}
     content = (
         "You are Apollo Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
@@ -175,7 +193,7 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
         if model.startswith("openai/gpt-oss"):
             kwargs["reasoning_effort"] = "medium"
     stream = client.chat.completions.create(**kwargs)
-    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": "quick"})
+    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": request.research_mode})
     for chunk in stream:
         text = chunk.choices[0].delta.content or ""
         if text:
@@ -345,16 +363,30 @@ def _stream_web(request: ChatRequest, system_content: str):
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
     prompt = _conversation_text(request.messages, system_content)
-    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": "quick"})
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": request.research_mode})
 
 
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
+    if request.research_mode == "socratic" and not request.socratic_state:
+        from socratic_engine import phase_label, phase_status, state_from_dict
+        state = state_from_dict(None)
+        yield _event({
+            "type": "socratic_state",
+            "phase": state.phase,
+            "phase_label": phase_label(state.phase),
+            "status": phase_status(state.phase),
+            "in_dialectic_loop": state.in_dialectic_loop,
+            "maieutics_count": state.maieutics_count,
+            "mastery_score": round(state.mastery_score, 1),
+            "mastery_tier": state.mastery_tier,
+            "user_response_count": state.user_response_count,
+        })
     if request.research_mode in {"deep", "study"}:
         yield from _stream_deep_research(request, system["content"], context, source_names)
         return
-    if request.web_enabled:
+    if request.web_enabled and request.research_mode != "socratic":
         yield from _stream_web(request, system["content"])
         return
     groq_model = request.model or PRIMARY_MODEL
@@ -403,6 +435,7 @@ def health() -> dict[str, object]:
         "embedding_dimensions": int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768")),
         "pgvector": bool(STORE and STORE.vector_available()),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
+        "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
         "storage_backend": "postgres" if STORE else "filesystem",
         "durable_storage": bool(STORE),
     }
@@ -463,8 +496,15 @@ async def notebook_source_upload(notebook_id: str, request: Request, file: Uploa
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     try:
-        result = await asyncio.to_thread(add_source, user_id, notebook_id, file.filename or "source.txt", raw)
-        embedding_job = await enqueue_embedding_job(notebook_id, user_id, file.filename or "source.txt")
+        result = await asyncio.to_thread(
+            add_source,
+            user_id,
+            notebook_id,
+            file.filename or "source.txt",
+            raw,
+            replace_existing=False,
+        )
+        embedding_job = await enqueue_embedding_job(notebook_id, user_id, result["name"])
         result["embedding_job"] = embedding_job
         return result
     except KeyError:

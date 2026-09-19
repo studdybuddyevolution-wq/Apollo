@@ -1,5 +1,28 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
+function toDisplayText(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(toDisplayText).filter(Boolean).join('\n')
+  if (typeof value === 'object') {
+    const preferred = ['text', 'content', 'message', 'answer', 'feedback', 'verdict', 'question']
+    for (const key of preferred) {
+      if (value[key] != null) {
+        const rendered = toDisplayText(value[key])
+        if (rendered) return rendered
+      }
+    }
+    try { return JSON.stringify(value, null, 2) } catch { return '' }
+  }
+  return String(value)
+}
+
+function safeErrorText(value, fallback = 'Apollo backend error') {
+  const text = toDisplayText(value)
+  return text || fallback
+}
+
 function cleanResearchText(value) {
   return String(value || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -20,12 +43,16 @@ async function openChat({
   userId,
   webEnabled,
   researchMode,
+  socraticTopic = '',
+  socraticScore = null,
+  socraticForceAdvance = false,
   onToken,
   onSession,
   onStart,
   onFallback,
   onRestart,
   onGroundingCheck,
+  onSocraticState,
   onSources,
   onDone,
   onError,
@@ -47,6 +74,9 @@ async function openChat({
       user_id: userId,
       web_enabled: webEnabled,
       research_mode: researchMode,
+      socratic_topic: socraticTopic || null,
+      socratic_score: socraticScore ?? null,
+      socratic_force_advance: Boolean(socraticForceAdvance),
     }),
   })
 
@@ -85,15 +115,17 @@ async function openChat({
     if (payload.type === 'fallback') onFallback?.(payload)
     if (payload.type === 'restart') onRestart?.(payload)
     if (payload.type === 'grounding_check') onGroundingCheck?.(payload)
+    if (payload.type === 'socratic_state') onSocraticState?.(payload)
     if (payload.type === 'token') {
       const token = serverResearch === 'quick' ? (payload.text || '') : cleanResearchText(payload.text || '')
-      onToken?.(token)
+      onToken?.(toDisplayText(token))
     }
     if (payload.type === 'sources') onSources?.(payload.sources || [])
     if (payload.type === 'done') onDone?.(payload)
     if (payload.type === 'error') {
-      onError?.(payload.message || 'Apollo backend error')
-      throw new Error(payload.message || 'Apollo backend error')
+      const safeMessage = safeErrorText(payload.message)
+      onError?.(safeMessage)
+      throw new Error(safeMessage)
     }
   }
 
@@ -124,12 +156,16 @@ export async function streamChat({
   userId = 'default',
   webEnabled = false,
   researchMode = 'quick',
+  socraticTopic = '',
+  socraticScore = null,
+  socraticForceAdvance = false,
   onToken,
   onSession,
   onStart,
   onFallback,
   onRestart,
   onGroundingCheck,
+  onSocraticState,
   onSources,
   onDone,
   onError,
@@ -144,14 +180,18 @@ export async function streamChat({
     sourceModes,
     sessionId,
     userId,
-    webEnabled: webEnabled || researchMode !== 'quick',
+    webEnabled: webEnabled || (researchMode !== 'quick' && researchMode !== 'socratic'),
     researchMode,
+    socraticTopic,
+    socraticScore,
+    socraticForceAdvance,
     onToken,
     onSession,
     onStart,
     onFallback,
     onRestart,
     onGroundingCheck,
+    onSocraticState,
     onSources,
     onDone,
     onError,
@@ -273,4 +313,75 @@ export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
       signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
+}
+
+
+export async function getSocraticState(notebookId, sessionId, userId = 'default') {
+  const response = await fetch(
+    `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}/socratic-state?user_id=${encodeURIComponent(userId)}`,
+  )
+  if (!response.ok) throw new Error(await parseError(response, response.status === 404 ? 'Socratic session state is not available on the deployed backend yet.' : 'Socratic session state lookup failed'))
+  return response.json()
+}
+
+export async function generateSocraticQuickCheck({
+  topic,
+  tier,
+  score,
+  notebookId,
+  activeSources = [],
+  sourceModes = {},
+  userId = 'default',
+  model = null,
+  signal,
+}) {
+  const response = await fetch(`${API_BASE}/api/socratic/quick-check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      topic,
+      tier,
+      score,
+      notebook_id: notebookId,
+      active_sources: activeSources,
+      source_modes: sourceModes,
+      user_id: userId,
+      model,
+    }),
+  })
+  if (!response.ok) throw new Error(await parseError(response, response.status === 404 ? 'Socratic Quick Check is not available on the deployed backend yet.' : 'Quick Check generation failed'))
+  return response.json()
+}
+
+export async function gradeSocraticQuickCheck({
+  topic,
+  question,
+  expectedAnswer,
+  studentAnswer,
+  currentScore,
+  notebookId,
+  sessionId,
+  userId = 'default',
+  model = null,
+  signal,
+}) {
+  const response = await fetch(`${API_BASE}/api/socratic/quick-check/grade`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      topic,
+      question,
+      expected_answer: expectedAnswer,
+      student_answer: studentAnswer,
+      current_score: currentScore,
+      notebook_id: notebookId,
+      session_id: sessionId,
+      user_id: userId,
+      model,
+    }),
+  })
+  if (!response.ok) throw new Error(await parseError(response, 'Quick Check grading failed'))
+  return response.json()
 }
