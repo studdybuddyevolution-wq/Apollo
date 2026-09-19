@@ -81,6 +81,7 @@ def _user_for_customer(customer_id: str) -> dict[str, Any] | None:
 
 
 def _claim_event(event: Any) -> bool:
+    """Claim a webhook exactly once, but allow Stripe retries after failed/interrupted work."""
     event_id = str(event["id"])
     event_type = str(event["type"])
     created = int(event.get("created") or 0)
@@ -93,7 +94,27 @@ def _claim_event(event: Any) -> bool:
                    RETURNING event_id""",
                 (event_id, event_type, created),
             )
-            return cur.fetchone() is not None
+            if cur.fetchone() is not None:
+                return True
+            cur.execute(
+                """SELECT status FROM apollo_stripe_webhook_events
+                   WHERE event_id=%s
+                   FOR UPDATE""",
+                (event_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return True
+            status = str(row[0] or "")
+            if status == "processed":
+                return False
+            cur.execute(
+                """UPDATE apollo_stripe_webhook_events
+                   SET status='received', error_message=NULL, processed_at=NULL
+                   WHERE event_id=%s""",
+                (event_id,),
+            )
+            return True
 
 
 def _finish_event(event_id: str, *, status: str, error: str | None = None) -> None:
