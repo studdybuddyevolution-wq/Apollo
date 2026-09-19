@@ -141,6 +141,7 @@ export async function streamChat({
   onFallback,
   onRestart,
   onGroundingCheck,
+  onSocraticState,
   onSources,
   onDone,
   onError,
