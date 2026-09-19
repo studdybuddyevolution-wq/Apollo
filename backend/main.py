@@ -87,6 +87,8 @@ class ChatRequest(BaseModel):
     socratic_topic: str | None = None
     socratic_tier: str | None = None
     socratic_score: float | None = None
+    socratic_force_advance: bool = False
+    socratic_state: dict[str, Any] | None = None
 
 
 class NotebookCreateRequest(BaseModel):
@@ -145,11 +147,14 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     notebook = request.notebook_title or "the active notebook"
     sources = ", ".join(source_names) if source_names else "no active sources"
     if request.research_mode == "socratic":
-        from socratic_service import build_socratic_system_prompt, tier_for_score
-        topic = (request.socratic_topic or notebook).strip()
-        score = float(request.socratic_score if request.socratic_score is not None else 30.0)
-        tier = (request.socratic_tier or tier_for_score(score)).strip()
-        return {"role": "system", "content": build_socratic_system_prompt(topic, tier, score, context)}
+        from socratic_engine import build_socratic_system_prompt, state_from_dict
+        state = state_from_dict(request.socratic_state)
+        if request.socratic_score is not None:
+            state.mastery_score = max(0.0, min(100.0, float(request.socratic_score)))
+            state.mastery_tier = state.mastery_tier or __import__("socratic_engine").tier_for_score(state.mastery_score)
+        topic = (request.socratic_topic or state.topic or notebook or "the current idea").strip()
+        state.topic = topic
+        return {"role": "system", "content": build_socratic_system_prompt(topic, state, context)}
     content = (
         "You are Apollo Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
@@ -358,12 +363,26 @@ def _stream_web(request: ChatRequest, system_content: str):
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
     prompt = _conversation_text(request.messages, system_content)
-    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": "quick"})
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": request.research_mode})
 
 
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
+    if request.research_mode == "socratic":
+        from socratic_engine import phase_label, phase_status, state_from_dict
+        state = state_from_dict(request.socratic_state)
+        yield _event({
+            "type": "socratic_state",
+            "phase": state.phase,
+            "phase_label": phase_label(state.phase),
+            "status": phase_status(state.phase),
+            "in_dialectic_loop": state.in_dialectic_loop,
+            "maieutics_count": state.maieutics_count,
+            "mastery_score": round(state.mastery_score, 1),
+            "mastery_tier": state.mastery_tier,
+            "user_response_count": state.user_response_count,
+        })
     if request.research_mode in {"deep", "study"}:
         yield from _stream_deep_research(request, system["content"], context, source_names)
         return
