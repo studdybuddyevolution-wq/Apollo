@@ -83,7 +83,10 @@ class ChatRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     user_id: str | None = None
     web_enabled: bool = False
-    research_mode: Literal["quick", "web", "deep", "study"] = "quick"
+    research_mode: Literal["quick", "web", "deep", "study", "socratic"] = "quick"
+    socratic_topic: str | None = None
+    socratic_tier: str | None = None
+    socratic_score: float | None = None
 
 
 class NotebookCreateRequest(BaseModel):
@@ -141,6 +144,12 @@ def _event(payload: dict[str, Any]) -> str:
 def _system_message(request: ChatRequest, context: str, source_names: list[str]) -> dict[str, str]:
     notebook = request.notebook_title or "the active notebook"
     sources = ", ".join(source_names) if source_names else "no active sources"
+    if request.research_mode == "socratic":
+        from socratic_service import build_socratic_system_prompt, tier_for_score
+        topic = (request.socratic_topic or notebook).strip()
+        score = float(request.socratic_score if request.socratic_score is not None else 30.0)
+        tier = (request.socratic_tier or tier_for_score(score)).strip()
+        return {"role": "system", "content": build_socratic_system_prompt(topic, tier, score, context)}
     content = (
         "You are Apollo Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
@@ -179,7 +188,7 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
         if model.startswith("openai/gpt-oss"):
             kwargs["reasoning_effort"] = "medium"
     stream = client.chat.completions.create(**kwargs)
-    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": "quick"})
+    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": request.research_mode})
     for chunk in stream:
         text = chunk.choices[0].delta.content or ""
         if text:
