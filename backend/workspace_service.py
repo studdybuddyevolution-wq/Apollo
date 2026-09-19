@@ -65,7 +65,7 @@ def _save(data: dict[str, Any]) -> None:
 def _pg_session(user_id: str, notebook_id: str, session_id: str | None = None):
     if not STORE:
         return None
-    query = "SELECT id,notebook_id,user_id,title,created,updated FROM apollo_chat_sessions WHERE user_id=%s AND notebook_id=%s"
+    query = "SELECT id,notebook_id,user_id,title,created,updated,socratic_state_json FROM apollo_chat_sessions WHERE user_id=%s AND notebook_id=%s"
     params: list[Any] = [user_id, notebook_id]
     if session_id:
         query += " AND id=%s"
@@ -75,7 +75,14 @@ def _pg_session(user_id: str, notebook_id: str, session_id: str | None = None):
         with conn.cursor() as cur:
             cur.execute(query, tuple(params))
             row = cur.fetchone()
-    return dict(zip(("id", "notebook_id", "user_id", "title", "created", "updated"), row)) if row else None
+    if not row:
+        return None
+    result = dict(zip(("id", "notebook_id", "user_id", "title", "created", "updated", "socratic_state_json"), row))
+    try:
+        result["socratic_state"] = json.loads(result.pop("socratic_state_json") or "null")
+    except Exception:
+        result["socratic_state"] = None
+    return result
 
 
 def list_sessions(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]:
@@ -83,12 +90,26 @@ def list_sessions(user_id: str | None, notebook_id: str) -> list[dict[str, Any]]
     if STORE:
         with STORE._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT id,notebook_id,user_id,title,created,updated FROM apollo_chat_sessions WHERE user_id=%s AND notebook_id=%s ORDER BY updated DESC", (key, notebook_id))
+                cur.execute("SELECT id,notebook_id,user_id,title,created,updated,socratic_state_json FROM apollo_chat_sessions WHERE user_id=%s AND notebook_id=%s ORDER BY updated DESC", (key, notebook_id))
                 rows = cur.fetchall()
-        return [dict(zip(("id", "notebook_id", "user_id", "title", "created", "updated"), row)) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(zip(("id", "notebook_id", "user_id", "title", "created", "updated", "socratic_state_json"), row))
+            try:
+                item["socratic_state"] = json.loads(item.pop("socratic_state_json") or "null")
+            except Exception:
+                item["socratic_state"] = None
+            result.append(item)
+        return result
     with _LOCK:
         data = _load()
-        rows = [row for row in data["sessions"].values() if row.get("user_id") == key and row.get("notebook_id") == notebook_id]
+        rows = []
+        for row in data["sessions"].values():
+            if row.get("user_id") != key or row.get("notebook_id") != notebook_id:
+                continue
+            item = dict(row)
+            item.setdefault("socratic_state", None)
+            rows.append(item)
         rows.sort(key=lambda row: row.get("updated", ""), reverse=True)
         return rows
 
@@ -97,11 +118,11 @@ def create_session(user_id: str | None, notebook_id: str, title: str = "New chat
     key = _user_key(user_id)
     clean_title = title.strip() or "New chat"
     now = _now()
-    record = {"id": "chat_" + uuid.uuid4().hex[:12], "notebook_id": notebook_id, "user_id": key, "title": clean_title[:120], "created": now, "updated": now}
+    record = {"id": "chat_" + uuid.uuid4().hex[:12], "notebook_id": notebook_id, "user_id": key, "title": clean_title[:120], "created": now, "updated": now, "socratic_state": None}
     if STORE:
         with STORE._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("INSERT INTO apollo_chat_sessions (id,notebook_id,user_id,title,created,updated) VALUES (%s,%s,%s,%s,%s,%s)", tuple(record.values()))
+                cur.execute("INSERT INTO apollo_chat_sessions (id,notebook_id,user_id,title,created,updated) VALUES (%s,%s,%s,%s,%s,%s)", (record["id"], record["notebook_id"], record["user_id"], record["title"], record["created"], record["updated"]))
         return record
     with _LOCK:
         data = _load()
@@ -121,6 +142,38 @@ def get_session(user_id: str | None, notebook_id: str, session_id: str) -> dict[
             return row
     return None
 
+
+
+
+
+def get_socratic_state(user_id: str | None, notebook_id: str, session_id: str) -> dict[str, Any] | None:
+    session = get_session(user_id, notebook_id, session_id)
+    if not session:
+        return None
+    return session.get("socratic_state")
+
+
+def save_socratic_state(user_id: str | None, notebook_id: str, session_id: str, state: dict[str, Any]) -> bool:
+    key = _user_key(user_id)
+    payload = json.dumps(state, ensure_ascii=False)
+    now = _now()
+    if STORE:
+        with STORE._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE apollo_chat_sessions SET socratic_state_json=%s, updated=%s WHERE user_id=%s AND notebook_id=%s AND id=%s",
+                    (payload, now, key, notebook_id, session_id),
+                )
+                return cur.rowcount > 0
+    with _LOCK:
+        data = _load()
+        row = data["sessions"].get(session_id)
+        if not row or row.get("user_id") != key or row.get("notebook_id") != notebook_id:
+            return False
+        row["socratic_state"] = state
+        row["updated"] = now
+        _save(data)
+        return True
 
 def rename_session(user_id: str | None, notebook_id: str, session_id: str, title: str) -> dict[str, Any] | None:
     clean_title = title.strip() or "New chat"
