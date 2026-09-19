@@ -1,7 +1,8 @@
+import { authFetch } from './authApi'
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, options)
+  const response = await authFetch(`${API_BASE}${path}`, options)
   if (!response.ok) {
     let message = `Apollo API returned ${response.status}`
     try {
