@@ -73,7 +73,7 @@ def test_phase_prompts_differ_by_stage(phase_a, phase_b):
 
 def test_filesystem_mastery_persists(monkeypatch, tmp_path):
     monkeypatch.setattr(socratic_engine, "STORE", None)
-    monkeypatch.setattr(socratic_engine, "MASTERy_FILE", tmp_path / "mastery.json")
+    monkeypatch.setattr(socratic_engine, "MASTERY_FILE", tmp_path / "mastery.json")
     created = socratic_engine.upsert_mastery("u1", "Ohm's Law", 56, correct_delta=1, attempt_delta=1)
     assert created["tier"] == "Proficient"
     loaded = socratic_engine.get_mastery("u1", "ohm's law")
