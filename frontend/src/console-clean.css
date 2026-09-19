@@ -61,3 +61,49 @@
     height: calc(100vh - 56px) !important;
   }
 }
+
+.past-sessions-page{overflow-y:auto;padding:28px 32px 40px;min-height:calc(100vh - 64px)}
+.past-sessions-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:22px}
+.past-sessions-title-row{display:flex;align-items:center;gap:14px;margin-top:8px}
+.past-sessions-title-row h1{margin:0;color:var(--text);font-size:26px;line-height:1.2;letter-spacing:-.025em}
+.past-sessions-title-row p{margin:6px 0 0;color:var(--outline);font-size:12px}
+.past-sessions-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px;border:1px solid var(--surface-high);border-radius:12px;background:rgba(255,255,255,.018);margin-bottom:18px}
+.past-sessions-search,.past-sessions-filter{display:flex;align-items:center;gap:8px;min-height:36px;border:1px solid var(--surface-high);border-radius:9px;padding:0 11px;background:var(--surface-lowest);color:var(--outline)}
+.past-sessions-search{flex:1;min-width:260px}
+.past-sessions-search input,.past-sessions-filter select{border:0;outline:0;background:transparent;color:var(--text);font-size:12px}
+.past-sessions-search input{width:100%;height:34px}
+.past-sessions-filter select{height:34px;min-width:150px}
+.past-sessions-count{margin-left:auto;color:var(--outline);font-size:11px}
+.past-sessions-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.past-session-card{display:flex;flex-direction:column;min-height:220px;padding:15px;border:1px solid var(--surface-high);border-radius:13px;background:var(--surface-lowest);transition:border-color .18s ease,transform .18s ease,background .18s ease}
+.past-session-card:hover{border-color:rgba(249,115,22,.32);transform:translateY(-1px)}
+.past-session-card.is-active{border-color:rgba(249,115,22,.48);background:rgba(249,115,22,.045)}
+.past-session-card-top{display:flex;align-items:center;gap:9px}
+.past-session-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:rgba(249,115,22,.1);color:var(--primary)}
+.past-session-meta{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;color:var(--outline);font-size:10px}
+.past-session-kind{color:var(--text);font-size:11px;font-weight:600}
+.past-session-active{display:inline-flex;align-items:center;gap:4px;color:#74d69a;font-size:10px;font-weight:600}
+.past-session-card h2{margin:13px 0 4px;color:var(--text);font-size:15px;line-height:1.35}
+.past-session-notebook{color:var(--primary);font-size:10px;font-weight:600}
+.past-session-mastery{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;padding:9px 0;margin-top:12px;border-top:1px solid var(--surface-high);border-bottom:1px solid var(--surface-high)}
+.past-session-mastery>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.past-session-topic{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:11px;font-weight:600}
+.past-session-phase{color:var(--outline);font-size:10px;text-transform:capitalize}
+.past-session-mastery strong{color:var(--primary);font-size:13px;white-space:nowrap}
+.past-session-stats{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;color:var(--outline);font-size:10px}
+.past-session-stats span{display:inline-flex;align-items:center;gap:4px}
+.past-session-actions{display:flex;align-items:center;gap:7px;margin-top:auto;padding-top:13px}
+.past-session-actions .upload-button{flex:1;justify-content:center}
+.past-sessions-empty{min-height:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:35px;border:1px dashed var(--surface-high);border-radius:14px;color:var(--outline);text-align:center}
+.past-sessions-empty strong{color:var(--text);font-size:14px}
+.past-sessions-empty span{max-width:420px;font-size:11px;line-height:1.55}
+.past-sessions-note{display:flex;align-items:flex-start;gap:9px;margin-top:18px;padding:11px 13px;border-radius:10px;background:rgba(255,255,255,.018);border:1px solid var(--surface-high);color:var(--outline);font-size:10px;line-height:1.55}
+.past-sessions-note svg{color:var(--primary);flex:none;margin-top:1px}
+@media (max-width:700px){
+  .past-sessions-page{padding:20px 16px 32px;min-height:calc(100vh - 56px)}
+  .past-sessions-header{margin-bottom:16px}
+  .past-sessions-title-row h1{font-size:22px}
+  .past-sessions-search{min-width:100%}
+  .past-sessions-count{width:100%;margin-left:0}
+  .past-sessions-grid{grid-template-columns:1fr}
+}
