@@ -1,3 +1,4 @@
+import { authFetch } from './authApi'
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.onrender.com').replace(/\/$/, '')
 
 function friendlyError(detail, status) {
@@ -9,7 +10,7 @@ function friendlyError(detail, status) {
 }
 
 async function requestJson(path, body, signal) {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await authFetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
