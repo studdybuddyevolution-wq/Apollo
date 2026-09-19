@@ -360,7 +360,7 @@ Teaching style: {tier_style_note(tier)}
 {'Use the indexed notebook context where relevant:\\n' + context if context else 'Use general knowledge.'}
 
 Return ONLY valid JSON:
-{\"question\":\"...\",\"expected_answer\":\"concise correct answer or key points\"}
+{{"question":"...","expected_answer":"concise correct answer or key points"}}
 """
     text, model = _generate(prompt, system="You create concise educational checks. Keep the question gradeable with clear key points.", preferred_model=preferred_model, output_tokens=500)
     data = extract_json(text)
@@ -377,7 +377,7 @@ Expected answer / key points: {expected_answer}
 Student answer: {student_answer}
 
 Return ONLY valid JSON:
-{\"correct\":true,\"feedback\":\"one short encouraging sentence explaining why, and the correct idea if the answer was wrong\"}
+{{"correct":true,"feedback":"one short encouraging sentence explaining why, and the correct idea if the answer was wrong"}}
 """
     text, model = _generate(prompt, system="You grade student answers fairly. Accept equivalent wording when the core idea is correct.", preferred_model=preferred_model, output_tokens=350)
     data = extract_json(text)
