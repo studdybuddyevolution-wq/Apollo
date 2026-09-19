@@ -338,7 +338,12 @@ export async function generateSocraticQuickCheck({
       model,
     }),
   })
-  if (!response.ok) throw new Error(await parseError(response, 'Quick Check generation failed'))
+  if (!response.ok) {
+    const fallback = response.status === 404
+      ? 'Socratic Quick Check is not available on the currently deployed Apollo backend. The backend Socratic routes need to be deployed.'
+      : 'Quick Check generation failed'
+    throw new Error(await parseError(response, fallback))
+  }
   return response.json()
 }
 
