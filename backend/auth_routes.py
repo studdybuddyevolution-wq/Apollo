@@ -50,6 +50,26 @@ def _check_login_rate(ip: str, email: str) -> None:
     if failures >= 8:
         raise HTTPException(status_code=429, detail="Too many failed login attempts. Try again later.", headers={"Retry-After": "600"})
 
+def _check_register_rate(ip: str) -> None:
+    if not STORE:
+        return
+    from datetime import timedelta
+    since = datetime.now(UTC) - timedelta(minutes=10)
+    with STORE._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM apollo_auth_attempts
+                   WHERE at >= %s AND kind='register' AND ip=%s""",
+                (since, ip),
+            )
+            attempts = int(cur.fetchone()[0] or 0)
+    if attempts >= 5:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many account creation attempts. Try again later.",
+            headers={"Retry-After": "600"},
+        )
+
 
 class RegisterRequest(BaseModel):
     email: str
@@ -79,8 +99,11 @@ def register(app: FastAPI) -> None:
 
     @app.post("/api/auth/register")
     def auth_register(request: RegisterRequest, http_request: Request):
+        ip = _client_ip(http_request)
+        _check_register_rate(ip)
         try:
             user = create_user(request.email, request.password)
+            _record_auth_attempt(ip, request.email, "register", True)
             return {"access_token": create_access_token(str(user["id"])), "token_type": "bearer", "user": public_user(user)}
         except HTTPException:
             raise
