@@ -20,12 +20,16 @@ async function openChat({
   userId,
   webEnabled,
   researchMode,
+  socraticTopic = '',
+  socraticScore = null,
+  socraticForceAdvance = false,
   onToken,
   onSession,
   onStart,
   onFallback,
   onRestart,
   onGroundingCheck,
+  onSocraticState,
   onSources,
   onDone,
   onError,
@@ -47,6 +51,9 @@ async function openChat({
       user_id: userId,
       web_enabled: webEnabled,
       research_mode: researchMode,
+      socratic_topic: socraticTopic || null,
+      socratic_score: socraticScore ?? null,
+      socratic_force_advance: Boolean(socraticForceAdvance),
     }),
   })
 
@@ -85,6 +92,7 @@ async function openChat({
     if (payload.type === 'fallback') onFallback?.(payload)
     if (payload.type === 'restart') onRestart?.(payload)
     if (payload.type === 'grounding_check') onGroundingCheck?.(payload)
+    if (payload.type === 'socratic_state') onSocraticState?.(payload)
     if (payload.type === 'token') {
       const token = serverResearch === 'quick' ? (payload.text || '') : cleanResearchText(payload.text || '')
       onToken?.(token)
@@ -144,7 +152,7 @@ export async function streamChat({
     sourceModes,
     sessionId,
     userId,
-    webEnabled: webEnabled || researchMode !== 'quick',
+    webEnabled: webEnabled || (researchMode !== 'quick' && researchMode !== 'socratic'),
     researchMode,
     onToken,
     onSession,
@@ -152,6 +160,7 @@ export async function streamChat({
     onFallback,
     onRestart,
     onGroundingCheck,
+    onSocraticState,
     onSources,
     onDone,
     onError,
@@ -273,4 +282,75 @@ export async function pollJob(jobId, onProgress, signal, intervalMs = 1000) {
       signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
+}
+
+
+export async function getSocraticState(notebookId, sessionId, userId = 'default') {
+  const response = await fetch(
+    `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}/socratic-state?user_id=${encodeURIComponent(userId)}`,
+  )
+  if (!response.ok) throw new Error(await parseError(response, 'Socratic session state lookup failed'))
+  return response.json()
+}
+
+export async function generateSocraticQuickCheck({
+  topic,
+  tier,
+  score,
+  notebookId,
+  activeSources = [],
+  sourceModes = {},
+  userId = 'default',
+  model = null,
+  signal,
+}) {
+  const response = await fetch(`${API_BASE}/api/socratic/quick-check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      topic,
+      tier,
+      score,
+      notebook_id: notebookId,
+      active_sources: activeSources,
+      source_modes: sourceModes,
+      user_id: userId,
+      model,
+    }),
+  })
+  if (!response.ok) throw new Error(await parseError(response, 'Quick Check generation failed'))
+  return response.json()
+}
+
+export async function gradeSocraticQuickCheck({
+  topic,
+  question,
+  expectedAnswer,
+  studentAnswer,
+  currentScore,
+  notebookId,
+  sessionId,
+  userId = 'default',
+  model = null,
+  signal,
+}) {
+  const response = await fetch(`${API_BASE}/api/socratic/quick-check/grade`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      topic,
+      question,
+      expected_answer: expectedAnswer,
+      student_answer: studentAnswer,
+      current_score: currentScore,
+      notebook_id: notebookId,
+      session_id: sessionId,
+      user_id: userId,
+      model,
+    }),
+  })
+  if (!response.ok) throw new Error(await parseError(response, 'Quick Check grading failed'))
+  return response.json()
 }
