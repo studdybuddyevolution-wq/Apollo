@@ -7,9 +7,10 @@ import {
 } from 'lucide-react'
 import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
+import PastSessionsPage from './PastSessionsPage'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
-  getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
+  getSessionMessages, listAllSessions, listNotes, listNotebooks, listSessions, listSources,
   renameSession, uploadSource, deleteNotebook, renameNotebook, deleteSource, retrySource, refreshSource, getCapabilities, searchNotebook,
 } from './api/notebooksApi'
 import MarkdownMessage from './MarkdownMessage'
@@ -771,6 +772,8 @@ export default function AppPhase6() {
   const [sources, setSources] = useState([])
   const [sourceModes, setSourceModes] = useState({})
   const [sessions, setSessions] = useState([])
+  const [pastSessions, setPastSessions] = useState([])
+  const [pastSessionsLoading, setPastSessionsLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
   const [messages, setMessages] = useState([])
   const [notes, setNotes] = useState([])
@@ -780,6 +783,7 @@ export default function AppPhase6() {
   const [tool, setTool] = useState('slides')
   const uid = useMemo(() => getUserId(), [])
   const streamAbortRef = useRef(null)
+  const pendingSessionRef = useRef('')
   const notebook = notebooks.find((n) => n.id === activeId) || null
   const activeSources = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name)
 
@@ -812,25 +816,42 @@ export default function AppPhase6() {
     saveSourceModes(uid, id, mergedModes)
   }
 
+  const loadPastSessions = async () => {
+    setPastSessionsLoading(true)
+    try {
+      const data = await listAllSessions(uid)
+      setPastSessions(data.sessions || [])
+    } finally {
+      setPastSessionsLoading(false)
+    }
+  }
+
+  const loadSessionContent = async (notebookId, id) => {
+    const [data, socraticData] = await Promise.all([
+      getSessionMessages(notebookId, id, uid),
+      getSocraticState(notebookId, id, uid).catch(() => ({ state: null })),
+    ])
+    setSessionId(id)
+    setMessages(data.messages || [])
+    setSocraticState(socraticData.state || null)
+  }
+
   const loadSessionsAndNotes = async (id) => {
     if (!id) { setSessions([]); setSessionId(''); setMessages([]); setNotes([]); return }
     const [sessionData, noteData] = await Promise.all([listSessions(id, uid), listNotes(id, uid)])
     let nextSessions = sessionData.sessions || []
     if (!nextSessions.length) nextSessions = [await createSession(id, 'New chat', uid)]
     setSessions(nextSessions)
-    const nextSession = nextSessions[0]
-    setSessionId(nextSession.id)
-    const [messageData, socraticData] = await Promise.all([
-      getSessionMessages(id, nextSession.id, uid),
-      getSocraticState(id, nextSession.id, uid).catch(() => ({ state: null })),
-    ])
-    setMessages(messageData.messages || [])
-    setSocraticState(socraticData.state || null)
+    const preferredSessionId = pendingSessionRef.current
+    const nextSession = nextSessions.find((item) => item.id === preferredSessionId) || nextSessions[0]
+    pendingSessionRef.current = ''
+    await loadSessionContent(id, nextSession.id)
     setNotes(noteData.notes || [])
   }
 
   useEffect(() => {
     refresh('').catch(console.error)
+    loadPastSessions().catch(console.error)
     return () => streamAbortRef.current?.abort()
   }, [])
 
@@ -853,6 +874,46 @@ export default function AppPhase6() {
     const updated = await renameNotebook(nb.id, title.trim(), uid)
     setNotebooks((current) => current.map((item) => item.id === nb.id ? { ...item, ...updated } : item))
   }
+  const openPastSession = async (session) => {
+    if (!session?.notebook_id || !session?.id) return
+    setActive('tutor')
+    setSourceOpen(false)
+    setStudioOpen(false)
+    setSessionOpen(false)
+    setNotesOpen(false)
+
+    if (session.notebook_id === activeId) {
+      await loadSessionContent(session.notebook_id, session.id)
+      return
+    }
+
+    pendingSessionRef.current = session.id
+    setMessages([])
+    setSocraticState(null)
+    rememberRecent('notebooks', session.notebook_id, uid)
+    setActiveId(session.notebook_id)
+  }
+
+  const renamePastSession = async (session) => {
+    const title = prompt('Chat name', session.title || 'Chat')
+    if (!title?.trim()) return
+    const updated = await renameSession(session.notebook_id, session.id, title.trim(), uid)
+    setPastSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...updated } : item))
+    if (session.notebook_id === activeId) {
+      setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...updated } : item))
+    }
+  }
+
+  const deletePastSession = async (session) => {
+    if (!confirm(`Delete “${session.title}”? This chat history will be removed.`)) return
+    await deleteSession(session.notebook_id, session.id, uid)
+    setPastSessions((current) => current.filter((item) => item.id !== session.id))
+
+    if (session.notebook_id === activeId) {
+      await loadSessionsAndNotes(activeId)
+    }
+  }
+
   const removeNotebook = async (nb) => {
     if (!nb?.id || !confirm(`Delete notebook “${nb.title}”? This will remove its sources, chats, notes, and saved study data.`)) return
     await deleteNotebook(nb.id, uid)
@@ -926,6 +987,7 @@ export default function AppPhase6() {
   const newChat = async () => {
     if (!activeId) return
     const session = await createSession(activeId, 'New chat', uid)
+    loadPastSessions().catch(() => {})
     setSessions((current) => [session, ...current])
     setSessionId(session.id)
     setMessages([])
@@ -1049,7 +1111,10 @@ export default function AppPhase6() {
         onDone: () => {
           setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, streaming: false } : m))
           setBusy(false)
-          if (currentNotebook) listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {})
+          if (currentNotebook) {
+            listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {})
+            loadPastSessions().catch(() => {})
+          }
         },
         onError: (message) => {
           setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Response interrupted: ${message})_` : message, streaming: false } : m))
@@ -1105,6 +1170,15 @@ export default function AppPhase6() {
         stop={stop}
         newChat={newChat}
         onSaveNote={saveNote}
+      /> : active === 'sessions' ? <PastSessionsPage
+        sessions={pastSessions}
+        notebooks={notebooks}
+        activeSessionId={sessionId}
+        loading={pastSessionsLoading}
+        onOpen={openPastSession}
+        onRename={renamePastSession}
+        onDelete={deletePastSession}
+        onRefresh={() => loadPastSessions().catch(console.error)}
       /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
