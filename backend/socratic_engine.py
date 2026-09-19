@@ -99,19 +99,19 @@ def _topic_key(topic: str) -> str:
 
 
 def _load_mastery() -> dict[str, dict[str, Any]]:
-    MASTERy_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not MASTERy_FILE.exists():
+    MASTERY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not MASTERY_FILE.exists():
         return {}
     try:
-        data = json.loads(MASTERy_FILE.read_text(encoding="utf-8"))
+        data = json.loads(MASTERY_FILE.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
 def _save_mastery(data: dict[str, dict[str, Any]]) -> None:
-    MASTERy_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MASTERy_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    MASTERY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MASTERY_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def get_mastery(user_id: str | None, topic: str) -> dict[str, Any] | None:
