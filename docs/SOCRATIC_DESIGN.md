@@ -1,62 +1,36 @@
-# Apollo Socratic Study — implementation note
+# Socratic Tutor — Design Note
 
-## Current Apollo integration points
+This file is a compact design note. The canonical implementation record is [SOCRATIC_TUTOR.md](./SOCRATIC_TUTOR.md).
 
-- The active frontend is `frontend/src/AppPhase6.jsx`; it already exposes a `Socratic Tutor` navigation entry but currently renders migrated-module placeholder content.
-- Chat streaming is centralized in `frontend/src/api/apolloApi.js` and routes to `/api/chat/workspace` whenever a notebook is selected.
-- Workspace chat is persisted by `backend/phase1_routes.py` and `backend/workspace_service.py` into the existing `apollo_chat_sessions` / `apollo_chat_messages` PostgreSQL tables, with a filesystem fallback for local development.
-- Notebook context comes from `backend/context_builder.py`, which already supports the `full`, `summary`, `insights`, and `off` source modes.
-- Models/fallbacks are already centralized in Apollo's existing Groq/Gemini path. Socratic mode will use the same selected model and fallback behavior.
-- The legacy `tutor_engine.py` contains placement, mastery tiers, quick checks, and source-aware tutoring concepts, but stores state in Streamlit/local JSON and therefore is being reimplemented rather than moved.
-- `settings_app.py` has a legacy Socratic learning-style preference, but no active React settings/profile model exists that should become a new Socratic dependency.
+## Current implementation
 
-## Reference concepts adopted
+- Active engine: \`backend/socratic_engine.py\`
+- Conversation transport: \`POST /api/chat/workspace\`
+- Session state: \`apollo_chat_sessions.socratic_state_json\`
+- Mastery aggregate: \`apollo_socratic_mastery\`
+- Frontend: \`SocraticTutor\` in \`frontend/src/AppPhase6.jsx\`
+- Phase transitions are deterministic; there is no separate LLM triage classifier.
+- Consecutive Maieutics turns are bounded by \`MAIEUTICS_MAX_CONSECUTIVE = 2\`.
+- Quick Checks are explicit follow-up API interactions and update durable mastery.
+- Placement generation remains **Planned / Not Implemented**.
 
-From `noghte/socratic_chatbot`:
+## Reference
 
-- explicit dialogue phases: Elenchus, Maieutics, Aporia, Dialectic
-- a deterministic/manual phase-progression idea plus a Triage-like decision layer
-- bounded Maieutics repetition
-- a visible phase-progress UI
-- a user-controlled Move Forward action
-- continued Dialectic looping instead of one-shot answer generation
+The implementation notes identify \`https://github.com/noghte/socratic_chatbot\` as the conceptual reference for phase/progression ideas. The active Marklyf code does not import that application's CrewAI/Flask/Next.js/auth/session stack.
 
-The reference project's CrewAI/Flask/Next.js/OpenAI/auth/session architecture is not being imported.
+## Legacy implementation
 
-## Apollo-native design
+Root \`tutor_engine.py\` belongs to the older Streamlit/local-JSON architecture. It contains historical tutor, placement and mastery concepts but is not the production Socratic engine.
 
-- `backend/socratic_service.py` owns mastery, source-aware quiz helpers, phase prompts, and the deterministic phase controller.
-- Existing `/api/chat/workspace` remains the Socratic transport. `research_mode="socratic"` selects Socratic prompting without creating a second chat stack.
-- Socratic session state is stored alongside the existing chat session in `apollo_chat_sessions.socratic_state_json`; the filesystem fallback stores the same state in the existing workspace session record.
-- One model generation is used per normal Socratic turn. The controller selects the pedagogical move before that call; the existing Groq-to-Gemini fallback remains the only normal second attempt.
-- A structured `socratic_state` SSE event drives the React phase/progress UI.
-- Quick Checks use a separate explicit quiz/grade interaction after the core chat loop and update the same session mastery state.
-- Placement generation is intentionally deferred until the core dialogue, Move Forward, Quick Check, and mastery persistence are stable.
+## State transition summary
 
-## State model
+~~~text
+ELICITATION -> ELENCHUS
+ELENCHUS -> MAIEUTICS (stuck) | APORIA
+MAIEUTICS -> MAIEUTICS (stuck, count < 2) | APORIA
+APORIA -> MAIEUTICS (stuck) | DIALECTIC
+DIALECTIC -> DIALECTIC
+finish markers -> CONCLUSION
+~~~
 
-The persisted minimum is:
-
-- current phase
-- dialectic-loop flag
-- user response count
-- consecutive Maieutics count
-- recent pedagogical phases
-- topic
-- mastery score and tier
-
-Conversation text remains in Apollo's existing chat message store and is not duplicated.
-
-## Phase routing
-
-Initial meaningful turn -> Elenchus.
-
-Normal routing then uses bounded deterministic rules:
-- Elenchus -> Maieutics when the student appears stuck; otherwise Aporia.
-- Maieutics -> another Maieutics only while the student remains stuck and the consecutive bound is below two; otherwise Aporia.
-- Aporia -> Maieutics when the student is stuck; otherwise Dialectic.
-- Dialectic stays in the Dialectic loop unless the student explicitly asks to finish.
-- Explicit completion requests produce a concise conclusion state.
-- Move Forward bypasses uncertainty and advances only through valid transitions.
-
-This keeps the main turn at one Apollo model generation and avoids a separate triage LLM call.
+See [SOCRATIC_TUTOR.md](./SOCRATIC_TUTOR.md) for prompt architecture, mastery scoring, source grounding, frontend behavior, model-call counts and implementation history.
