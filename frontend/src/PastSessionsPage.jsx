@@ -205,7 +205,7 @@ export default function PastSessionsPage({
             <div className="page-icon"><History size={22} /></div>
             <div>
               <h1>Past Sessions</h1>
-              <p>Browse, search and reopen Apollo conversations without loading your entire history at once.</p>
+              <p>Browse, search and reopen Marklyf conversations without loading your entire history at once.</p>
             </div>
           </div>
         </div>
@@ -320,7 +320,7 @@ export default function PastSessionsPage({
                 {!previewLoading && !previewMessages.length && <div className="past-sessions-empty"><MessageSquare size={26} /><span>This session has no stored messages.</span></div>}
                 {previewMessages.map((item) => (
                   <article key={item.id} className={'past-session-message ' + item.role}>
-                    <div className="past-session-message-role">{item.role === 'user' ? 'You' : 'Apollo'}</div>
+                    <div className="past-session-message-role">{item.role === 'user' ? 'You' : 'Marklyf'}</div>
                     <div className="past-session-message-content">{item.content}</div>
                     <div className="past-session-message-time">{formatDate(item.created)}</div>
                   </article>
