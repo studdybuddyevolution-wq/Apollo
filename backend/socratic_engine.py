@@ -1,4 +1,4 @@
-"""Apollo-native Socratic dialogue controller and mastery helpers."""
+"""Marklyf-native Socratic dialogue controller and mastery helpers."""
 
 from __future__ import annotations
 
@@ -303,7 +303,7 @@ def build_socratic_system_prompt(topic: str, state: SocraticState, context: str)
         if context else
         "No indexed notebook source material is selected. Teach from general knowledge. Avoid pretending you read a source. "
     )
-    return f"""You are Apollo's Socratic Study tutor helping a student reason about: {topic or 'the current topic'}.
+    return f"""You are Marklyf's Socratic Study tutor helping a student reason about: {topic or 'the current topic'}.
 
 Current pedagogical phase: {phase_label(state.phase)}.
 Current status: {phase_status(state.phase)}.
@@ -343,7 +343,7 @@ def extract_json(raw_text: str) -> dict[str, Any] | None:
 def _generate(prompt: str, *, system: str, preferred_model: str | None = None, output_tokens: int = 1400) -> tuple[str, str]:
     models = gemini_model_chain(max_models=3)
     if preferred_model and preferred_model not in models:
-        raise ValueError("Selected Socratic model is not enabled on this Apollo deployment.")
+        raise ValueError("Selected Socratic model is not enabled on this Marklyf deployment.")
     primary = preferred_model or models[0]
     text, model, _ = generate_gemini_text(
         prompt, system_instruction=system, output_tokens=output_tokens, primary_model=primary,
@@ -365,7 +365,7 @@ Return ONLY valid JSON:
     text, model = _generate(prompt, system="You create concise educational checks. Keep the question gradeable with clear key points.", preferred_model=preferred_model, output_tokens=500)
     data = extract_json(text)
     if not data or not data.get("question") or not data.get("expected_answer"):
-        raise RuntimeError("Apollo could not generate a usable quick check.")
+        raise RuntimeError("Marklyf could not generate a usable quick check.")
     return {"question": str(data["question"]).strip(), "expected_answer": str(data["expected_answer"]).strip()}, model
 
 
@@ -382,5 +382,5 @@ Return ONLY valid JSON:
     text, model = _generate(prompt, system="You grade student answers fairly. Accept equivalent wording when the core idea is correct.", preferred_model=preferred_model, output_tokens=350)
     data = extract_json(text)
     if not data or "correct" not in data:
-        return None, "Apollo could not confidently grade that response. Mastery was left unchanged.", model
+        return None, "Marklyf could not confidently grade that response. Mastery was left unchanged.", model
     return bool(data["correct"]), str(data.get("feedback") or "").strip(), model
