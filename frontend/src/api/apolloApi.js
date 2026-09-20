@@ -18,7 +18,7 @@ function toDisplayText(value) {
   return String(value)
 }
 
-function safeErrorText(value, fallback = 'Apollo backend error') {
+function safeErrorText(value, fallback = 'Marklyf backend error') {
   const text = toDisplayText(value)
   return text || fallback
 }
@@ -81,7 +81,7 @@ async function openChat({
   })
 
   if (!response.ok) {
-    let message = `Apollo API returned ${response.status}`
+    let message = `Marklyf API returned ${response.status}`
     try {
       const body = await response.json()
       if (body?.detail) message = body.detail
@@ -91,7 +91,7 @@ async function openChat({
     throw new Error(message)
   }
 
-  if (!response.body) throw new Error('Apollo API did not return a streaming response')
+  if (!response.body) throw new Error('Marklyf API did not return a streaming response')
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -210,7 +210,7 @@ async function parseError(response, fallback) {
   const detail = err?.detail || fallback
   const normalized = String(detail).toUpperCase()
   if (response.status >= 500 && (normalized.includes('UNAVAILABLE') || normalized.includes('HIGH DEMAND') || normalized.includes('503'))) {
-    return 'Gemini is temporarily busy. Apollo will retry automatically.'
+    return 'Gemini is temporarily busy. Marklyf will retry automatically.'
   }
   return detail
 }
@@ -267,7 +267,7 @@ export async function generateNotebookDiagram(notebookId, activeSources = [], di
         body: JSON.stringify({ active_sources: activeSources, diagram_hint: diagramHint || null, user_id: userId }),
       })
       if (!response.ok) {
-        throw new Error(await parseError(response, `Apollo API returned ${response.status}`))
+        throw new Error(await parseError(response, `Marklyf API returned ${response.status}`))
       }
       return response.json()
     } catch (error) {
