@@ -65,7 +65,7 @@ def _check_rate_limit(key: str) -> tuple[bool, int]:
         return True, 0
 
 
-app = FastAPI(title="Apollo API", version="0.9.0")
+app = FastAPI(title="Marklyf API", version="0.9.0")
 app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_REQUEST_BODY_BYTES)
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -156,7 +156,7 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
         state.topic = topic
         return {"role": "system", "content": build_socratic_system_prompt(topic, state, context)}
     content = (
-        "You are Apollo Omni AI, a helpful academic AI companion. "
+        "You are Marklyf Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
         "Answer directly and naturally. Keep private chain-of-thought/reasoning hidden; return only the answer, conclusions, and useful explanations. "
         "Use supplied source context when relevant and distinguish it from your own knowledge. "
@@ -165,12 +165,12 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     )
     if request.research_mode == "quick":
         content += (
-            " Use Apollo Quick Search format: answer directly in 1-2 sentences, then use 1-3 inline numeric citations like [1] or [2]. "
+            " Use Marklyf Quick Search format: answer directly in 1-2 sentences, then use 1-3 inline numeric citations like [1] or [2]. "
             "Do not use headings or bullet lists. Stay under 80 words. If uncertain, state that uncertainty in one line."
         )
     elif request.web_enabled and request.research_mode == "web":
         content += (
-            " Use Apollo Medium Search format: begin with a 1-sentence direct answer, then provide 2-4 short paragraphs or bullet points with supporting detail, using inline numeric citations like [1], [2], [3]. "
+            " Use Marklyf Medium Search format: begin with a 1-sentence direct answer, then provide 2-4 short paragraphs or bullet points with supporting detail, using inline numeric citations like [1], [2], [3]. "
             "End with one short Key takeaway line. Keep the total response between 150 and 300 words."
         )
     if context:
@@ -353,7 +353,7 @@ def _stream_web(request: ChatRequest, system_content: str):
     if not blocks:
         raise RuntimeError("Tavily returned no usable web results")
     instruction = system_content + (
-        "\n\nYou are Apollo's Medium Search synthesizer. Follow the Medium Search format exactly: begin with a 1-sentence direct answer; then use 2-4 short paragraphs or bullet points with supporting detail; cite supporting claims inline as [1], [2], [3] using the numbered sources supplied below; finish with a single 'Key takeaway:' line. Keep the entire response between 150 and 300 words. Do not add extra sections."
+        "\n\nYou are Marklyf's Medium Search synthesizer. Follow the Medium Search format exactly: begin with a 1-sentence direct answer; then use 2-4 short paragraphs or bullet points with supporting detail; cite supporting claims inline as [1], [2], [3] using the numbered sources supplied below; finish with a single 'Key takeaway:' line. Keep the entire response between 150 and 300 words. Do not add extra sections."
     )
     prompt = _conversation_text(request.messages, instruction) + "\n\nTAVILY SOURCES:\n" + "\n\n---\n\n".join(blocks)
     if sources:
@@ -487,12 +487,12 @@ async def notebook_source_upload(notebook_id: str, request: Request, file: Uploa
     if content_length:
         try:
             if int(content_length) > MAX_UPLOAD_BYTES + 512 * 1024:
-                raise HTTPException(status_code=413, detail=f"Upload is too large. Apollo accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+                raise HTTPException(status_code=413, detail=f"Upload is too large. Marklyf accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
         except ValueError:
             pass
     raw = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(raw) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"Upload is too large. Apollo accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+        raise HTTPException(status_code=413, detail=f"Upload is too large. Marklyf accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     try:
@@ -639,7 +639,7 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
             generate_gemini_text,
             prompt,
             system_instruction=(
-                "You are Apollo's slide-deck generation engine. Output only valid JSON. "
+                "You are Marklyf's slide-deck generation engine. Output only valid JSON. "
                 "Use only the provided notebook source context and never add outside knowledge."
             ),
             output_tokens=3200,
@@ -659,7 +659,7 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
 
     raw_slides = payload.get("slides") if isinstance(payload, dict) else None
     if not isinstance(raw_slides, list) or not raw_slides:
-        raise HTTPException(status_code=502, detail="Apollo's slide generator returned an invalid deck structure.")
+        raise HTTPException(status_code=502, detail="Marklyf's slide generator returned an invalid deck structure.")
 
     slides = []
     for index, item in enumerate(raw_slides[: request.page_count], 1):
@@ -673,7 +673,7 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
         slides.append({"title": title, "bullets": bullets, "speaker_notes": notes})
 
     if not slides:
-        raise HTTPException(status_code=502, detail="Apollo's slide generator returned no usable slides.")
+        raise HTTPException(status_code=502, detail="Marklyf's slide generator returned no usable slides.")
 
     try:
         pptx_bytes = build_source_grounded_pptx(
@@ -684,8 +684,8 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"PPTX export failed: {exc}") from exc
 
-    safe_title = str(payload.get("title") or "Apollo Slide Deck").strip() or "Apollo Slide Deck"
-    filename = "".join(character if character.isalnum() or character in " -_" else "_" for character in safe_title).strip() or "Apollo Slide Deck"
+    safe_title = str(payload.get("title") or "Marklyf Slide Deck").strip() or "Marklyf Slide Deck"
+    filename = "".join(character if character.isalnum() or character in " -_" else "_" for character in safe_title).strip() or "Marklyf Slide Deck"
     filename = f"{filename[:80]}.pptx"
     return {
         "tool": "slides",
