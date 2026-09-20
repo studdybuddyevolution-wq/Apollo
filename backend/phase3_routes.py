@@ -1,4 +1,4 @@
-"""Phase 3 Studio routes built on Apollo's existing RAG/context stack."""
+"""Phase 3 Studio routes built on Marklyf's existing RAG/context stack."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def _safe_generation(prompt: str, *, system: str, output_tokens: int, max_models
         configured = gemini_model_chain(max_models=None)
         primary = preferred_model or os.getenv("APOLLO_STUDIO_MODEL", os.getenv("APOLLO_WEB_SYNTHESIS_MODEL"))
         if preferred_model and preferred_model not in configured:
-            raise HTTPException(status_code=400, detail="Selected Studio model is not enabled on this Apollo deployment.")
+            raise HTTPException(status_code=400, detail="Selected Studio model is not enabled on this Marklyf deployment.")
         text, model, _ = generate_gemini_text(
             prompt,
             system_instruction=system,
@@ -107,7 +107,7 @@ def _mindmap_attempt(prompt: str, context: str, model_chain: list[str]) -> tuple
     text, model, _ = generate_gemini_text(
         prompt,
         system_instruction=(
-            "You are Apollo's notebook diagram generator. Use only the provided notebook source content. "
+            "You are Marklyf's notebook diagram generator. Use only the provided notebook source content. "
             "Do not add outside facts, names, events, steps, or concepts."
         ),
         output_tokens=1200,
@@ -139,9 +139,9 @@ async def notebook_mindmap_phase3(notebook_id: str, request: Phase3MindMapReques
     except FriendlyGeminiError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Apollo's diagram generation timed out before a complete result was available.") from None
+        raise HTTPException(status_code=504, detail="Marklyf's diagram generation timed out before a complete result was available.") from None
     except Exception:
-        raise HTTPException(status_code=502, detail="Apollo could not prepare the diagram renderer response.") from None
+        raise HTTPException(status_code=502, detail="Marklyf could not prepare the diagram renderer response.") from None
 
     overlap = content_overlap_ratio(rendered.kind, rendered.source_code, context) if rendered else 0.0
     if rendered and rendered.svg_bytes and overlap < 0.5:
@@ -160,7 +160,7 @@ async def notebook_mindmap_phase3(notebook_id: str, request: Phase3MindMapReques
                 pass
 
     if not rendered or not rendered.svg_bytes:
-        raise HTTPException(status_code=502, detail="Apollo generated diagram content but the diagram renderer could not produce a usable result.")
+        raise HTTPException(status_code=502, detail="Marklyf generated diagram content but the diagram renderer could not produce a usable result.")
 
     return {
         "kind": rendered.kind,
@@ -176,7 +176,7 @@ async def notebook_mindmap_phase3(notebook_id: str, request: Phase3MindMapReques
 def _studio_prompt(tool: str, context: str, source_names: list[str]) -> tuple[str, str, int]:
     allowed_sources = ", ".join(source_names) if source_names else "the selected notebook sources"
     if tool == "slides":
-        system = "You create source-grounded academic slide decks for Apollo. Never invent facts."
+        system = "You create source-grounded academic slide decks for Marklyf. Never invent facts."
         prompt = (
             "Return ONLY valid JSON with keys title and slides. slides must be an array of 5-10 objects with keys "
             "title, bullets, speaker_notes, source_refs. bullets must be concise. source_refs must contain only source names from the allowed list. "
@@ -184,7 +184,7 @@ def _studio_prompt(tool: str, context: str, source_names: list[str]) -> tuple[st
         )
         return prompt, system, 2600
     if tool == "report":
-        system = "You create source-grounded study reports for Apollo. Never add facts that are not supported by the notebook context."
+        system = "You create source-grounded study reports for Marklyf. Never add facts that are not supported by the notebook context."
         prompt = (
             "Return ONLY valid JSON with keys title, summary, sections, exam_questions. sections must be an array of objects with keys "
             "heading, points, source_refs. exam_questions must be an array of short questions and answers grounded in the source. "
@@ -192,7 +192,7 @@ def _studio_prompt(tool: str, context: str, source_names: list[str]) -> tuple[st
         )
         return prompt, system, 3000
     if tool == "podcast":
-        system = "You write a two-speaker educational podcast script grounded strictly in Apollo notebook sources."
+        system = "You write a two-speaker educational podcast script grounded strictly in Marklyf notebook sources."
         prompt = (
             "Return ONLY valid JSON with keys title, intro, segments, outro. segments must contain 6-12 objects with keys speaker and text; "
             "speaker must be HOST or EXPERT. Keep the script factual, explanatory, and concise. Include source_refs in segment objects and use only allowed source names. "
@@ -200,7 +200,7 @@ def _studio_prompt(tool: str, context: str, source_names: list[str]) -> tuple[st
         )
         return prompt, system, 3200
     if tool == "video":
-        system = "You design source-grounded educational video storyboards for Apollo. Never invent facts or visuals that imply unsupported claims."
+        system = "You design source-grounded educational video storyboards for Marklyf. Never invent facts or visuals that imply unsupported claims."
         prompt = (
             "Return ONLY valid JSON with keys title, duration_seconds, scenes. scenes must be an array of 6-10 objects with keys "
             "timecode, title, narration, visual, on_screen_text, source_refs. Each source_refs entry must be a source name from the allowed list. "
@@ -229,7 +229,7 @@ def _report_markdown(data: dict[str, Any]) -> str:
 
 
 def _podcast_script(data: dict[str, Any]) -> str:
-    lines = [f"{data.get('title') or 'Apollo Audio Overview'}", "", "HOST: " + str(data.get("intro") or "").strip()]
+    lines = [f"{data.get('title') or 'Marklyf Audio Overview'}", "", "HOST: " + str(data.get("intro") or "").strip()]
     for segment in data.get("segments") or []:
         lines.extend(["", f"{str(segment.get('speaker') or 'HOST').upper()}: {str(segment.get('text') or '').strip()}"])
     if data.get("outro"):
@@ -245,12 +245,12 @@ def _transform_prompt(context: str, source_names: list[str], transformation_type
         raise HTTPException(status_code=400, detail="Unsupported or missing transformation type.")
     allowed = ", ".join(source_names) if source_names else "selected notebook sources"
     prompt = (
-        "You are Apollo's source transformation engine.\n"
+        "You are Marklyf's source transformation engine.\n"
         f"TASK: {instruction}\n"
         "Use only the supplied notebook content. Do not add outside knowledge. If evidence is insufficient, explicitly say so.\n"
         f"SELECTED SOURCES: {allowed}\n\nSOURCE CONTEXT:\n{context}"
     )
-    return prompt, "You produce precise, source-grounded structured study insights for Apollo.", 2200
+    return prompt, "You produce precise, source-grounded structured study insights for Marklyf.", 2200
 
 
 def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[str, Any]:
@@ -277,7 +277,7 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
     try:
         data = extract_json_object(text)
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail="Apollo received an incomplete structured Studio response. Please try again.") from exc
+        raise HTTPException(status_code=502, detail="Marklyf received an incomplete structured Studio response. Please try again.") from exc
 
     if request.tool == "report":
         markdown = _report_markdown(data)
@@ -316,14 +316,14 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
     if request.tool == "slides":
         slides = data.get("slides") or []
         if not slides:
-            raise HTTPException(status_code=502, detail="Apollo produced an empty slide deck. Please try again.")
+            raise HTTPException(status_code=502, detail="Marklyf produced an empty slide deck. Please try again.")
         insight = _persist_output(notebook_id, "slide_deck", json.dumps(data, ensure_ascii=False), model)
         return {"tool": "slides", "data": data, "insight": insight, "model_used": model, "sources": source_names}
 
     if request.tool == "video":
         scenes = data.get("scenes") or []
         if not scenes:
-            raise HTTPException(status_code=502, detail="Apollo produced an empty video storyboard. Please try again.")
+            raise HTTPException(status_code=502, detail="Marklyf produced an empty video storyboard. Please try again.")
         insight = _persist_output(notebook_id, "video_storyboard", json.dumps(data, ensure_ascii=False), model)
         return {"tool": "video", "data": data, "insight": insight, "model_used": model, "sources": source_names}
 
@@ -350,7 +350,7 @@ def register(app: FastAPI) -> None:
                 timeout=float(os.getenv("APOLLO_STUDIO_REQUEST_TIMEOUT", "55")),
             )
         except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Apollo's Studio generation timed out before a complete result was available.") from None
+            raise HTTPException(status_code=504, detail="Marklyf's Studio generation timed out before a complete result was available.") from None
 
     app.state.phase3_studio = True
     app.state.phase3_studio_tools = sorted(STUDIO_OUTPUT_TYPES)

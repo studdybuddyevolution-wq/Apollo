@@ -21,7 +21,7 @@ from rag_service import add_source, get_source_metadata
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_TIMEOUT = 15
 MAX_REDIRECTS = 4
-USER_AGENT = "Apollo Omni AI/Phase2"
+USER_AGENT = "Marklyf Omni AI/Phase2"
 
 
 class _TextExtractor(HTMLParser):
@@ -191,7 +191,7 @@ def _download(safe_ip: str, current: str) -> tuple[bytes, str]:
                 total += len(chunk)
                 if total > MAX_DOWNLOAD_BYTES:
                     response.close()
-                    raise ValueError("Source is larger than Apollo's 8 MB URL ingestion limit")
+                    raise ValueError("Source is larger than Marklyf's 8 MB URL ingestion limit")
                 chunks.append(chunk)
             return b"".join(chunks), response.headers.get("content-type", "").lower()
     raise ValueError("Too many URL redirects")
@@ -279,7 +279,7 @@ def refresh_url_source(user_id: str | None, notebook_id: str, source_name: str) 
     is_pdf = "application/pdf" in content_type or safe_url.lower().endswith(".pdf")
     original_is_pdf = source_name.lower().endswith(".pdf")
     if is_pdf != original_is_pdf:
-        raise ValueError("The refreshed URL changed content type. Delete and re-add the source so Apollo can select the correct parser.")
+        raise ValueError("The refreshed URL changed content type. Delete and re-add the source so Marklyf can select the correct parser.")
     if is_pdf:
         payload = raw
     else:

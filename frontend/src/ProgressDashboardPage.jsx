@@ -51,7 +51,7 @@ export default function ProgressDashboardPage({ userId = 'default' }) {
             <div className="page-icon"><Activity size={22} /></div>
             <div>
               <h1>Progress Dashboard</h1>
-              <p>See your study consistency, recall performance and actual Apollo usage over time.</p>
+              <p>See your study consistency, recall performance and actual Marklyf usage over time.</p>
             </div>
           </div>
         </div>

@@ -3,9 +3,9 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.
 function friendlyError(detail, status) {
   const text = String(detail || '').trim()
   if (text) return text
-  if (status === 429) return 'Apollo is rate-limited right now. Please try again shortly.'
-  if (status >= 500) return 'Apollo could not complete this Studio generation right now.'
-  return `Apollo API returned ${status}`
+  if (status === 429) return 'Marklyf is rate-limited right now. Please try again shortly.'
+  if (status >= 500) return 'Marklyf could not complete this Studio generation right now.'
+  return `Marklyf API returned ${status}`
 }
 
 async function requestJson(path, body, signal) {

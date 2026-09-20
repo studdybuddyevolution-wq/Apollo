@@ -17,7 +17,7 @@ async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, options)
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
-    throw new Error(body?.detail || `Apollo API returned ${response.status}`)
+    throw new Error(body?.detail || `Marklyf API returned ${response.status}`)
   }
   return response.json()
 }
@@ -62,7 +62,7 @@ export default function Phase2ImportPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      setStatus(`Added ${result.name}. Refresh Apollo to update the active source list.`)
+      setStatus(`Added ${result.name}. Refresh Marklyf to update the active source list.`)
       setValue('')
     } catch (error) {
       setStatus(error.message)
@@ -98,7 +98,7 @@ export default function Phase2ImportPanel() {
       <input value={value} onChange={(e) => setValue(e.target.value)} placeholder={mode === 'url' ? 'https://example.com/article' : 'https://youtube.com/watch?v=…'} style={{ width: '100%', boxSizing: 'border-box', borderRadius: 8, padding: 9, background: '#181a22', color: '#fff', border: '1px solid rgba(255,255,255,.08)' }} />
       <button onClick={importSource} disabled={busy || !notebookId || !value.trim()} style={{ width: '100%', marginTop: 9, border: 0, borderRadius: 8, padding: '9px 10px', background: '#e5e7eb', color: '#111827', fontWeight: 700, cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Importing…' : 'Add source'}</button>
       {status && <div style={{ marginTop: 10, padding: 9, borderRadius: 8, background: '#171923', color: '#c9cbd2', fontSize: 11, lineHeight: 1.45 }}>{status}</div>}
-      {status.startsWith('Added ') && <button onClick={() => window.location.reload()} style={{ width: '100%', marginTop: 8, border: '1px solid rgba(255,255,255,.1)', borderRadius: 8, padding: '8px 10px', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Refresh Apollo</button>}
+      {status.startsWith('Added ') && <button onClick={() => window.location.reload()} style={{ width: '100%', marginTop: 8, border: '1px solid rgba(255,255,255,.1)', borderRadius: 8, padding: '8px 10px', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Refresh Marklyf</button>}
     </div>
   </aside>
 }

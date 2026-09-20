@@ -3,7 +3,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://apollo-api-2pt1.
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, options)
   if (!response.ok) {
-    let message = `Apollo API returned ${response.status}`
+    let message = `Marklyf API returned ${response.status}`
     try {
       const body = await response.json()
       if (body?.detail) message = body.detail

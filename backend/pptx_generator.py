@@ -1,6 +1,6 @@
-"""Apollo PPTX generation adapted from the image-based export boundary used by NotebookLM-Lite.
+"""Marklyf PPTX generation adapted from the image-based export boundary used by NotebookLM-Lite.
 
-Apollo currently renders source-grounded editable text slides directly with python-pptx.
+Marklyf currently renders source-grounded editable text slides directly with python-pptx.
 The export boundary intentionally stays small so the generation workflow can evolve
 toward image-backed slides later without changing the Studio API.
 """
@@ -148,7 +148,7 @@ def build_source_grounded_pptx(
             Inches(7.03),
             Inches(9.2),
             Inches(0.22),
-            f"Apollo · Source-grounded · {source_footer}" if source_footer else "Apollo · Source-grounded",
+            f"Marklyf · Source-grounded · {source_footer}" if source_footer else "Marklyf · Source-grounded",
             font_size=8,
             color=APOLLO_MUTED,
         )
@@ -173,7 +173,7 @@ def build_source_grounded_pptx(
             Inches(2.8),
             Inches(11.7),
             Inches(1),
-            "Apollo Slide Deck",
+            "Marklyf Slide Deck",
             font_size=32,
             color=APOLLO_SOFT_ORANGE,
             bold=True,

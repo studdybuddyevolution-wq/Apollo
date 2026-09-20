@@ -1,6 +1,6 @@
-# Apollo deployment
+# Marklyf deployment
 
-Apollo runs as two services:
+Marklyf runs as two services:
 
 - `frontend/` — React + Vite + Cloudflare Worker/static assets.
 - `backend/` — FastAPI on Render.
@@ -63,9 +63,9 @@ APOLLO_TRANSFORM_MODEL=...
 APOLLO_WEB_SYNTHESIS_MODEL=...
 ```
 
-`DATABASE_URL` is the durable storage path for notebooks, sources, raw source payloads, jobs, insights, chat sessions and notes. When it is not configured, Apollo falls back to local filesystem storage for development.
+`DATABASE_URL` is the durable storage path for notebooks, sources, raw source payloads, jobs, insights, chat sessions and notes. When it is not configured, Marklyf falls back to local filesystem storage for development.
 
-Apollo applies SQL files in `backend/migrations/` at backend startup. The source-lifecycle migration adds refreshable source URLs and durable source payloads used by retry/refresh.
+Marklyf applies SQL files in `backend/migrations/` at backend startup. The source-lifecycle migration adds refreshable source URLs and durable source payloads used by retry/refresh.
 
 ## CORS
 
@@ -98,11 +98,11 @@ Then open the frontend at `http://localhost:5173`.
 
 ## Operational notes
 
-Web URL ingestion validates every redirect and pins the HTTP connection to the validated public IP. Uploaded files are bounded by `APOLLO_MAX_UPLOAD_BYTES` before indexing. Long embedding work is tracked through Apollo jobs, and source failures expose retry controls in the Sources drawer.
+Web URL ingestion validates every redirect and pins the HTTP connection to the validated public IP. Uploaded files are bounded by `APOLLO_MAX_UPLOAD_BYTES` before indexing. Long embedding work is tracked through Marklyf jobs, and source failures expose retry controls in the Sources drawer.
 
 ## Phase 8 production hardening
 
-Apollo enforces uploads at two layers. `APOLLO_MAX_UPLOAD_BYTES` is the per-file limit (25 MiB by default), and the raw ASGI request-body middleware rejects an oversized HTTP body before FastAPI multipart parsing. Malformed or non-positive upload-limit configuration falls back to the safe default. The request-body limit allows a bounded 512 KiB multipart envelope above the file limit.
+Marklyf enforces uploads at two layers. `APOLLO_MAX_UPLOAD_BYTES` is the per-file limit (25 MiB by default), and the raw ASGI request-body middleware rejects an oversized HTTP body before FastAPI multipart parsing. Malformed or non-positive upload-limit configuration falls back to the safe default. The request-body limit allows a bounded 512 KiB multipart envelope above the file limit.
 
 Uploaded source names are sanitized and collision-safe. Concurrent uploads of the same filename receive distinct source names instead of overwriting one another. Filesystem-fallback payload writes use a temporary file plus atomic replacement and clean up temporary files after failures. Production Postgres reservations are atomic at the notebook/source-name uniqueness boundary.
 
@@ -122,7 +122,7 @@ The root-level Streamlit files and older Python UI modules are legacy code kept 
 
 ## Persistence requirement
 
-For production, `DATABASE_URL` is required. With PostgreSQL configured, Apollo stores notebooks, chunks, source lifecycle metadata, raw source payloads, chat sessions/messages, notes, insights and jobs in the database. The filesystem store is a development fallback and is not a durable production store on an ephemeral Render filesystem.
+For production, `DATABASE_URL` is required. With PostgreSQL configured, Marklyf stores notebooks, chunks, source lifecycle metadata, raw source payloads, chat sessions/messages, notes, insights and jobs in the database. The filesystem store is a development fallback and is not a durable production store on an ephemeral Render filesystem.
 
 The backend health endpoint reports:
 
