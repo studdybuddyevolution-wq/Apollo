@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from planner_store import PLANNER_STORE, new_id
-from workspace_service import get_session
+from workspace_service import create_session, get_session, list_sessions
 from rag_service import get_notebook
 from storage import STORE
 
@@ -281,6 +281,26 @@ def register(app: FastAPI) -> None:
             rows = [row for row in rows if row.get("goal_id") == goal_id]
         return {"topics": rows}
 
+    @app.get("/api/planner/topics/hierarchy")
+    def topic_hierarchy(user_id: str = "default", goal_id: str | None = None):
+        key = _user_id(user_id)
+        rows = PLANNER_STORE.list("topics", key)
+        if goal_id:
+            rows = [row for row in rows if row.get("goal_id") == goal_id]
+        by_parent: dict[str | None, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_parent.setdefault(row.get("parent_id"), []).append({**row, "children": []})
+        for bucket in by_parent.values():
+            bucket.sort(key=lambda item: (int(item.get("sort_order", 0)), item.get("title", "").lower()))
+        roots = by_parent.get(None, [])
+        def attach(items):
+            for item in items:
+                children = by_parent.get(item["id"], [])
+                item["children"] = children
+                attach(children)
+        attach(roots)
+        return {"topics": roots}
+
     @app.post("/api/planner/topics")
     def create_topic(payload: TopicCreate):
         user_id = _user_id(payload.user_id)
@@ -446,6 +466,29 @@ def register(app: FastAPI) -> None:
         if not deleted:
             raise HTTPException(status_code=404, detail="Plan block not found")
         return {"deleted": True, "id": block_id}
+
+    @app.post("/api/planner/blocks/{block_id}/start")
+    def start_block(block_id: str, user_id: str = "default"):
+        key = _user_id(user_id)
+        block = PLANNER_STORE.get("blocks", key, block_id)
+        if not block:
+            raise HTTPException(status_code=404, detail="Plan block not found")
+        if block.get("status") == "completed":
+            raise HTTPException(status_code=400, detail="Completed blocks cannot be started")
+        notebook_id = block.get("notebook_id")
+        if not notebook_id:
+            raise HTTPException(status_code=400, detail="This plan block has no notebook. Open a notebook and attach it before starting study.")
+        _ensure_notebook(key, notebook_id)
+
+        session = get_session(key, notebook_id, block.get("session_id")) if block.get("session_id") else None
+        if not session:
+            sessions = list_sessions(key, notebook_id)
+            session = sessions[0] if sessions else create_session(key, notebook_id, "Study: " + str(block.get("title") or "Planned study"))
+            block = PLANNER_STORE.update("blocks", key, block_id, {
+                "notebook_id": notebook_id,
+                "session_id": session["id"],
+            }) or block
+        return {"block": block, "session": session}
 
     @app.post("/api/planner/blocks/{block_id}/complete")
     def complete_block(block_id: str, payload: CompleteBlockRequest):
