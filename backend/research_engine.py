@@ -1,4 +1,4 @@
-"""Hybrid research orchestration for Apollo Deep Research."""
+"""Hybrid research orchestration for Marklyf Deep Research."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def _importance_terms(question: str) -> list[str]:
 
 
 def extract_requested_sections(question: str) -> list[str]:
-    """Extract an explicit, ordered research structure without forcing Apollo's template."""
+    """Extract an explicit, ordered research structure without forcing Marklyf's template."""
     sections: list[str] = []
     seen: set[str] = set()
     heading_pattern = re.compile(r"^\s*(?:#{1,4}\s+|(?:\d+(?:\.\d+)*[.)]?\s+)|[-*+]\s+)(.{2,140})\s*$")
@@ -294,7 +294,7 @@ def build_synthesis_instruction(
         closing_contract = "7. End with `### Key Terms` (a short glossary of the most important terms, names, or dates from this answer) followed by `### Exam-Oriented Takeaways` (5-8 concise bullet points on what is most likely to be tested or asked)."
     else:
         closing_contract = "7. End with exactly 3 concise bullet points under `### Summary`."
-    return f"""You are Apollo Omni AI's universal Deep Search synthesizer.
+    return f"""You are Marklyf Omni AI's universal Deep Search synthesizer.
 
 Deep Search format — follow this exact contract:
 1. Research plan: list the concrete sub-questions or user-requested sections you will answer. Preserve explicit user-provided section wording when possible.
@@ -316,7 +316,7 @@ Evidence verification summary: {verification}
 {study_note}
 
 Synthesis rules:
-- Reason over the supplied evidence, combining Apollo notebook evidence with Tavily web evidence.
+- Reason over the supplied evidence, combining Marklyf notebook evidence with Tavily web evidence.
 - Numeric citations [1], [2], etc. must refer to the numbered evidence blocks supplied to you. Never invent a citation or source.
 - Do not claim a source supports something that is not present in its supplied evidence.
 - Prefer authoritative, recent, and corroborated evidence. Mention uncertainty or conflicting evidence where material.
