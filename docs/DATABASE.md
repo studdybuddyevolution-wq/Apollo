@@ -57,7 +57,7 @@ The source lifecycle uses a unique constraint on `(notebook_id, name)`. History 
 - `002_knowledge_workspace.sql`: sessions, messages, notes.
 - `003_source_lifecycle.sql`: durable source URL and raw payload.
 - `004_socratic_mastery.sql`: Socratic session JSON plus mastery.
-- `005_persistence_hardening.sql`: production durability/hardening additions; retain as part of startup migration order.
+There is no `005` migration in the audited branch. Startup applies the files that actually exist: `001`, `002`, `003`, `004`, and `006`.
 - `006_history_analytics_indexes.sql`: history cursor indexes.
 
 `storage.py` applies each `*.sql` file in lexical order and logs migration failures as warnings.
