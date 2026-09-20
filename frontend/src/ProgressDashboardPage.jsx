@@ -133,6 +133,25 @@ export default function ProgressDashboardPage({ userId = 'default' }) {
           <section className="progress-card progress-calendar-card">
             <div className="progress-card-header">
               <div>
+                <span className="eyebrow">PLANNER</span>
+                <h2>Planned vs actual study</h2>
+              </div>
+              <CalendarCheck2 size={18} />
+            </div>
+            <div className="recall-grid">
+              <div><span>Planned blocks</span><strong>{data.planner?.planned_blocks || 0}</strong></div>
+              <div><span>Completed blocks</span><strong>{data.planner?.completed_blocks || 0}</strong></div>
+              <div><span>Planned minutes</span><strong>{data.planner?.planned_minutes || 0}</strong></div>
+              <div><span>Actual minutes</span><strong>{data.planner?.actual_minutes || 0}</strong></div>
+            </div>
+            {(data.planner?.deadline_risk?.warnings || []).map((warning) => (
+              <div className="planner-message" key={warning}>{warning}</div>
+            ))}
+          </section>
+
+          <section className="progress-card progress-calendar-card">
+            <div className="progress-card-header">
+              <div>
                 <span className="eyebrow">DAILY DETAIL</span>
                 <h2>Activity ledger</h2>
               </div>
