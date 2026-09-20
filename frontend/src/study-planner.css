@@ -35,3 +35,8 @@
 .planner-day-empty{padding:18px 2px;text-align:center;color:var(--outline);font-size:9px;border:1px dashed var(--surface-high);border-radius:8px}.planner-loading{height:50vh;display:flex;justify-content:center;align-items:center;gap:8px;color:var(--tertiary);font-size:11px}
 @media (max-width:1100px){.planner-grid,.planner-grid.two{grid-template-columns:1fr}.planner-hero-card{grid-column:span 1}.topic-form{grid-template-columns:1fr 1fr}.proposal-row{grid-template-columns:24px 1fr 120px 90px 65px 30px}}
 @media (max-width:760px){.planner-page{padding:14px}.planner-week{grid-template-columns:repeat(7,180px)}.topic-form{grid-template-columns:1fr}.proposal-row{grid-template-columns:24px 1fr 90px 80px 55px 28px}}
+
+.planner-import-box{margin-top:10px;padding:10px;border:1px dashed var(--surface-high);border-radius:8px;background:var(--surface)}
+.planner-import-box strong{font-size:10px;color:var(--text)}.planner-import-box p{margin:4px 0 8px;font-size:8px;color:var(--tertiary)}.planner-import-box code{font-size:8px}
+.planner-import-box textarea{width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--surface-high);border-radius:7px;background:var(--surface-container);color:var(--text);padding:8px;font:inherit;font-size:9px;line-height:1.5}
+.planner-inline-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:7px}
