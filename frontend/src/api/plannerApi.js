@@ -85,6 +85,10 @@ export function deletePlannerBlock(id, userId = 'default') {
   return request(`/api/planner/blocks/${encodeURIComponent(id)}?user_id=${encodeURIComponent(userId)}`, { method: 'DELETE' })
 }
 
+export function startPlannerBlock(id, userId = 'default') {
+  return jsonRequest(`/api/planner/blocks/${encodeURIComponent(id)}/start?user_id=${encodeURIComponent(userId)}`, 'POST', {})
+}
+
 export function completePlannerBlock(id, actualMinutes = null, userId = 'default') {
   return jsonRequest(`/api/planner/blocks/${encodeURIComponent(id)}/complete`, 'POST', { actual_minutes: actualMinutes, user_id: userId })
 }
