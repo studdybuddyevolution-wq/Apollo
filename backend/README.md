@@ -1,6 +1,6 @@
-# Apollo FastAPI backend
+# Marklyf FastAPI backend
 
-Phase 3 introduces a small FastAPI boundary in front of the existing Apollo Python stack.
+Phase 3 introduces a small FastAPI boundary in front of the existing Marklyf Python stack.
 
 ## Run locally on Windows
 
@@ -31,4 +31,4 @@ The Vite development server proxies `/api/*` to `http://127.0.0.1:8000`, so the 
 - `GET /api/health` — backend health/configuration check.
 - `POST /api/chat` — Server-Sent Events stream for chat responses.
 
-The chat endpoint currently uses the Groq API with `qwen/qwen3.6-27b`. RAG, memory, notebooks, voice, vision, citations, and the rest of Apollo's existing Python services are deliberately not migrated in this phase yet.
+The chat endpoint currently uses the Groq API with `qwen/qwen3.6-27b`. RAG, memory, notebooks, voice, vision, citations, and the rest of Marklyf's existing Python services are deliberately not migrated in this phase yet.
