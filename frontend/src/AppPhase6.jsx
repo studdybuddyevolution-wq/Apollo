@@ -9,6 +9,8 @@ import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, 
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import PastSessionsPage from './PastSessionsPage'
 import ProgressDashboardPage from './ProgressDashboardPage'
+import StudyPlannerPage from './StudyPlannerPage'
+import { updatePlannerBlock } from './api/plannerApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
@@ -1120,6 +1122,35 @@ export default function AppPhase6() {
       if (streamAbortRef.current === controller) streamAbortRef.current = null
     }
   }
+  const startPlannedStudy = async (block) => {
+    const notebookId = block?.notebook_id || activeId || notebooks[0]?.id || ''
+    setSourceOpen(false)
+    setStudioOpen(false)
+    setSessionOpen(false)
+    setNotesOpen(false)
+    setActive('tutor')
+    if (!notebookId) return
+    try {
+      if (notebookId !== activeId) {
+        rememberRecent('notebooks', notebookId, uid)
+        setActiveId(notebookId)
+      }
+      let targetSessionId = block?.session_id || ''
+      if (!targetSessionId) {
+        const data = await listSessions(notebookId, uid)
+        const session = data.find?.((item) => item.id) || data.sessions?.[0] || await createSession(notebookId, 'Study: ' + (block?.title || 'Planned study'), uid)
+        targetSessionId = session.id
+        await updatePlannerBlock(block.id, { notebook_id: notebookId, session_id: targetSessionId }, uid)
+      }
+      pendingSessionRef.current = targetSessionId
+      if (notebookId === activeId) {
+        await loadSessionContent(notebookId, targetSessionId)
+      }
+    } catch (error) {
+      console.error('Failed to start planned study', error)
+    }
+  }
+
   const navIcon = (NAV_ITEMS.find((n) => n.id === active) || NAV_ITEMS[0]).icon
   const NavIcon = navIcon
 
@@ -1158,7 +1189,7 @@ export default function AppPhase6() {
         stop={stop}
         newChat={newChat}
         onSaveNote={saveNote}
-      /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">MARKLYF MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'planner' ? <StudyPlannerPage userId={uid} notebooks={notebooks} activeNotebookId={activeId} onStartStudy={startPlannedStudy} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">MARKLYF MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
