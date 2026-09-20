@@ -462,7 +462,13 @@ def register(app: FastAPI) -> None:
 
     @app.delete("/api/planner/blocks/{block_id}")
     def delete_block(block_id: str, user_id: str = "default"):
-        deleted = PLANNER_STORE.delete("blocks", _user_id(user_id), block_id)
+        key = _user_id(user_id)
+        existing = PLANNER_STORE.get("blocks", key, block_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Plan block not found")
+        if existing.get("status") == "completed":
+            raise HTTPException(status_code=400, detail="Completed blocks are immutable")
+        deleted = PLANNER_STORE.delete("blocks", key, block_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Plan block not found")
         return {"deleted": True, "id": block_id}
@@ -539,32 +545,41 @@ def register(app: FastAPI) -> None:
         from planner_service import generate_proposal
         user_id = _user_id(payload.user_id)
         _ensure_notebook(user_id, payload.notebook_id)
-        return generate_proposal(
-            user_id,
-            goal_ids=payload.goal_ids,
-            horizon_days=payload.horizon_days,
-            start_date=payload.start_date,
-            notebook_id=payload.notebook_id,
-        )
+        try:
+            return generate_proposal(
+                user_id,
+                goal_ids=payload.goal_ids,
+                horizon_days=payload.horizon_days,
+                start_date=payload.start_date,
+                notebook_id=payload.notebook_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/planner/proposals/apply")
     def apply_proposal(payload: ApplyProposalRequest):
         from planner_service import apply_proposal
         user_id = _user_id(payload.user_id)
-        return apply_proposal(user_id, payload.proposal)
+        try:
+            return apply_proposal(user_id, payload.proposal)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/planner/replan")
     def replan(payload: ReplanRequest):
         from planner_service import generate_replan_proposal
         user_id = _user_id(payload.user_id)
         _ensure_notebook(user_id, payload.notebook_id)
-        return generate_replan_proposal(
-            user_id,
-            goal_ids=payload.goal_ids,
-            horizon_days=payload.horizon_days,
-            start_date=payload.start_date,
-            notebook_id=payload.notebook_id,
-        )
+        try:
+            return generate_replan_proposal(
+                user_id,
+                goal_ids=payload.goal_ids,
+                horizon_days=payload.horizon_days,
+                start_date=payload.start_date,
+                notebook_id=payload.notebook_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/planner/overview")
     def planner_overview(user_id: str = "default", days: int = Query(default=7, ge=1, le=31)):
