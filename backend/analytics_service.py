@@ -6,6 +6,7 @@ from typing import Any
 
 from storage import STORE
 from workspace_service import _LOCK, _load, _user_key
+from socratic_engine import list_mastery
 
 
 def _date_range(days: int) -> tuple[dt.date, dt.date]:
@@ -200,7 +201,8 @@ def _filesystem_dashboard(user_id: str, days: int) -> dict[str, Any]:
         data = _load()
     sessions = [row for row in data["sessions"].values() if row.get("user_id") == user_id]
     messages_by_session = data["messages"]
-    daily: dict[dt.date, dict[str, int]] = {}
+    daily: dict[dt.date, dict[str, Any]] = {}
+    daily_session_ids: dict[dt.date, set[str]] = {}
     total_sessions = 0
     socratic_sessions = 0
     assistant_messages = 0
@@ -210,10 +212,11 @@ def _filesystem_dashboard(user_id: str, days: int) -> dict[str, Any]:
             day = dt.date.fromisoformat(updated)
         except ValueError:
             continue
-        if start <= day <= end:
+        in_window = start <= day <= end
+        if in_window:
             total_sessions += 1
-        if session.get("socratic_state"):
-            socratic_sessions += 1
+            if session.get("socratic_state"):
+                socratic_sessions += 1
         for message in messages_by_session.get(session["id"], []):
             raw_day = str(message.get("created") or "")[:10]
             try:
@@ -222,21 +225,31 @@ def _filesystem_dashboard(user_id: str, days: int) -> dict[str, Any]:
                 continue
             if not (start <= msg_day <= end):
                 continue
-            bucket = daily.setdefault(msg_day, {"messages": 0, "sessions": 0})
+            bucket = daily.setdefault(msg_day, {"messages": 0})
             bucket["messages"] += 1
-            bucket["sessions"] = 1
+            daily_session_ids.setdefault(msg_day, set()).add(str(session["id"]))
             if message.get("role") == "assistant":
                 assistant_messages += 1
 
     active_dates = sorted(daily)
     current_streak, longest = _streaks_from_days(active_dates, end)
+    mastery_rows = list_mastery(user_id)
+    attempts = sum(int(row.get("attempts", 0) or 0) for row in mastery_rows)
+    correct = sum(int(row.get("correct", 0) or 0) for row in mastery_rows)
+    average_score = (
+        sum(float(row.get("score", 0) or 0) for row in mastery_rows) / len(mastery_rows)
+        if mastery_rows else 0.0
+    )
+    proficient_topics = sum(1 for row in mastery_rows if float(row.get("score", 0) or 0) >= 75)
+    mastered_topics = sum(1 for row in mastery_rows if float(row.get("score", 0) or 0) >= 90)
+
     calendar = []
     cursor = start
     while cursor <= end:
         calendar.append({
             "date": str(cursor),
             "messages": daily.get(cursor, {}).get("messages", 0),
-            "sessions": daily.get(cursor, {}).get("sessions", 0),
+            "sessions": len(daily_session_ids.get(cursor, set())),
         })
         cursor += dt.timedelta(days=1)
 
@@ -253,12 +266,12 @@ def _filesystem_dashboard(user_id: str, days: int) -> dict[str, Any]:
             "calendar": calendar,
         },
         "mastery": {
-            "attempts": 0,
-            "correct": 0,
-            "accuracy": 0.0,
-            "average_score": 0.0,
-            "proficient_topics": 0,
-            "mastered_topics": 0,
+            "attempts": attempts,
+            "correct": correct,
+            "accuracy": round(correct / attempts, 3) if attempts else 0.0,
+            "average_score": round(average_score, 1),
+            "proficient_topics": proficient_topics,
+            "mastered_topics": mastered_topics,
         },
     }
 
