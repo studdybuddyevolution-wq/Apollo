@@ -93,6 +93,44 @@ export function searchNotebook(notebookId, query, options = {}) {
   })
 }
 
+export function listAllSessionsPage({
+  userId = 'default',
+  limit = 30,
+  cursor = null,
+  search = '',
+  kind = 'all',
+  notebookId = '',
+} = {}) {
+  const params = new URLSearchParams({
+    user_id: userId,
+    limit: String(limit),
+    kind,
+  })
+  if (cursor) params.set('cursor', cursor)
+  if (search.trim()) params.set('search', search.trim())
+  if (notebookId) params.set('notebook_id', notebookId)
+  return request(`/api/sessions?${params.toString()}`)
+}
+
+export function getSessionMessagesPage(
+  notebookId,
+  sessionId,
+  { userId = 'default', limit = 40, cursor = null } = {},
+) {
+  const params = new URLSearchParams({
+    user_id: userId,
+    limit: String(limit),
+  })
+  if (cursor) params.set('cursor', cursor)
+  return request(
+    `/api/notebooks/${encodeURIComponent(notebookId)}/sessions/${encodeURIComponent(sessionId)}/messages/page?${params.toString()}`,
+  )
+}
+
+export function getProgressDashboard(userId = 'default', days = 30) {
+  return request(`/api/progress/dashboard?user_id=${encodeURIComponent(userId)}&days=${encodeURIComponent(days)}`)
+}
+
 export function listSessions(notebookId, userId = 'default') {
   return request(`/api/notebooks/${encodeURIComponent(notebookId)}/sessions?user_id=${encodeURIComponent(userId)}`)
 }
