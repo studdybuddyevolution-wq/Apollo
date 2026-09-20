@@ -1,11 +1,13 @@
 import json
 
 import workspace_service
+import session_history
 from session_history import list_messages_page, list_sessions_page
 
 
 def test_session_cursor_pagination_covers_history_without_duplicates(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_service, "STORE", None)
+    monkeypatch.setattr(session_history, "STORE", None)
     monkeypatch.setattr(workspace_service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(workspace_service, "WORKSPACE_FILE", tmp_path / "workspace.json")
 
