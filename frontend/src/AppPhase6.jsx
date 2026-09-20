@@ -402,7 +402,7 @@ function NotesPanel({ notes, remove, close }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><strong style={{ flex: 1, fontSize: 12 }}>{note.title}</strong><button className="icon-button" title="Delete note" onClick={() => remove(note)}><X size={13} /></button></div>
         <p style={{ margin: '8px 0 0', fontSize: 11, lineHeight: 1.55, color: 'var(--tertiary)', whiteSpace: 'pre-wrap' }}>{note.content}</p>
       </article>)}
-      {!notes.length && <div className="source-empty-state"><Save size={22} /><strong>No saved notes</strong><span>Use “Save note” on an Marklyf answer.</span></div>}
+      {!notes.length && <div className="source-empty-state"><Save size={22} /><strong>No saved notes</strong><span>Use “Save note” on a Marklyf answer.</span></div>}
     </div>
   </aside>
 }
