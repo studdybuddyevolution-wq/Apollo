@@ -60,6 +60,8 @@ export default function StudyPlannerPage({ userId = 'default', notebooks = [], a
   const [goalForm, setGoalForm] = useState({ title: '', subject: '', exam_date: '', priority: 3 })
   const [topicForm, setTopicForm] = useState({ title: '', goal_id: '', parent_id: '', estimated_minutes: 45, difficulty: 3 })
   const [availabilityForm, setAvailabilityForm] = useState({ weekday: 1, start_time: '17:00', end_time: '19:00' })
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
 
   const weekStart = todayIso()
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart])
@@ -138,6 +140,48 @@ export default function StudyPlannerPage({ userId = 'default', notebooks = [], a
       setTopicForm((current) => ({ ...current, title: '' }))
     } catch (err) {
       setError(err?.message || 'Topic creation failed')
+    } finally { setBusy(false) }
+  }
+
+  const importCurriculum = async () => {
+    const lines = importText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    if (!lines.length) return
+    setBusy(true)
+    setError('')
+    try {
+      let working = [...topics]
+      for (const line of lines) {
+        const columns = line.split('|').map((value) => value.trim())
+        const path = columns[0].split('>').map((value) => value.trim()).filter(Boolean)
+        const estimated = Number(columns[1] || 45)
+        const difficulty = Number(columns[2] || 3)
+        let parentId = null
+        for (const title of path) {
+          const existing = working.find((topic) => (
+            (topic.goal_id || null) === (selectedGoalId || topicForm.goal_id || null)
+            && (topic.parent_id || null) === parentId
+            && String(topic.title).toLowerCase() === title.toLowerCase()
+          ))
+          if (existing) {
+            parentId = existing.id
+            continue
+          }
+          const created = await createPlannerTopic({
+            title,
+            goal_id: selectedGoalId || topicForm.goal_id || null,
+            parent_id: parentId,
+            estimated_minutes: path[path.length - 1] === title ? Math.max(5, Math.min(720, estimated || 45)) : 45,
+            difficulty: Math.max(1, Math.min(5, difficulty || 3)),
+          }, userId)
+          working = [...working, created]
+          parentId = created.id
+        }
+      }
+      setTopics(working)
+      setImportText('')
+      setImportOpen(false)
+    } catch (err) {
+      setError(err?.message || 'Curriculum import failed')
     } finally { setBusy(false) }
   }
 
@@ -327,6 +371,7 @@ export default function StudyPlannerPage({ userId = 'default', notebooks = [], a
               <input type="number" min="5" step="5" value={topicForm.estimated_minutes} onChange={(e) => setTopicForm({ ...topicForm, estimated_minutes: Number(e.target.value) })} />
               <select value={topicForm.difficulty} onChange={(e) => setTopicForm({ ...topicForm, difficulty: Number(e.target.value) })}>{[1,2,3,4,5].map((value) => <option key={value} value={value}>Difficulty {value}</option>)}</select>
               <button className="planner-primary" disabled={busy}><Plus size={14} /> Add topic</button>
+              <button type="button" className="planner-secondary" onClick={() => setImportOpen((value) => !value)} disabled={busy}><GitBranch size={14} /> Import</button>
             </form>
             <div className="planner-topic-tree">{orderedTopics.map((topic) => <div className="planner-topic-row" key={topic.id} style={{ paddingLeft: 12 + depthForTopic(topic, topicsById) * 22 }}><button className={topic.status === 'completed' ? 'topic-check done' : 'topic-check'} onClick={() => toggleTopicCompletion(topic)} title="Toggle completion"><Check size={13} /></button><div className="planner-topic-main"><strong className={topic.status === 'completed' ? 'completed' : ''}>{topic.title}</strong><span>{goalOptions.find((goal) => goal.id === topic.goal_id)?.title || 'Unassigned'} · {minutesLabel(topic.estimated_minutes)} · difficulty {topic.difficulty}/5</span></div></div>)}{!orderedTopics.length && <div className="planner-empty">No topics yet.</div>}</div>
           </article>
