@@ -444,6 +444,77 @@ def generate_replan_proposal(
     return proposal
 
 
+def _validate_accepted_blocks(
+    user_id: str,
+    blocks: list[dict[str, Any]],
+    delete_ids: set[str],
+) -> None:
+    """Validate user-edited proposal blocks before persistence."""
+    today = dt.date.today()
+    goals = _goal_map(user_id)
+    availability = _weekday_windows(user_id)
+    existing = [
+        row for row in PLANNER_STORE.list("blocks", user_id)
+        if row["id"] not in delete_ids and row.get("status") in {"planned", "completed"}
+    ]
+
+    occupied: dict[dt.date, list[tuple[dt.datetime, dt.datetime]]] = defaultdict(list)
+    daily_minutes: dict[dt.date, int] = defaultdict(int)
+
+    for row in existing:
+        planned_date = _date(row["planned_date"])
+        duration = max(0, int(row.get("duration_minutes", 0) or 0))
+        daily_minutes[planned_date] += duration
+        start = _time(row.get("start_time"))
+        if start:
+            begin = dt.datetime.combine(planned_date, start)
+            occupied[planned_date].append((begin, begin + dt.timedelta(minutes=duration)))
+
+    for item in blocks:
+        planned_date = _date(item.get("planned_date"))
+        if planned_date < today:
+            raise ValueError("Accepted plan blocks must be scheduled today or later")
+        duration = int(item.get("duration_minutes", 0))
+        if duration <= 0:
+            raise ValueError("Every proposed block must have a positive duration")
+
+        goal_id = item.get("goal_id")
+        goal = goals.get(goal_id) if goal_id else None
+        if goal and goal.get("exam_date") and planned_date > _date(goal["exam_date"]):
+            raise ValueError(f"Block '{item.get('title') or 'Study'}' is after its goal deadline")
+
+        start = _time(item.get("start_time"))
+        if start:
+            window_ok = False
+            end_dt = dt.datetime.combine(planned_date, start) + dt.timedelta(minutes=duration)
+            for win_start, win_end in availability.get(planned_date.weekday(), []):
+                if start >= win_start and end_dt.time() <= win_end:
+                    window_ok = True
+                    break
+            if not window_ok:
+                raise ValueError(f"Block '{item.get('title') or 'Study'}' is outside an enabled study window")
+
+            for occupied_start, occupied_end in occupied.get(planned_date, []):
+                if end_dt > occupied_start and dt.datetime.combine(planned_date, start) < occupied_end:
+                    raise ValueError(f"Block '{item.get('title') or 'Study'}' overlaps another accepted block")
+
+            interval = (dt.datetime.combine(planned_date, start), end_dt)
+            for other_start, other_end in occupied.get(planned_date, []):
+                if interval[1] > other_start and interval[0] < other_end:
+                    raise ValueError(f"Block '{item.get('title') or 'Study'}' overlaps another accepted block")
+            occupied.setdefault(planned_date, []).append(interval)
+
+        daily_minutes[planned_date] += duration
+        capacity = sum(
+            int((dt.datetime.combine(planned_date, end) - dt.datetime.combine(planned_date, start)).total_seconds() // 60)
+            for start, end in availability.get(planned_date.weekday(), [])
+        )
+        if daily_minutes[planned_date] > capacity:
+            raise ValueError(
+                f"Accepted work on {planned_date.isoformat()} exceeds available capacity "
+                f"({daily_minutes[planned_date]}m planned vs {capacity}m available)"
+            )
+
 def apply_proposal(user_id: str, proposal: dict[str, Any]) -> dict[str, Any]:
     blocks = proposal.get("blocks")
     if not isinstance(blocks, list):
@@ -457,6 +528,7 @@ def apply_proposal(user_id: str, proposal: dict[str, Any]) -> dict[str, Any]:
 
     goals = _goal_map(user_id)
     topics = _topic_map(user_id)
+    _validate_accepted_blocks(user_id, blocks, set(delete_ids))
     normalized: list[dict[str, Any]] = []
     now = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     for item in blocks:
