@@ -10,7 +10,7 @@ import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
 import PastSessionsPage from './PastSessionsPage'
 import ProgressDashboardPage from './ProgressDashboardPage'
 import StudyPlannerPage from './StudyPlannerPage'
-import { updatePlannerBlock } from './api/plannerApi'
+import { startPlannerBlock } from './api/plannerApi'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
@@ -1123,24 +1123,19 @@ export default function AppPhase6() {
     }
   }
   const startPlannedStudy = async (block) => {
-    const notebookId = block?.notebook_id || activeId || notebooks[0]?.id || ''
     setSourceOpen(false)
     setStudioOpen(false)
     setSessionOpen(false)
     setNotesOpen(false)
-    setActive('tutor')
-    if (!notebookId) return
     try {
+      const result = await startPlannerBlock(block.id, uid)
+      const notebookId = result?.session?.notebook_id || result?.block?.notebook_id || ''
+      const targetSessionId = result?.session?.id || result?.block?.session_id || ''
+      if (!notebookId || !targetSessionId) throw new Error('Planner returned no notebook session')
+      setActive('tutor')
       if (notebookId !== activeId) {
         rememberRecent('notebooks', notebookId, uid)
         setActiveId(notebookId)
-      }
-      let targetSessionId = block?.session_id || ''
-      if (!targetSessionId) {
-        const data = await listSessions(notebookId, uid)
-        const session = data.find?.((item) => item.id) || data.sessions?.[0] || await createSession(notebookId, 'Study: ' + (block?.title || 'Planned study'), uid)
-        targetSessionId = session.id
-        await updatePlannerBlock(block.id, { notebook_id: notebookId, session_id: targetSessionId }, uid)
       }
       pendingSessionRef.current = targetSessionId
       if (notebookId === activeId) {
@@ -1148,6 +1143,7 @@ export default function AppPhase6() {
       }
     } catch (error) {
       console.error('Failed to start planned study', error)
+      window.alert(error?.message || 'Could not start this planned study block.')
     }
   }
 
