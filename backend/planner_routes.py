@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from planner_store import PLANNER_STORE, new_id
-from workspace_service import create_session, get_session, list_sessions
+from workspace_service import create_session, get_session
 from rag_service import get_notebook
 from storage import STORE
 
@@ -488,8 +488,7 @@ def register(app: FastAPI) -> None:
 
         session = get_session(key, notebook_id, block.get("session_id")) if block.get("session_id") else None
         if not session:
-            sessions = list_sessions(key, notebook_id)
-            session = sessions[0] if sessions else create_session(key, notebook_id, "Study: " + str(block.get("title") or "Planned study"))
+            session = create_session(key, notebook_id, "Study: " + str(block.get("title") or "Planned study"))
             block = PLANNER_STORE.update("blocks", key, block_id, {
                 "notebook_id": notebook_id,
                 "session_id": session["id"],
