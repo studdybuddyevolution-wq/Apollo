@@ -28,7 +28,7 @@ const NAV_ITEMS = [
 ]
 
 const RESEARCH_MODES = [
-  { id: 'quick', label: 'Quick answer', icon: Sparkles, description: 'Fast answer from Apollo' },
+  { id: 'quick', label: 'Quick answer', icon: Sparkles, description: 'Fast answer from Marklyf' },
   { id: 'socratic', label: 'Socratic Tutor', icon: BrainCircuit, description: 'Guided reasoning instead of direct answers' },
   { id: 'web', label: 'Web search', icon: Globe, description: 'Current information + sources' },
   { id: 'deep', label: 'Deep Research', icon: SlidersHorizontal, description: 'Multi-step web research' },
@@ -124,8 +124,8 @@ function Sidebar({ active, setActive, collapsed, setCollapsed, notebooks, active
   return (
     <aside className={`apollo-sidebar ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="sidebar-brand">
-        <div className="brand-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="28" height="28" /></div>
-        {!collapsed && <div><div className="brand-name">APOLLO</div><div className="brand-subtitle">OMNI AI</div></div>}
+        <div className="brand-mark"><img src="/apollo-logo-mark.svg" alt="Marklyf" width="28" height="28" /></div>
+        {!collapsed && <div><div className="brand-name">MARKLYF</div><div className="brand-subtitle">OMNI AI</div></div>}
         <button className="icon-button sidebar-toggle" onClick={() => setCollapsed((v) => !v)} aria-label="Toggle sidebar">
           {collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
         </button>
@@ -175,14 +175,14 @@ function TopBar({ active, toggleSources, toggleStudio, toggleSessions, toggleNot
   const currentMode = RESEARCH_MODES.find((m) => m.id === researchMode) || RESEARCH_MODES[0]
   return (
     <header className="topbar">
-      <div className="topbar-left"><div className="breadcrumb"><span className="breadcrumb-muted">Apollo</span><span>/</span><strong>{item.label}</strong></div></div>
+      <div className="topbar-left"><div className="breadcrumb"><span className="breadcrumb-muted">Marklyf</span><span>/</span><strong>{item.label}</strong></div></div>
       <div className="topbar-actions">
         {(active === 'console' || active === 'tutor') && <>
           <button className="topbar-tool" onClick={toggleSessions}><History size={16} /> Chats</button>
           <button className="topbar-tool" onClick={toggleNotes}><Save size={16} /> Notes</button>
           <button className="topbar-tool" onClick={toggleSources}><FolderOpen size={16} /> Sources</button>
           {active === 'console' && <button className="topbar-tool" onClick={toggleStudio}><WandSparkles size={16} /> Studio</button>}
-          {active === 'console' && <label className="research-mode-select" title="Choose how Apollo researches this question">
+          {active === 'console' && <label className="research-mode-select" title="Choose how Marklyf researches this question">
             <currentMode.icon size={15} />
             <select value={researchMode} onChange={(e) => setResearchMode(e.target.value)} aria-label="Research mode">
               {RESEARCH_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
@@ -201,9 +201,9 @@ function Bubble({ message, onSaveNote, canSaveNote = true }) {
   const content = toDisplayText(message.content)
   return (
     <article className={`message-row ${me ? 'user' : 'assistant'}`}>
-      <div className={`message-avatar ${me ? 'user-avatar' : ''}`}>{me ? <User size={15} /> : <img src="/apollo-logo-mark.svg" alt="Apollo" width="22" height="22" />}</div>
+      <div className={`message-avatar ${me ? 'user-avatar' : ''}`}>{me ? <User size={15} /> : <img src="/apollo-logo-mark.svg" alt="Marklyf" width="22" height="22" />}</div>
       <div className="message-content">
-        <div className="message-meta"><span>{me ? 'You' : 'Apollo'}</span>{!me && message.model && <span className="message-model">{message.model}</span>}</div>
+        <div className="message-meta"><span>{me ? 'You' : 'Marklyf'}</span>{!me && message.model && <span className="message-model">{message.model}</span>}</div>
         <div className="message-text">{content ? <MarkdownMessage content={content} sources={message.sources} /> : (message.streaming && <span className="streaming-caret" />)}</div>
         {message.sources?.length > 0 && <div className="message-sources">
           {message.sources.map((source) => <a className="citation-pill web-citation" key={source.url || source.title} href={source.url} target="_blank" rel="noreferrer"><Globe size={11} /> {source.title || source.url}</a>)}
@@ -232,7 +232,7 @@ function Composer({ send, stop, busy, researchMode }) {
       <div className="composer composer-live">
         <button className="composer-icon" disabled><Paperclip size={18} /></button>
         <button className="composer-icon" disabled><ImagePlus size={18} /></button>
-        <input value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} placeholder={`${mode.label} — message Apollo…`} />
+        <input value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} placeholder={`${mode.label} — message Marklyf…`} />
         {busy ? <button className="send-button stop-button" onClick={stop} title="Stop response" aria-label="Stop response"><Square size={16} /></button> : <button className="send-button" onClick={submit} disabled={!value.trim()}><ArrowUp size={18} /></button>}
       </div>
       <div className="composer-meta-row"><span>Enter to send</span><span>Shift + Enter for a new line</span><span>{busy ? 'Generation in progress — press stop to cancel' : mode.description}</span></div>
@@ -321,7 +321,7 @@ function SourcePanel({ notebooks, activeId, sources, sourceModes, setSourceMode,
   return (
     <aside className="context-panel source-panel">
       <div className="context-header"><div><div className="context-kicker">KNOWLEDGE BASE</div><h2><FolderOpen size={17} /> Sources</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
-      <p className="context-description">Choose how much of each source Apollo can use for chat and research.</p>
+      <p className="context-description">Choose how much of each source Marklyf can use for chat and research.</p>
       <div className="notebook-picker"><span className="muted-label">ACTIVE NOTEBOOK</span><select className="notebook-picker-button" value={activeId} onChange={(e) => setActiveId(e.target.value)}>{notebooks.map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}</select></div>
       <div className="source-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sources..." /></div>
       <SourceImportBar notebookId={activeId} userId={userId} onImported={refreshSources} />
@@ -396,13 +396,13 @@ function SessionPanel({ sessions, activeSessionId, selectSession, createNew, ren
 function NotesPanel({ notes, remove, close }) {
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">NOTEBOOK</div><h2><Save size={17} /> Saved Notes</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
-    <p className="context-description">Save useful Apollo answers so they stay with this notebook.</p>
+    <p className="context-description">Save useful Marklyf answers so they stay with this notebook.</p>
     <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
       {notes.map((note) => <article key={note.id} style={{ padding: 10, borderRadius: 10, border: '1px solid var(--surface-high)', background: 'var(--surface-container)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><strong style={{ flex: 1, fontSize: 12 }}>{note.title}</strong><button className="icon-button" title="Delete note" onClick={() => remove(note)}><X size={13} /></button></div>
         <p style={{ margin: '8px 0 0', fontSize: 11, lineHeight: 1.55, color: 'var(--tertiary)', whiteSpace: 'pre-wrap' }}>{note.content}</p>
       </article>)}
-      {!notes.length && <div className="source-empty-state"><Save size={22} /><strong>No saved notes</strong><span>Use “Save note” on an Apollo answer.</span></div>}
+      {!notes.length && <div className="source-empty-state"><Save size={22} /><strong>No saved notes</strong><span>Use “Save note” on an Marklyf answer.</span></div>}
     </div>
   </aside>
 }
@@ -469,7 +469,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         setOutput(result)
       }
     } catch (err) {
-      if (err?.name === 'AbortError') setError('Studio generation timed out before Apollo returned a complete result.')
+      if (err?.name === 'AbortError') setError('Studio generation timed out before Marklyf returned a complete result.')
       else setError(err?.message || 'Studio generation failed')
     } finally {
       window.clearTimeout(timeout)
@@ -500,7 +500,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
 
   return <aside className="context-panel studio-panel">
     <div className="context-header"><div><div className="context-kicker">WORKSPACE</div><h2><WandSparkles size={17} /> Studio</h2></div><button className="icon-button context-close" onClick={close}><X size={17} /></button></div>
-    <p className="context-description">Every Studio output is generated from the selected Apollo notebook sources and saved as a reusable insight.</p>
+    <p className="context-description">Every Studio output is generated from the selected Marklyf notebook sources and saved as a reusable insight.</p>
 
     {!sources.length ? <div style={{ padding: 14, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)', fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
       <strong style={{ display: 'block', marginBottom: 8, color: 'var(--text)' }}>Connect a source first</strong>
@@ -538,7 +538,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
           {output.pptx_base64 && <button
             className="upload-button"
             style={{ width: 'auto', padding: '0 10px' }}
-            onClick={() => downloadBase64File(output.pptx_base64, output.filename || 'Apollo-Slide-Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')}
+            onClick={() => downloadBase64File(output.pptx_base64, output.filename || 'Marklyf-Slide-Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')}
           >Download PPTX</button>}
         </div>
         <div style={{ color: 'var(--tertiary)', fontSize: 10 }}>Grounded in: {(output.source_names || activeNames || []).join(', ') || 'selected notebook sources'}</div>
@@ -561,7 +561,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
           <button className="upload-button" onClick={speaking ? stopPodcast : playPodcast}>{speaking ? 'Stop audio' : 'Play audio'}</button>
         </div>
         <div style={{ maxHeight: 420, overflow: 'auto', display: 'grid', gap: 7 }}>
-          <strong style={{ fontSize: 14 }}>{output.data?.title || 'Apollo Audio Overview'}</strong>
+          <strong style={{ fontSize: 14 }}>{output.data?.title || 'Marklyf Audio Overview'}</strong>
           {(output.data?.segments || []).map((segment, index) => <article key={index} style={{ padding: 9, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><strong style={{ fontSize: 10, textTransform: 'uppercase' }}>{segment.speaker}</strong><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45 }}>{segment.text}</div></article>)}
         </div>
       </div>}
@@ -691,7 +691,7 @@ function SocraticTutor({
           <div style={{ minWidth: 0 }}>
             <div className="eyebrow">SOCRATIC STUDY</div>
             <h1>Socratic Tutor</h1>
-            <p>{notebook ? 'Apollo guides your reasoning instead of handing over the answer.' : 'Select or create a notebook to start a persistent Socratic session.'}</p>
+            <p>{notebook ? 'Marklyf guides your reasoning instead of handing over the answer.' : 'Select or create a notebook to start a persistent Socratic session.'}</p>
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 7 }}>
             <button className="upload-button" onClick={newChat} disabled={!notebook || busy}>New Socratic session</button>
@@ -733,12 +733,12 @@ function SocraticTutor({
             <div className="chat-scroll" style={{ flex: 1, minHeight: 0, padding: 12 }}>
               {!messages.length ? (
                 <div className="empty-chat-state">
-                  <div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div>
+                  <div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Marklyf" width="32" height="32" /></div>
                   <h2>{notebook ? 'Start with a belief, explanation, or question' : 'Select a notebook first'}</h2>
-                  <p>{notebook ? 'Apollo will probe one assumption at a time, guide discovery, and introduce relevant counterexamples before synthesizing what you learned.' : 'Socratic sessions use Apollo’s existing notebook/session persistence.'}</p>
+                  <p>{notebook ? 'Marklyf will probe one assumption at a time, guide discovery, and introduce relevant counterexamples before synthesizing what you learned.' : 'Socratic sessions use Marklyf’s existing notebook/session persistence.'}</p>
                 </div>
               ) : messages.map((message) => <Bubble key={message.id} message={message} onSaveNote={onSaveNote} canSaveNote={Boolean(notebook)} />)}
-              {busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> Apollo is thinking through the next Socratic move…</div>}
+              {busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> Marklyf is thinking through the next Socratic move…</div>}
             </div>
 
             <div style={{ padding: '10px 12px', borderTop: '1px solid var(--surface-high)' }}>
@@ -774,7 +774,7 @@ function SocraticTutor({
               {displayPhases.map(([id, label, hint]) => <div key={id} style={{ padding: 8, borderRadius: 8, border: '1px solid var(--surface-high)', background: phase === id ? 'var(--surface-container)' : 'transparent', opacity: phase === 'conclusion' || displayPhases.findIndex((item) => item[0] === id) <= phaseIndex ? 1 : 0.5 }}><strong style={{ fontSize: 10 }}>{label}</strong><div style={{ fontSize: 9, color: 'var(--tertiary)', marginTop: 2 }}>{hint}</div></div>)}
             </div>
             <div style={{ marginTop: 12, fontSize: 10, lineHeight: 1.5, color: 'var(--tertiary)' }}>
-              <strong style={{ color: 'var(--text)' }}>How Apollo teaches</strong>
+              <strong style={{ color: 'var(--text)' }}>How Marklyf teaches</strong>
               <div style={{ marginTop: 4 }}>Questions → your reasoning → guidance → a useful challenge → synthesis.</div>
               <div style={{ marginTop: 5 }}>Maieutics is bounded so the session keeps moving.</div>
             </div>
@@ -1027,7 +1027,7 @@ export default function AppPhase6() {
 
   const saveNote = async (message) => {
     if (!activeId || !message?.content) return
-    const firstLine = message.content.split('\n').map((line) => line.replace(/^#+\s*/, '').trim()).find(Boolean) || 'Apollo answer'
+    const firstLine = message.content.split('\n').map((line) => line.replace(/^#+\s*/, '').trim()).find(Boolean) || 'Marklyf answer'
     const title = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine
     await createNote(activeId, { title, content: message.content, source_type: 'chat', source_ref: sessionId }, uid)
     await refreshNotes()
@@ -1103,7 +1103,7 @@ export default function AppPhase6() {
           if (currentNotebook) listSessions(activeId, uid).then((data) => setSessions(data.sessions || [])).catch(() => {})
         },
         onError: (message) => {
-          const safeMessage = toDisplayText(message) || 'Apollo returned an unknown error.'
+          const safeMessage = toDisplayText(message) || 'Marklyf returned an unknown error.'
           setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${toDisplayText(m.content)}\n\n_(Response interrupted: ${safeMessage})_` : safeMessage, streaming: false } : m))
           setBusy(false)
         },
@@ -1112,7 +1112,7 @@ export default function AppPhase6() {
       if (error?.name === 'AbortError') {
         setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: m.content ? `${m.content}\n\n_(Generation stopped.)_` : 'Generation stopped.', streaming: false } : m))
       } else {
-        const safeMessage = toDisplayText(error?.message) || 'Apollo backend request failed.'
+        const safeMessage = toDisplayText(error?.message) || 'Marklyf backend request failed.'
         setMessages((v) => v.map((m) => m.id === assistantId ? { ...m, content: safeMessage, streaming: false } : m))
       }
       setBusy(false)
@@ -1136,8 +1136,8 @@ export default function AppPhase6() {
         setResearchMode={setResearchMode}
       />
       {active === 'console' ? <div className="main-panel"><main className="chat-main"><div className="chat-scroll">
-        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Apollo</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'No notebook required for quick or web chat. Create one to save sources, chats and notes.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
-        <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Apollo" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Ask Apollo directly'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Apollo.` : 'Quick and Web modes work without a notebook. Deep/Study modes can research the web and add notebook context when one is selected.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote} canSaveNote={Boolean(notebook)}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Apollo is responding…'}</div>}</div>
+        <div className="chat-header-row"><div><div className="context-kicker">CONSOLE</div><h1>Study with Marklyf</h1><p>{notebook ? `${notebook.title} · ${notebook.source_count || sources.length} sources connected · ${sessions.length} chats` : 'No notebook required for quick or web chat. Create one to save sources, chats and notes.'}</p></div>{notebook && <button className="chat-header-action" onClick={newChat} title="New chat" aria-label="New chat"><MessageSquarePlus size={16} /></button>}</div>
+        <div className="conversation">{!messages.length ? <div className="empty-chat-state"><div className="empty-chat-mark"><img src="/apollo-logo-mark.svg" alt="Marklyf" width="32" height="32" /></div><h2>{notebook ? 'Start a conversation' : 'Ask Marklyf directly'}</h2><p>{notebook ? `Choose ${RESEARCH_MODES.find((m) => m.id === researchMode)?.label || 'Quick answer'} and ask Marklyf.` : 'Quick and Web modes work without a notebook. Deep/Study modes can research the web and add notebook context when one is selected.'}</p></div> : messages.map((m) => <Bubble key={m.id} message={m} onSaveNote={saveNote} canSaveNote={Boolean(notebook)}/>)}{busy && <div className="thinking-line"><LoaderCircle size={14} className="spin" /> {researchMode === 'deep' ? 'Deep Research in progress…' : researchMode === 'study' ? 'Researching your notebook + web…' : researchMode === 'web' ? 'Searching the web…' : 'Marklyf is responding…'}</div>}</div>
       </div><div className="chat-bottom"><div className="suggestion-row"><button onClick={() => send('Explain a concept simply')} disabled={busy}><Sparkles size={13}/> Explain a concept simply</button><button onClick={() => send(researchMode === 'quick' ? 'Summarize my notes' : researchMode === 'study' ? 'Compare my notes with the latest information' : 'Research the latest developments related to my notes')} disabled={busy}><BookOpen size={13}/> {researchMode === 'quick' ? 'Summarize my notes' : 'Research latest'}</button></div><Composer send={send} stop={stop} busy={busy} researchMode={researchMode}/></div></main>
         {sourceOpen && <SourcePanel notebooks={notebooks} activeId={activeId} sources={sources} sourceModes={sourceModes} setSourceMode={setSourceMode} setAllSourceMode={setAllSourceMode} setActiveId={(id) => { rememberRecent('notebooks', id, uid); setActiveId(id); setMessages([]); setSocraticState(null) }} create={create} upload={upload} close={() => setSourceOpen(false)} userId={uid} refreshSources={async () => { await loadSources(activeId); await refresh(activeId) }} removeSource={removeSourceUi} retrySource={retrySourceUi} refreshSource={refreshSourceUi} />}
         {sessionOpen && <SessionPanel sessions={sessions} activeSessionId={sessionId} selectSession={selectSession} createNew={newChat} rename={rename} remove={remove} close={() => setSessionOpen(false)} />}
@@ -1158,7 +1158,7 @@ export default function AppPhase6() {
         stop={stop}
         newChat={newChat}
         onSaveNote={saveNote}
-      /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">MARKLYF MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
