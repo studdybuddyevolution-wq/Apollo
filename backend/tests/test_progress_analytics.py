@@ -53,6 +53,21 @@ def test_progress_dashboard_window_has_daily_rows(monkeypatch, tmp_path):
 
 
 
+def _write_workspace(tmp_path, session_overrides: dict, messages: dict):
+    payload = {"sessions": session_overrides, "messages": messages, "notes": {}}
+    (tmp_path / "workspace.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _msg(msg_id: str, day: str, role: str = "user") -> dict:
+    return {
+        "id": msg_id,
+        "session_id": "s1",
+        "role": role,
+        "content": "x",
+        "created": f"{day}T09:00:00",
+    }
+
+
 def test_filesystem_socratic_sessions_respect_window(monkeypatch, tmp_path):
     workspace_service.DATA_DIR = tmp_path
     workspace_service.WORKSPACE_FILE = tmp_path / "workspace.json"
