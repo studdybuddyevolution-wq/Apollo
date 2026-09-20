@@ -7,6 +7,8 @@ import {
 } from 'lucide-react'
 import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, streamChat } from './api/apolloApi'
 import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
+import PastSessionsPage from './PastSessionsPage'
+import ProgressDashboardPage from './ProgressDashboardPage'
 import {
   createNote, createNotebook, createSession, deleteNote, deleteSession,
   getSessionMessages, listNotes, listNotebooks, listSessions, listSources,
@@ -804,6 +806,7 @@ export default function AppPhase6() {
   const [tool, setTool] = useState('slides')
   const uid = useMemo(() => getUserId(), [])
   const streamAbortRef = useRef(null)
+  const pendingSessionRef = useRef('')
   const notebook = notebooks.find((n) => n.id === activeId) || null
   const activeSources = sources.filter((source) => (sourceModes[source.name] || 'full') !== 'off').map((source) => source.name)
 
@@ -836,20 +839,26 @@ export default function AppPhase6() {
     saveSourceModes(uid, id, mergedModes)
   }
 
+  const loadSessionContent = async (notebookId, id) => {
+    const [messageData, socraticData] = await Promise.all([
+      getSessionMessages(notebookId, id, uid),
+      getSocraticState(notebookId, id, uid).catch(() => ({ state: null })),
+    ])
+    setSessionId(id)
+    setMessages(messageData.messages || [])
+    setSocraticState(socraticData.state || null)
+  }
+
   const loadSessionsAndNotes = async (id) => {
     if (!id) { setSessions([]); setSessionId(''); setMessages([]); setNotes([]); return }
     const [sessionData, noteData] = await Promise.all([listSessions(id, uid), listNotes(id, uid)])
     let nextSessions = sessionData.sessions || []
     if (!nextSessions.length) nextSessions = [await createSession(id, 'New chat', uid)]
     setSessions(nextSessions)
-    const nextSession = nextSessions[0]
-    setSessionId(nextSession.id)
-    const [messageData, socraticData] = await Promise.all([
-      getSessionMessages(id, nextSession.id, uid),
-      getSocraticState(id, nextSession.id, uid).catch(() => ({ state: null })),
-    ])
-    setMessages(messageData.messages || [])
-    setSocraticState(socraticData.state || null)
+    const preferredId = pendingSessionRef.current
+    const nextSession = nextSessions.find((item) => item.id === preferredId) || nextSessions[0]
+    pendingSessionRef.current = ''
+    await loadSessionContent(id, nextSession.id)
     setNotes(noteData.notes || [])
   }
 
@@ -877,6 +886,24 @@ export default function AppPhase6() {
     const updated = await renameNotebook(nb.id, title.trim(), uid)
     setNotebooks((current) => current.map((item) => item.id === nb.id ? { ...item, ...updated } : item))
   }
+  const openPastSession = async (session) => {
+    if (!session?.notebook_id || !session?.id) return
+    setActive('tutor')
+    setSourceOpen(false)
+    setStudioOpen(false)
+    setSessionOpen(false)
+    setNotesOpen(false)
+    if (session.notebook_id === activeId) {
+      await loadSessionContent(session.notebook_id, session.id)
+      return
+    }
+    pendingSessionRef.current = session.id
+    setMessages([])
+    setSocraticState(null)
+    rememberRecent('notebooks', session.notebook_id, uid)
+    setActiveId(session.notebook_id)
+  }
+
   const removeNotebook = async (nb) => {
     if (!nb?.id || !confirm(`Delete notebook “${nb.title}”? This will remove its sources, chats, notes, and saved study data.`)) return
     await deleteNotebook(nb.id, uid)
@@ -1131,7 +1158,7 @@ export default function AppPhase6() {
         stop={stop}
         newChat={newChat}
         onSaveNote={saveNote}
-      /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
+      /> : active === 'progress' ? <ProgressDashboardPage userId={uid} /> : active === 'sessions' ? <PastSessionsPage userId={uid} notebooks={notebooks} activeSessionId={sessionId} onOpen={openPastSession} /> : <main className="main-content placeholder-page"><div className="page-heading"><div className="page-icon"><NavIcon size={22}/></div><div><div className="eyebrow">APOLLO MODULE</div><h1>{NAV_ITEMS.find(n=>n.id===active)?.label}</h1><p>This module is being migrated from the original Python app.</p></div></div></main>}
     </section>
   </div>
 }
