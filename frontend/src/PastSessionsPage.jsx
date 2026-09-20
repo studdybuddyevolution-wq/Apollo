@@ -76,7 +76,7 @@ export default function PastSessionsPage({
     [notebooks],
   )
 
-  const loadFirstPage = async () => {
+  const loadFirstPage = async (isCancelled) => {
     setLoading(true)
     setMessage('')
     try {
@@ -87,21 +87,24 @@ export default function PastSessionsPage({
         kind: filter,
         notebookId: notebookFilter,
       })
+      if (isCancelled?.()) return
       const next = result.sessions || []
       setSessions(next)
       setNextCursor(result.next_cursor || null)
       setHasMore(Boolean(result.has_more))
       setSelected(next.find((item) => item.id === activeSessionId) || next[0] || null)
     } catch (error) {
+      if (isCancelled?.()) return
       setMessage(error?.message || 'Could not load past sessions.')
     } finally {
-      setLoading(false)
+      if (!isCancelled?.()) setLoading(false)
     }
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { loadFirstPage() }, 180)
-    return () => window.clearTimeout(timer)
+    let cancelled = false
+    const timer = window.setTimeout(() => { loadFirstPage(() => cancelled) }, 180)
+    return () => { cancelled = true; window.clearTimeout(timer) }
   }, [userId, search, filter, notebookFilter])
 
   useEffect(() => {
@@ -206,7 +209,7 @@ export default function PastSessionsPage({
             </div>
           </div>
         </div>
-        <button className="chat-header-action" onClick={loadFirstPage} disabled={loading} title="Refresh" aria-label="Refresh">
+        <button className="chat-header-action" onClick={() => loadFirstPage()} disabled={loading} title="Refresh" aria-label="Refresh">
           <RefreshCw size={16} className={loading ? 'spin' : ''} />
         </button>
       </div>
