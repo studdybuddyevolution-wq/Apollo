@@ -5,6 +5,8 @@ import json
 from typing import Any
 
 from storage import STORE
+from planner_store import PLANNER_STORE
+from planner_service import build_planner_overview
 from workspace_service import _LOCK, _load, _user_key
 from socratic_engine import list_mastery
 
@@ -276,8 +278,45 @@ def _filesystem_dashboard(user_id: str, days: int) -> dict[str, Any]:
     }
 
 
+def _add_planner_metrics(payload: dict[str, Any], user_id: str, days: int) -> dict[str, Any]:
+    start, end = _date_range(days)
+    blocks = PLANNER_STORE.list("blocks", user_id)
+    window = [row for row in blocks if start <= dt.date.fromisoformat(str(row.get("planned_date"))[:10]) <= end]
+    planned_blocks = [row for row in window if row.get("status") != "skipped"]
+    completed_blocks = [row for row in window if row.get("status") == "completed"]
+    skipped_blocks = [row for row in window if row.get("status") == "skipped"]
+    planned_minutes = sum(int(row.get("duration_minutes", 0) or 0) for row in planned_blocks)
+    completed_minutes = sum(int(row.get("duration_minutes", 0) or 0) for row in completed_blocks)
+    actual_minutes = sum(int(row.get("actual_minutes", 0) or 0) for row in completed_blocks)
+    daily = []
+    cursor = start
+    while cursor <= end:
+        day_blocks = [row for row in window if str(row.get("planned_date"))[:10] == cursor.isoformat()]
+        day_planned = sum(int(row.get("duration_minutes", 0) or 0) for row in day_blocks if row.get("status") != "skipped")
+        day_completed = sum(int(row.get("duration_minutes", 0) or 0) for row in day_blocks if row.get("status") == "completed")
+        day_actual = sum(int(row.get("actual_minutes", 0) or 0) for row in day_blocks if row.get("status") == "completed")
+        daily.append({"date": cursor.isoformat(), "planned_minutes": day_planned, "completed_minutes": day_completed, "actual_minutes": day_actual})
+        cursor += dt.timedelta(days=1)
+    overview = build_planner_overview(user_id, days=min(max(days, 1), 31))
+    payload["planner"] = {
+        "planned_blocks": len(planned_blocks),
+        "completed_blocks": len(completed_blocks),
+        "skipped_blocks": len(skipped_blocks),
+        "planned_minutes": planned_minutes,
+        "completed_minutes": completed_minutes,
+        "actual_minutes": actual_minutes,
+        "completion_rate": round((completed_minutes / planned_minutes), 3) if planned_minutes else 0.0,
+        "daily": daily,
+        "deadline_risk": {
+            "current_goal": overview.get("current_goal"),
+            "warnings": overview.get("deadline_warnings", []),
+        },
+    }
+    return payload
+
+
 def get_progress_dashboard(user_id: str | None, days: int = 30) -> dict[str, Any]:
     key = _user_key(user_id)
     if STORE:
-        return _pg_dashboard(key, days)
-    return _filesystem_dashboard(key, days)
+        return _add_planner_metrics(_pg_dashboard(key, days), key, days)
+    return _add_planner_metrics(_filesystem_dashboard(key, days), key, days)
