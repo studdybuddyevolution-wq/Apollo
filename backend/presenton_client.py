@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import PurePosixPath
+from urllib.parse import urlparse
 from typing import Any
 
 import requests
@@ -22,7 +23,17 @@ def _base_url() -> str:
 
 
 def is_configured() -> bool:
-    return bool(_base_url() and os.getenv("MARKLYF_PRESENTON_API_KEY", "").strip())
+    url = _base_url()
+    if not url or not os.getenv("MARKLYF_PRESENTON_API_KEY", "").strip():
+        return False
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    # Marklyf deliberately supports only self-hosted Presenton. The hosted
+    # Presenton Cloud service is excluded so this integration cannot silently
+    # introduce a paid SaaS dependency.
+    if hostname in {"presenton.ai", "www.presenton.ai", "api.presenton.ai", "cloud.presenton.ai"}:
+        return False
+    return True
 
 
 def _absolute_link(value: Any) -> str | None:
@@ -70,8 +81,9 @@ def generate_deck(
 
     if not is_configured():
         raise PresentonError(
-            "Presenton slide generation is not configured. Set "
-            "MARKLYF_PRESENTON_URL and MARKLYF_PRESENTON_API_KEY."
+            "Self-hosted Presenton is not configured. Set MARKLYF_PRESENTON_URL "
+            "and MARKLYF_PRESENTON_API_KEY to an owned/self-hosted instance. "
+            "Presenton Cloud is not supported by Marklyf."
         )
 
     if not slides:
