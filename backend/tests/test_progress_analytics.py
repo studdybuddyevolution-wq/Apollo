@@ -11,20 +11,25 @@ def test_filesystem_progress_dashboard_calculates_gapless_streak(monkeypatch, tm
     workspace_service.STORE = None
     analytics_service.STORE = None
 
+    today = dt.datetime.now(dt.UTC).date()
+    day1 = today - dt.timedelta(days=2)
+    day2 = today - dt.timedelta(days=1)
+    day3 = today
+
     session = {
         "id": "chat_1",
         "notebook_id": "nb1",
         "user_id": "u1",
         "title": "Study",
-        "created": "2026-09-17T10:00:00",
-        "updated": "2026-09-20T10:00:00",
+        "created": f"{day1}T10:00:00",
+        "updated": f"{day3}T10:00:00",
         "socratic_state": {"phase": "elenchus"},
     }
     messages = {
         "chat_1": [
-            {"id": "m1", "session_id": "chat_1", "role": "user", "content": "a", "created": "2026-09-18T10:00:00"},
-            {"id": "m2", "session_id": "chat_1", "role": "assistant", "content": "b", "created": "2026-09-19T10:00:00"},
-            {"id": "m3", "session_id": "chat_1", "role": "user", "content": "c", "created": "2026-09-20T10:00:00"},
+            {"id": "m1", "session_id": "chat_1", "role": "user", "content": "a", "created": f"{day1}T10:00:00"},
+            {"id": "m2", "session_id": "chat_1", "role": "assistant", "content": "b", "created": f"{day2}T10:00:00"},
+            {"id": "m3", "session_id": "chat_1", "role": "user", "content": "c", "created": f"{day3}T10:00:00"},
         ],
     }
     payload = {"sessions": {"chat_1": session}, "messages": messages, "notes": {}}

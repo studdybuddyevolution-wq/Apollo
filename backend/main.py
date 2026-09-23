@@ -29,6 +29,7 @@ from storage import STORE
 from error_classifier import classify_error
 from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text
 from pptx_generator import build_source_grounded_pptx
+from presenton_client import PresentonError, generate_deck as generate_presenton_deck, is_configured as presenton_configured
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_REPO_ROOT / ".env", override=False)
@@ -604,7 +605,11 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
     rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
     allowed, retry_after = _check_rate_limit(rate_key)
     if not allowed:
-        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
     if get_notebook(request.user_id, notebook_id) is None:
         raise HTTPException(status_code=404, detail="Notebook not found")
     if not request.active_sources:
@@ -666,7 +671,11 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or f"Slide {index}").strip()
-        bullets = [str(value).strip() for value in (item.get("bullets") or []) if str(value).strip()][:6]
+        bullets = [
+            str(value).strip()
+            for value in (item.get("bullets") or [])
+            if str(value).strip()
+        ][:6]
         notes = str(item.get("speaker_notes") or "").strip()
         if not bullets:
             bullets = ["No source-supported points were returned for this slide."]
@@ -675,6 +684,39 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
     if not slides:
         raise HTTPException(status_code=502, detail="Marklyf's slide generator returned no usable slides.")
 
+    safe_title = str(payload.get("title") or "Marklyf Slide Deck").strip() or "Marklyf Slide Deck"
+
+    # Presenton is the production renderer when configured. It receives only
+    # Marklyf's already-grounded slide outline, so notebook/RAG boundaries stay
+    # in Marklyf while Presenton handles layout and editable PPTX export.
+    if presenton_configured():
+        try:
+            presenton = await asyncio.to_thread(
+                generate_presenton_deck,
+                slides=slides,
+                title=safe_title,
+                template=os.getenv("MARKLYF_PRESENTON_TEMPLATE"),
+                timeout_seconds=float(os.getenv("MARKLYF_PRESENTON_TIMEOUT_SECONDS", "45")),
+            )
+        except PresentonError as exc:
+            raise HTTPException(status_code=502, detail=f"Presenton slide export failed: {exc}") from exc
+
+        return {
+            "tool": "slides",
+            "title": safe_title,
+            "slides": slides,
+            "source_names": source_names,
+            "model_used": model,
+            "renderer": "presenton",
+            "presentation_id": presenton["presentation_id"],
+            "pptx_url": presenton["pptx_url"],
+            "edit_url": presenton.get("edit_url"),
+            "filename": presenton["filename"],
+            "template": presenton["template"],
+        }
+
+    # Keep the existing local exporter as a zero-dependency development/fallback
+    # path when Presenton is not configured.
     try:
         pptx_bytes = build_source_grounded_pptx(
             slides=slides,
@@ -684,8 +726,10 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"PPTX export failed: {exc}") from exc
 
-    safe_title = str(payload.get("title") or "Marklyf Slide Deck").strip() or "Marklyf Slide Deck"
-    filename = "".join(character if character.isalnum() or character in " -_" else "_" for character in safe_title).strip() or "Marklyf Slide Deck"
+    filename = "".join(
+        character if character.isalnum() or character in " -_" else "_"
+        for character in safe_title
+    ).strip() or "Marklyf Slide Deck"
     filename = f"{filename[:80]}.pptx"
     return {
         "tool": "slides",
@@ -693,6 +737,7 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
         "slides": slides,
         "source_names": source_names,
         "model_used": model,
+        "renderer": "local",
         "filename": filename,
         "pptx_base64": base64.b64encode(pptx_bytes).decode("ascii"),
     }
