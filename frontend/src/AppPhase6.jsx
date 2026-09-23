@@ -535,15 +535,32 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
       </div>}
 
       {output?.tool === 'slides' && <div style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto', marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>{output.title || output.data?.title || 'Slide Deck'}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, flex: 1, minWidth: 160 }}>{output.title || output.data?.title || 'Slide Deck'}</div>
+          {output.pptx_url && <a
+            className="upload-button"
+            style={{ width: 'auto', padding: '0 10px', textDecoration: 'none' }}
+            href={output.pptx_url}
+            target="_blank"
+            rel="noreferrer"
+          >Download PPTX</a>}
+          {output.edit_url && <a
+            className="upload-button"
+            style={{ width: 'auto', padding: '0 10px', textDecoration: 'none' }}
+            href={output.edit_url}
+            target="_blank"
+            rel="noreferrer"
+          >Open editor</a>}
           {output.pptx_base64 && <button
             className="upload-button"
             style={{ width: 'auto', padding: '0 10px' }}
             onClick={() => downloadBase64File(output.pptx_base64, output.filename || 'Marklyf-Slide-Deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')}
           >Download PPTX</button>}
         </div>
-        <div style={{ color: 'var(--tertiary)', fontSize: 10 }}>Grounded in: {(output.source_names || activeNames || []).join(', ') || 'selected notebook sources'}</div>
+        <div style={{ color: 'var(--tertiary)', fontSize: 10 }}>
+          {output.renderer === 'presenton' ? 'Rendered by Presenton · ' : 'Grounded in: '}
+          {(output.source_names || activeNames || []).join(', ') || 'selected notebook sources'}
+        </div>
         {(output.slides || output.data?.slides || []).map((slide, index) => <article key={`${slide.title}-${index}`} style={{ padding: 10, borderRadius: 9, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
           <strong style={{ display: 'block', marginBottom: 6 }}>{index + 1}. {slide.title}</strong>
           {(slide.bullets || []).map((bullet, bulletIndex) => <div key={bulletIndex} style={{ fontSize: 11, lineHeight: 1.45, marginBottom: 3 }}>• {bullet}</div>)}
