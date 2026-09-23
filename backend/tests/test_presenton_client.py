@@ -73,3 +73,9 @@ def test_presenton_errors_are_normalized(monkeypatch):
         assert "service unavailable" in str(exc)
     else:
         raise AssertionError("PresentonError was not raised")
+
+
+def test_presenton_cloud_is_not_allowed(monkeypatch):
+    monkeypatch.setenv("MARKLYF_PRESENTON_URL", "https://presenton.ai")
+    monkeypatch.setenv("MARKLYF_PRESENTON_API_KEY", "sk-test")
+    assert presenton_client.is_configured() is False
