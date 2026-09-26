@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from context_builder import build_context
@@ -19,6 +20,20 @@ from phase3_common import FriendlyGeminiError, extract_json_object, generate_gem
 from rag_service import get_notebook, get_notebook_chunks
 from storage import STORE
 from transformations import TRANSFORMATION_PROMPTS
+from study_report import (
+    REPORT_MODES,
+    build_full_report_prompt,
+    build_questions_prompt,
+    build_report_plan,
+    build_section_prompt,
+    format_evidence,
+    normalize_report_data,
+    normalize_section_response,
+    render_report_markdown,
+    report_grounding_score,
+    report_to_docx,
+    run_hybrid_research,
+)
 
 
 STUDIO_OUTPUT_TYPES = {"slides", "report", "podcast", "transform", "video"}
@@ -36,6 +51,22 @@ class StudioGenerateRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     transformation_type: str | None = None
     custom_prompt: str | None = None
+    user_id: str | None = None
+    report_mode: Literal["study", "deep", "academic"] = "study"
+    report_focus: str | None = None
+    requested_sections: list[str] = Field(default_factory=list)
+
+
+class ReportExportRequest(BaseModel):
+    markdown: str = Field(min_length=1, max_length=300_000)
+    title: str = Field(default="Marklyf Study Report", min_length=1, max_length=180)
+
+
+class ReportSectionRequest(BaseModel):
+    report_mode: Literal["study", "deep", "academic"] = "study"
+    report_focus: str | None = None
+    section_heading: str = Field(min_length=2, max_length=160)
+    active_sources: list[str] = Field(default_factory=list)
     user_id: str | None = None
 
 
@@ -228,6 +259,235 @@ def _report_markdown(data: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+
+def _report_word_count(markdown: str) -> int:
+    return len(re.findall(r"\b[\w'-]+\b", markdown or "", flags=re.UNICODE))
+
+
+def _report_reference_count(markdown: str) -> int:
+    match = re.search(r"(?m)^## References\s*$([\s\S]*)$", markdown or "")
+    if not match:
+        return 0
+    return sum(1 for line in match.group(1).splitlines() if re.match(r"^\s*(?:[-*]|\d+\.)\s+", line))
+
+
+def _report_notebook_title(user_id: str | None, notebook_id: str) -> str:
+    notebook = get_notebook(user_id, notebook_id) or {}
+    return str(notebook.get("title") or "Selected notebook sources").strip()
+
+
+def _generate_report_section_sync(
+    *,
+    focus: str,
+    mode: str,
+    heading: str,
+    source_names: list[str],
+    context: str,
+    evidence: str = "",
+) -> tuple[dict[str, Any], str]:
+    prompt, system, output_tokens = build_section_prompt(
+        focus=focus,
+        mode=mode,
+        section_heading=heading,
+        source_names=source_names,
+        context=context,
+        evidence=evidence,
+    )
+    text, model = _safe_generation(prompt, system=system, output_tokens=output_tokens, max_models=3)
+    return normalize_section_response(extract_json_object(text), heading, source_names), model
+
+
+def _generate_full_report_sync(
+    *,
+    focus: str,
+    mode: str,
+    plan: list[str],
+    source_names: list[str],
+    context: str,
+    evidence: str = "",
+) -> tuple[dict[str, Any], str]:
+    prompt, system, output_tokens = build_full_report_prompt(
+        focus=focus,
+        mode=mode,
+        plan=plan,
+        source_names=source_names,
+        context=context,
+        evidence=evidence,
+    )
+    text, model = _safe_generation(prompt, system=system, output_tokens=output_tokens, max_models=3)
+    return normalize_report_data(extract_json_object(text), plan=plan, allowed_sources=source_names), model
+
+
+def _report_stream_event(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _stream_study_report(notebook_id: str, request: StudioGenerateRequest):
+    try:
+        if request.tool != "report":
+            raise HTTPException(status_code=400, detail="This endpoint only supports Study Reports.")
+        if not request.active_sources:
+            raise HTTPException(status_code=400, detail="Select at least one source before generating a Study Report.")
+
+        focus = (request.report_focus or _report_notebook_title(request.user_id, notebook_id)).strip() or "the selected notebook sources"
+        yield _report_stream_event({"type": "progress", "stage": "planning", "percentage": 8, "message": "Building an adaptive report outline."})
+
+        context, source_names = await asyncio.to_thread(
+            _context_or_400, request.user_id, notebook_id, request.active_sources, token_budget=8500, top_k=26
+        )
+        plan = build_report_plan(focus, request.report_mode, request.requested_sections)
+        yield _report_stream_event({"type": "progress", "stage": "outline", "percentage": 18, "message": "Report outline ready.", "plan": plan})
+
+        evidence = ""
+        web_sources: list[dict[str, str]] = []
+        if request.report_mode == "deep":
+            yield _report_stream_event({"type": "progress", "stage": "research", "percentage": 24, "message": "Running notebook + web evidence passes."})
+            research = await asyncio.to_thread(
+                run_hybrid_research,
+                question=focus,
+                user_id=request.user_id,
+                notebook_id=notebook_id,
+                source_names=request.active_sources,
+                study=True,
+                deep=True,
+            )
+            evidence = format_evidence(research.get("evidence") or [], max_chars=42000)
+            web_sources = research.get("web_sources") or []
+            yield _report_stream_event({
+                "type": "progress",
+                "stage": "research_complete",
+                "percentage": 30,
+                "message": f"Collected {len(web_sources)} web references alongside notebook evidence.",
+            })
+
+        if request.report_mode == "deep":
+            sections: list[dict[str, Any]] = []
+            models: list[str] = []
+            total = len(plan)
+            for index, heading in enumerate(plan, 1):
+                yield _report_stream_event({
+                    "type": "progress",
+                    "stage": "section",
+                    "percentage": 30 + int(((index - 1) / max(total, 1)) * 48),
+                    "current": index,
+                    "total": total,
+                    "section": heading,
+                    "message": f"Generating {heading}.",
+                })
+                section, model = await asyncio.to_thread(
+                    _generate_report_section_sync,
+                    focus=focus,
+                    mode=request.report_mode,
+                    heading=heading,
+                    source_names=source_names,
+                    context=context,
+                    evidence=evidence,
+                )
+                sections.append(section)
+                models.append(model)
+                yield _report_stream_event({
+                    "type": "progress",
+                    "stage": "section_complete",
+                    "percentage": 30 + int((index / max(total, 1)) * 48),
+                    "current": index,
+                    "total": total,
+                    "section": heading,
+                    "message": f"{heading} complete.",
+                })
+
+            questions_prompt, questions_system, questions_tokens = build_questions_prompt(focus, sections)
+            yield _report_stream_event({"type": "progress", "stage": "assessment", "percentage": 82, "message": "Building key terms and practice questions."})
+            question_text, question_model = await asyncio.to_thread(
+                _safe_generation,
+                questions_prompt,
+                system=questions_system,
+                output_tokens=questions_tokens,
+                max_models=3,
+            )
+            question_data = extract_json_object(question_text)
+            data = normalize_report_data(
+                {
+                    "title": f"Deep Study Report: {focus[:120]}",
+                    "summary": str(question_data.get("summary") or ""),
+                    "sections": sections,
+                    "key_terms": [term for section in sections for term in (section.get("key_terms") or [])][:12],
+                    "exam_takeaways": [item for section in sections for item in (section.get("exam_takeaways") or [])][:10],
+                    "exam_questions": question_data.get("exam_questions") or [],
+                },
+                plan=plan,
+                allowed_sources=source_names,
+            )
+            models.append(question_model)
+        else:
+            yield _report_stream_event({"type": "progress", "stage": "generation", "percentage": 32, "message": "Writing the report from the selected sources."})
+            data, model_used = await asyncio.to_thread(
+                _generate_full_report_sync,
+                focus=focus,
+                mode=request.report_mode,
+                plan=plan,
+                source_names=source_names,
+                context=context,
+                evidence=evidence,
+            )
+            models = [model_used]
+            yield _report_stream_event({"type": "progress", "stage": "generation_complete", "percentage": 82, "message": "Report draft complete."})
+
+        yield _report_stream_event({"type": "progress", "stage": "grounding", "percentage": 90, "message": "Checking source overlap and finalizing references."})
+        markdown = render_report_markdown(data, source_names=source_names, web_sources=web_sources)
+        overlap = report_grounding_score(markdown, context)
+
+        if overlap < 0.5 and request.report_mode != "deep":
+            stricter_prompt, stricter_system, stricter_tokens = build_full_report_prompt(
+                focus=focus, mode=request.report_mode, plan=plan, source_names=source_names, context=context, evidence=evidence
+            )
+            stricter_prompt += "\n\nREGENERATION RULE: The previous draft had weak source overlap. Rewrite it using only claims explicitly supported by the supplied source context. Prefer omission over invention."
+            try:
+                retry_text, retry_model = await asyncio.to_thread(
+                    _safe_generation,
+                    stricter_prompt,
+                    system=stricter_system,
+                    output_tokens=stricter_tokens,
+                    max_models=3,
+                )
+                retry_data = normalize_report_data(extract_json_object(retry_text), plan=plan, allowed_sources=source_names)
+                retry_markdown = render_report_markdown(retry_data, source_names=source_names, web_sources=web_sources)
+                retry_overlap = report_grounding_score(retry_markdown, context)
+                if retry_overlap > overlap:
+                    data, markdown, overlap = retry_data, retry_markdown, retry_overlap
+                    models.append(retry_model)
+            except Exception:
+                pass
+
+        models = list(dict.fromkeys(models))
+        model_used = models[-1] if models else "Gemini"
+        insight = await asyncio.to_thread(_persist_output, notebook_id, "study_report", markdown, model_used)
+
+        result = {
+            "tool": "report",
+            "data": data,
+            "markdown": markdown,
+            "insight": insight,
+            "model_used": model_used,
+            "models_used": models,
+            "sources": source_names,
+            "web_sources": web_sources,
+            "verified": overlap >= 0.5,
+            "overlap_ratio": overlap,
+            "warning": None if overlap >= 0.5 else "Some report content may not be fully supported by the selected source context. Review it before relying on it.",
+            "mode": request.report_mode,
+            "plan": plan,
+            "word_count": _report_word_count(markdown),
+            "reference_count": _report_reference_count(markdown),
+        }
+        yield _report_stream_event({"type": "progress", "stage": "complete", "percentage": 100, "message": "Study Report ready."})
+        yield _report_stream_event({"type": "done", "result": result})
+    except HTTPException as exc:
+        yield _report_stream_event({"type": "error", "message": str(exc.detail)})
+    except FriendlyGeminiError as exc:
+        yield _report_stream_event({"type": "error", "message": str(exc)})
+    except Exception:
+        yield _report_stream_event({"type": "error", "message": "Marklyf could not complete this Study Report."})
+
 def _podcast_script(data: dict[str, Any]) -> str:
     lines = [f"{data.get('title') or 'Marklyf Audio Overview'}", "", "HOST: " + str(data.get("intro") or "").strip()]
     for segment in data.get("segments") or []:
@@ -280,7 +540,10 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
         raise HTTPException(status_code=502, detail="Marklyf received an incomplete structured Studio response. Please try again.") from exc
 
     if request.tool == "report":
-        markdown = _report_markdown(data)
+        focus = (request.report_focus or _report_notebook_title(request.user_id, notebook_id)).strip()
+        plan = build_report_plan(focus, request.report_mode, request.requested_sections)
+        data = normalize_report_data(data, plan=plan, allowed_sources=source_names)
+        markdown = render_report_markdown(data, source_names=source_names)
         overlap = content_overlap_ratio("text", markdown, context)
         if overlap < 0.5:
             stricter_prompt = prompt + (
@@ -308,10 +571,15 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
             "markdown": markdown,
             "insight": insight,
             "model_used": model,
+            "models_used": [model],
             "sources": source_names,
             "verified": overlap >= 0.5,
             "overlap_ratio": round(overlap, 2),
-            "warning": None if overlap >= 0.5 else "Some claims in this report may not be fully supported by the indexed source content -- please review before relying on it.",
+            "warning": None if overlap >= 0.5 else "Some report content may not be fully supported by the selected source context. Review it before relying on it.",
+            "mode": request.report_mode,
+            "plan": plan,
+            "word_count": _report_word_count(markdown),
+            "reference_count": _report_reference_count(markdown),
         }
     if request.tool == "slides":
         slides = data.get("slides") or []
@@ -330,6 +598,55 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
     script = _podcast_script(data)
     insight = _persist_output(notebook_id, "podcast_script", script, model)
     return {"tool": "podcast", "data": data, "script": script, "insight": insight, "model_used": model, "sources": source_names}
+
+
+    @app.post("/api/notebooks/{notebook_id}/studio/report/stream")
+    async def studio_report_stream(notebook_id: str, request: StudioGenerateRequest, http_request: Request):
+        _enforce_rate_limit(http_request, request.user_id)
+        if request.tool != "report":
+            raise HTTPException(status_code=400, detail="This endpoint only supports Study Reports.")
+        return StreamingResponse(
+            _stream_study_report(notebook_id, request),
+            media_type="text/event-stream",
+            headers={"Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no-cache"},
+        )
+
+    @app.post("/api/notebooks/{notebook_id}/studio/report/section")
+    async def studio_report_section(notebook_id: str, request: ReportSectionRequest, http_request: Request):
+        _enforce_rate_limit(http_request, request.user_id)
+        if not request.active_sources:
+            raise HTTPException(status_code=400, detail="Select at least one source before regenerating a report section.")
+        focus=(request.report_focus or _report_notebook_title(request.user_id, notebook_id)).strip()
+        context, source_names = await asyncio.to_thread(
+            _context_or_400, request.user_id, notebook_id, request.active_sources, token_budget=7500, top_k=24
+        )
+        evidence=""
+        if request.report_mode=="deep":
+            research=await asyncio.to_thread(
+                run_hybrid_research,
+                question=focus, user_id=request.user_id, notebook_id=notebook_id,
+                source_names=request.active_sources, study=True, deep=True
+            )
+            evidence=format_evidence(research.get("evidence") or [], max_chars=36000)
+        section, model = await asyncio.to_thread(
+            _generate_report_section_sync,
+            focus=focus, mode=request.report_mode, heading=request.section_heading,
+            source_names=source_names, context=context, evidence=evidence
+        )
+        section_text=str(section.get("content") or "")+"\n"+"\n".join(section.get("points") or [])
+        score=report_grounding_score(section_text, context)
+        return {"tool":"report_section","section":section,"model_used":model,"verified":score>=0.5,"overlap_ratio":score}
+
+    @app.post("/api/notebooks/{notebook_id}/studio/report/docx")
+    async def studio_report_docx(notebook_id: str, request: ReportExportRequest, http_request: Request):
+        _enforce_rate_limit(http_request, http_request.client.host if http_request.client else "anonymous")
+        document=await asyncio.to_thread(report_to_docx, request.markdown, request.title)
+        safe_name=(re.sub(r"[^A-Za-z0-9 _-]","_",request.title).strip() or "Marklyf-Study-Report")[:80]
+        return {
+            "filename": safe_name+".docx",
+            "mime_type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "content_base64":__import__("base64").b64encode(document).decode("ascii"),
+        }
 
 
 def register(app: FastAPI) -> None:
