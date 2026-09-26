@@ -455,7 +455,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
-    const timeout = window.setTimeout(() => controller.abort(), 65000)
+    const timeout = window.setTimeout(() => controller.abort(), tool === 'report' ? 180000 : 65000)
     setGenerating(true)
     setError('')
     setDiagram(null)
@@ -665,7 +665,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
       </div>}
     </>}
 
-    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
+    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null); setReportProgress(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
     <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
