@@ -17,6 +17,8 @@ from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
 
+from request_limits import RequestBodyLimitMiddleware, get_max_request_body_bytes, get_max_upload_bytes
+
 from context_builder import build_context
 from diagrams import build_diagram_prompt, generate_and_render, content_overlap_ratio
 from jobs import enqueue_job, enqueue_embedding_job, get_job
@@ -27,22 +29,24 @@ from storage import STORE
 from error_classifier import classify_error
 from phase3_common import FriendlyGeminiError, extract_json_object, generate_gemini_text
 from pptx_generator import build_source_grounded_pptx
+from presenton_client import PresentonError, generate_deck as generate_presenton_deck, is_configured as presenton_configured
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_REPO_ROOT / ".env", override=False)
 
 PRIMARY_MODEL = os.getenv("APOLLO_PRIMARY_MODEL", "openai/gpt-oss-120b")
 GROQ_VISION_MODEL = os.getenv("APOLLO_VISION_MODEL", "qwen/qwen3.6-27b")
-GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
-WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.8-flash")
-GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv("APOLLO_GEMINI_FALLBACK_MODELS", "gemini-3.8-flash,gemini-3.5-flash,gemini-3.1-flash-lite").split(",") if m.strip()]
+GEMINI_FALLBACK_MODEL = os.getenv("APOLLO_GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+WEB_SYNTHESIS_MODEL = os.getenv("APOLLO_WEB_SYNTHESIS_MODEL", "gemini-3.5-flash-lite")
+GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv("APOLLO_GEMINI_FALLBACK_MODELS", "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash").split(",") if m.strip()]
 MAX_OUTPUT_TOKENS = 1000
 DEEP_OUTPUT_TOKENS = 2500
 WEB_OUTPUT_TOKENS = 1400
 PRODUCTION_WEB_ORIGIN = "https://apollo.studdybuddyevolution.workers.dev"
 RATE_LIMIT_MAX = int(os.getenv("APOLLO_RATE_LIMIT_MAX", "20"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("APOLLO_RATE_LIMIT_WINDOW_SECONDS", "600"))
-MAX_UPLOAD_BYTES = int(os.getenv("APOLLO_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = get_max_upload_bytes()
+MAX_REQUEST_BODY_BYTES = get_max_request_body_bytes()
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: dict[str, list[float]] = defaultdict(list)
 
@@ -62,7 +66,8 @@ def _check_rate_limit(key: str) -> tuple[bool, int]:
         return True, 0
 
 
-app = FastAPI(title="Apollo API", version="0.9.0")
+app = FastAPI(title="Marklyf API", version="0.9.0")
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_REQUEST_BODY_BYTES)
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.getenv("APOLLO_CORS_ORIGINS", f"http://localhost:5173,{PRODUCTION_WEB_ORIGIN}").split(",") if o.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -79,7 +84,12 @@ class ChatRequest(BaseModel):
     active_sources: list[str] = Field(default_factory=list)
     user_id: str | None = None
     web_enabled: bool = False
-    research_mode: Literal["quick", "web", "deep", "study"] = "quick"
+    research_mode: Literal["quick", "web", "deep", "study", "socratic"] = "quick"
+    socratic_topic: str | None = None
+    socratic_tier: str | None = None
+    socratic_score: float | None = None
+    socratic_force_advance: bool = False
+    socratic_state: dict[str, Any] | None = None
 
 
 class NotebookCreateRequest(BaseModel):
@@ -137,8 +147,17 @@ def _event(payload: dict[str, Any]) -> str:
 def _system_message(request: ChatRequest, context: str, source_names: list[str]) -> dict[str, str]:
     notebook = request.notebook_title or "the active notebook"
     sources = ", ".join(source_names) if source_names else "no active sources"
+    if request.research_mode == "socratic":
+        from socratic_engine import build_socratic_system_prompt, state_from_dict
+        state = state_from_dict(request.socratic_state)
+        if request.socratic_score is not None:
+            state.mastery_score = max(0.0, min(100.0, float(request.socratic_score)))
+            state.mastery_tier = state.mastery_tier or __import__("socratic_engine").tier_for_score(state.mastery_score)
+        topic = (request.socratic_topic or state.topic or notebook or "the current idea").strip()
+        state.topic = topic
+        return {"role": "system", "content": build_socratic_system_prompt(topic, state, context)}
     content = (
-        "You are Apollo Omni AI, a helpful academic AI companion. "
+        "You are Marklyf Omni AI, a helpful academic AI companion. "
         f"The current notebook is {notebook}. Available sources: {sources}. "
         "Answer directly and naturally. Keep private chain-of-thought/reasoning hidden; return only the answer, conclusions, and useful explanations. "
         "Use supplied source context when relevant and distinguish it from your own knowledge. "
@@ -147,12 +166,12 @@ def _system_message(request: ChatRequest, context: str, source_names: list[str])
     )
     if request.research_mode == "quick":
         content += (
-            " Use Apollo Quick Search format: answer directly in 1-2 sentences, then use 1-3 inline numeric citations like [1] or [2]. "
+            " Use Marklyf Quick Search format: answer directly in 1-2 sentences, then use 1-3 inline numeric citations like [1] or [2]. "
             "Do not use headings or bullet lists. Stay under 80 words. If uncertain, state that uncertainty in one line."
         )
     elif request.web_enabled and request.research_mode == "web":
         content += (
-            " Use Apollo Medium Search format: begin with a 1-sentence direct answer, then provide 2-4 short paragraphs or bullet points with supporting detail, using inline numeric citations like [1], [2], [3]. "
+            " Use Marklyf Medium Search format: begin with a 1-sentence direct answer, then provide 2-4 short paragraphs or bullet points with supporting detail, using inline numeric citations like [1], [2], [3]. "
             "End with one short Key takeaway line. Keep the total response between 150 and 300 words."
         )
     if context:
@@ -175,7 +194,7 @@ def _stream_groq(request: ChatRequest, messages: list[dict[str, str]], model: st
         if model.startswith("openai/gpt-oss"):
             kwargs["reasoning_effort"] = "medium"
     stream = client.chat.completions.create(**kwargs)
-    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": "quick"})
+    yield _event({"type": "start", "model": model, "provider": "groq", "web": False, "research": request.research_mode})
     for chunk in stream:
         text = chunk.choices[0].delta.content or ""
         if text:
@@ -335,7 +354,7 @@ def _stream_web(request: ChatRequest, system_content: str):
     if not blocks:
         raise RuntimeError("Tavily returned no usable web results")
     instruction = system_content + (
-        "\n\nYou are Apollo's Medium Search synthesizer. Follow the Medium Search format exactly: begin with a 1-sentence direct answer; then use 2-4 short paragraphs or bullet points with supporting detail; cite supporting claims inline as [1], [2], [3] using the numbered sources supplied below; finish with a single 'Key takeaway:' line. Keep the entire response between 150 and 300 words. Do not add extra sections."
+        "\n\nYou are Marklyf's Medium Search synthesizer. Follow the Medium Search format exactly: begin with a 1-sentence direct answer; then use 2-4 short paragraphs or bullet points with supporting detail; cite supporting claims inline as [1], [2], [3] using the numbered sources supplied below; finish with a single 'Key takeaway:' line. Keep the entire response between 150 and 300 words. Do not add extra sections."
     )
     prompt = _conversation_text(request.messages, instruction) + "\n\nTAVILY SOURCES:\n" + "\n\n---\n\n".join(blocks)
     if sources:
@@ -345,16 +364,30 @@ def _stream_web(request: ChatRequest, system_content: str):
 
 def _stream_gemini(request: ChatRequest, system_content: str, model: str):
     prompt = _conversation_text(request.messages, system_content)
-    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": "quick"})
+    yield from _stream_gemini_resilient(prompt=prompt, system_instruction=system_content, output_tokens=MAX_OUTPUT_TOKENS, primary_model=model, event_meta={"provider": "gemini", "fallback": True, "web": False, "research": request.research_mode})
 
 
 def _stream_model(request: ChatRequest, context: str, source_names: list[str]):
     system = _system_message(request, context, source_names)
     messages = [system] + [{"role": message.role, "content": message.content} for message in request.messages]
+    if request.research_mode == "socratic" and not request.socratic_state:
+        from socratic_engine import phase_label, phase_status, state_from_dict
+        state = state_from_dict(None)
+        yield _event({
+            "type": "socratic_state",
+            "phase": state.phase,
+            "phase_label": phase_label(state.phase),
+            "status": phase_status(state.phase),
+            "in_dialectic_loop": state.in_dialectic_loop,
+            "maieutics_count": state.maieutics_count,
+            "mastery_score": round(state.mastery_score, 1),
+            "mastery_tier": state.mastery_tier,
+            "user_response_count": state.user_response_count,
+        })
     if request.research_mode in {"deep", "study"}:
         yield from _stream_deep_research(request, system["content"], context, source_names)
         return
-    if request.web_enabled:
+    if request.web_enabled and request.research_mode != "socratic":
         yield from _stream_web(request, system["content"])
         return
     groq_model = request.model or PRIMARY_MODEL
@@ -403,6 +436,7 @@ def health() -> dict[str, object]:
         "embedding_dimensions": int(os.getenv("APOLLO_EMBEDDING_DIMENSIONS", "768")),
         "pgvector": bool(STORE and STORE.vector_available()),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
+        "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
         "storage_backend": "postgres" if STORE else "filesystem",
         "durable_storage": bool(STORE),
     }
@@ -454,17 +488,24 @@ async def notebook_source_upload(notebook_id: str, request: Request, file: Uploa
     if content_length:
         try:
             if int(content_length) > MAX_UPLOAD_BYTES + 512 * 1024:
-                raise HTTPException(status_code=413, detail=f"Upload is too large. Apollo accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+                raise HTTPException(status_code=413, detail=f"Upload is too large. Marklyf accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
         except ValueError:
             pass
     raw = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(raw) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"Upload is too large. Apollo accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+        raise HTTPException(status_code=413, detail=f"Upload is too large. Marklyf accepts files up to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     try:
-        result = await asyncio.to_thread(add_source, user_id, notebook_id, file.filename or "source.txt", raw)
-        embedding_job = await enqueue_embedding_job(notebook_id, user_id, file.filename or "source.txt")
+        result = await asyncio.to_thread(
+            add_source,
+            user_id,
+            notebook_id,
+            file.filename or "source.txt",
+            raw,
+            replace_existing=False,
+        )
+        embedding_job = await enqueue_embedding_job(notebook_id, user_id, result["name"])
         result["embedding_job"] = embedding_job
         return result
     except KeyError:
@@ -564,7 +605,11 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
     rate_key = request.user_id or (http_request.client.host if http_request.client else "anonymous")
     allowed, retry_after = _check_rate_limit(rate_key)
     if not allowed:
-        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Try again in {retry_after} seconds.", headers={"Retry-After": str(retry_after)})
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
     if get_notebook(request.user_id, notebook_id) is None:
         raise HTTPException(status_code=404, detail="Notebook not found")
     if not request.active_sources:
@@ -599,7 +644,7 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
             generate_gemini_text,
             prompt,
             system_instruction=(
-                "You are Apollo's slide-deck generation engine. Output only valid JSON. "
+                "You are Marklyf's slide-deck generation engine. Output only valid JSON. "
                 "Use only the provided notebook source context and never add outside knowledge."
             ),
             output_tokens=3200,
@@ -619,22 +664,59 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
 
     raw_slides = payload.get("slides") if isinstance(payload, dict) else None
     if not isinstance(raw_slides, list) or not raw_slides:
-        raise HTTPException(status_code=502, detail="Apollo's slide generator returned an invalid deck structure.")
+        raise HTTPException(status_code=502, detail="Marklyf's slide generator returned an invalid deck structure.")
 
     slides = []
     for index, item in enumerate(raw_slides[: request.page_count], 1):
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or f"Slide {index}").strip()
-        bullets = [str(value).strip() for value in (item.get("bullets") or []) if str(value).strip()][:6]
+        bullets = [
+            str(value).strip()
+            for value in (item.get("bullets") or [])
+            if str(value).strip()
+        ][:6]
         notes = str(item.get("speaker_notes") or "").strip()
         if not bullets:
             bullets = ["No source-supported points were returned for this slide."]
         slides.append({"title": title, "bullets": bullets, "speaker_notes": notes})
 
     if not slides:
-        raise HTTPException(status_code=502, detail="Apollo's slide generator returned no usable slides.")
+        raise HTTPException(status_code=502, detail="Marklyf's slide generator returned no usable slides.")
 
+    safe_title = str(payload.get("title") or "Marklyf Slide Deck").strip() or "Marklyf Slide Deck"
+
+    # Presenton is the production renderer when configured. It receives only
+    # Marklyf's already-grounded slide outline, so notebook/RAG boundaries stay
+    # in Marklyf while Presenton handles layout and editable PPTX export.
+    if presenton_configured():
+        try:
+            presenton = await asyncio.to_thread(
+                generate_presenton_deck,
+                slides=slides,
+                title=safe_title,
+                template=os.getenv("MARKLYF_PRESENTON_TEMPLATE"),
+                timeout_seconds=float(os.getenv("MARKLYF_PRESENTON_TIMEOUT_SECONDS", "45")),
+            )
+        except PresentonError as exc:
+            raise HTTPException(status_code=502, detail=f"Presenton slide export failed: {exc}") from exc
+
+        return {
+            "tool": "slides",
+            "title": safe_title,
+            "slides": slides,
+            "source_names": source_names,
+            "model_used": model,
+            "renderer": "presenton",
+            "presentation_id": presenton["presentation_id"],
+            "pptx_url": presenton["pptx_url"],
+            "edit_url": presenton.get("edit_url"),
+            "filename": presenton["filename"],
+            "template": presenton["template"],
+        }
+
+    # Keep the existing local exporter as a zero-dependency development/fallback
+    # path when Presenton is not configured.
     try:
         pptx_bytes = build_source_grounded_pptx(
             slides=slides,
@@ -644,8 +726,10 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"PPTX export failed: {exc}") from exc
 
-    safe_title = str(payload.get("title") or "Apollo Slide Deck").strip() or "Apollo Slide Deck"
-    filename = "".join(character if character.isalnum() or character in " -_" else "_" for character in safe_title).strip() or "Apollo Slide Deck"
+    filename = "".join(
+        character if character.isalnum() or character in " -_" else "_"
+        for character in safe_title
+    ).strip() or "Marklyf Slide Deck"
     filename = f"{filename[:80]}.pptx"
     return {
         "tool": "slides",
@@ -653,6 +737,7 @@ async def notebook_slide_deck(notebook_id: str, request: SlideDeckRequest, http_
         "slides": slides,
         "source_names": source_names,
         "model_used": model,
+        "renderer": "local",
         "filename": filename,
         "pptx_base64": base64.b64encode(pptx_bytes).decode("ascii"),
     }

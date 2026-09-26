@@ -36,7 +36,7 @@ def _generate(prompt: str) -> tuple[str, str]:
         text, model, _ = generate_gemini_text(
             prompt,
             system_instruction=(
-                "You are Apollo's source transformation engine. Use only the supplied source content. "
+                "You are Marklyf's source transformation engine. Use only the supplied source content. "
                 "Never invent details or rely on outside knowledge. If evidence is insufficient, explicitly say so."
             ),
             output_tokens=2200,

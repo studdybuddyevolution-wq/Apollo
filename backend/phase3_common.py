@@ -9,14 +9,11 @@ import time
 from typing import Any, Callable
 
 DEFAULT_GEMINI_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
 ]
 
 _TRANSIENT_MARKERS = (
@@ -63,6 +60,12 @@ def is_transient_gemini_error(exc: BaseException) -> bool:
     return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None) or ""
+    text = f"{code} {exc}".lower()
+    return any(marker in text for marker in ("429", "resource_exhausted", "resource exhausted", "too many requests", "rate limit"))
+
+
 def _error_is_model_configuration_issue(exc: BaseException) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in ("not found", "unknown model", "invalid model", "unsupported model"))
@@ -70,10 +73,10 @@ def _error_is_model_configuration_issue(exc: BaseException) -> bool:
 
 def friendly_gemini_error(exc: BaseException, *, transient: bool = False) -> str:
     if transient or is_transient_gemini_error(exc):
-        return "Apollo could not reach a healthy Gemini generation slot after trying its fallback models. Please try again shortly."
+        return "Marklyf could not reach a healthy Gemini generation slot after trying its fallback models. Please try again shortly."
     if _error_is_model_configuration_issue(exc):
-        return "Apollo's configured Gemini models are currently unavailable. Check the Gemini model configuration and try again."
-    return "Apollo could not complete this generation with the configured AI service."
+        return "Marklyf's configured Gemini models are currently unavailable. Check the Gemini model configuration and try again."
+    return "Marklyf could not complete this generation with the configured AI service."
 
 
 def generate_gemini_text(
@@ -93,12 +96,13 @@ def generate_gemini_text(
     """Generate text with a bounded retry/fallback chain.
 
     The first model receives at most one exponential-backoff retry for transient
-    failures. Later fallback models are tried once each to avoid multiplying token
-    cost during provider incidents.
+    service failures. Rate-limit/quota failures immediately move to the next
+    model so one exhausted slot does not consume the retry budget.
+    Later fallback models are tried once each to keep provider incidents bounded.
     """
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
-        raise FriendlyGeminiError("Gemini is not configured for Apollo.")
+        raise FriendlyGeminiError("Gemini is not configured for Marklyf.")
 
     if client_factory is None:
         from google import genai
@@ -141,13 +145,16 @@ def generate_gemini_text(
                 last_error = exc
                 transient = is_transient_gemini_error(exc)
                 saw_transient = saw_transient or transient
-                if transient and attempt + 1 < max_attempts:
+                # Do not retry the same model for rate-limit/quota failures.
+                # Move immediately to the next independent model slot instead.
+                retry_same_model = transient and not _is_rate_limit_error(exc)
+                if retry_same_model and attempt + 1 < max_attempts:
                     sleep_fn(0.8 * (2**attempt))
                     continue
                 break
 
     if last_error is None:
-        raise FriendlyGeminiError("Apollo could not complete this generation.")
+        raise FriendlyGeminiError("Marklyf could not complete this generation.")
     raise FriendlyGeminiError(
         friendly_gemini_error(last_error, transient=saw_transient),
         transient=saw_transient,

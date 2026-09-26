@@ -345,6 +345,37 @@ class PostgresStore:
             with conn.cursor() as cur:
                 cur.execute("UPDATE apollo_notebooks SET updated=%s, source_count=%s, node_count=%s WHERE id=%s", (updated, source_count, node_count, notebook_id))
 
+    def reserve_source_name(
+        self,
+        notebook_id: str,
+        requested_name: str,
+        kind: str,
+        now: str,
+        source_url: str | None = None,
+    ) -> str:
+        """Atomically claim a unique source name in Postgres."""
+        path = Path(requested_name)
+        counter = 0
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                while True:
+                    candidate = requested_name if counter == 0 else f"{path.stem} ({counter}){path.suffix}"
+                    record_id = f"src_{notebook_id}_{candidate}"
+                    cur.execute(
+                        """
+                        INSERT INTO apollo_sources
+                          (id, notebook_id, name, kind, processing_status, error_message, source_url, created, updated)
+                        VALUES (%s,%s,%s,%s,'processing',NULL,%s,%s,%s)
+                        ON CONFLICT (notebook_id, name) DO NOTHING
+                        RETURNING name
+                        """,
+                        (record_id, notebook_id, candidate, kind, source_url, now, now),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return str(row[0])
+                    counter += 1
+
     def upsert_source_status(self, notebook_id: str, name: str, kind: str, status: str, error: str | None = None, now: str | None = None, source_url: str | None = None) -> None:
         stamp = now or ""
         with self._connect() as conn:
