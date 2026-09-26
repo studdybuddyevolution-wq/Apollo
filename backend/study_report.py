@@ -248,9 +248,7 @@ def render_report_markdown(
         for source in source_names:
             lines.append(f"- Notebook source: {source}")
 
-    return "
-".join(lines).strip() + "
-"
+    return "\n".join(lines).strip() + "\n"
 
 
 def report_grounding_score(markdown: str, context: str) -> float:
