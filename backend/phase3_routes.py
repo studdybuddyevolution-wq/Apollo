@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime as dt
 import json
 import os
+import re
 import uuid
 from typing import Any, Literal
 
@@ -21,7 +23,6 @@ from rag_service import get_notebook, get_notebook_chunks
 from storage import STORE
 from transformations import TRANSFORMATION_PROMPTS
 from study_report import (
-    REPORT_MODES,
     build_full_report_prompt,
     build_questions_prompt,
     build_report_plan,
@@ -600,6 +601,7 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
     return {"tool": "podcast", "data": data, "script": script, "insight": insight, "model_used": model, "sources": source_names}
 
 
+def register(app: FastAPI) -> None:
     @app.post("/api/notebooks/{notebook_id}/studio/report/stream")
     async def studio_report_stream(notebook_id: str, request: StudioGenerateRequest, http_request: Request):
         _enforce_rate_limit(http_request, request.user_id)
@@ -645,11 +647,9 @@ def _studio_generate(request: StudioGenerateRequest, notebook_id: str) -> dict[s
         return {
             "filename": safe_name+".docx",
             "mime_type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "content_base64":__import__("base64").b64encode(document).decode("ascii"),
+            "content_base64":base64.b64encode(document).decode("ascii"),
         }
 
-
-def register(app: FastAPI) -> None:
     path = "/api/notebooks/{notebook_id}/mindmap"
     app.router.routes = [
         route
