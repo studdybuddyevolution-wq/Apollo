@@ -51,6 +51,57 @@ def test_gemini_retries_primary_then_falls_back(monkeypatch):
     assert sleeps == [0.8]
 
 
+def test_gemini_does_not_retry_same_model_after_rate_limit():
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        calls = []
+
+        class FakeResponse:
+            text = "quota-fallback-success"
+
+        class FakeModels:
+            def generate_content(self, *, model, contents, config):
+                calls.append(model)
+                if model == "gemini-3.5-flash-lite":
+                    raise RuntimeError("429 RESOURCE_EXHAUSTED rate limit exceeded")
+                return FakeResponse()
+
+        class FakeClient:
+            def __init__(self):
+                self.models = FakeModels()
+
+        sleeps = []
+        text, model, attempts = phase3_common.generate_gemini_text(
+            "prompt",
+            model_chain=["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+            max_models=2,
+            retry_primary_once=True,
+            client_factory=lambda *_: FakeClient(),
+            sleep_fn=sleeps.append,
+        )
+
+        assert text == "quota-fallback-success"
+        assert model == "gemini-3.1-flash-lite"
+        assert attempts == 2
+        assert calls == ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+        assert sleeps == []
+    finally:
+        monkeypatch.undo()
+
+
+def test_default_gemini_chain_prefers_flash_lite_models(monkeypatch):
+    monkeypatch.delenv("APOLLO_GEMINI_FALLBACK_MODELS", raising=False)
+    monkeypatch.delenv("APOLLO_WEB_SYNTHESIS_MODEL", raising=False)
+
+    chain = phase3_common.gemini_model_chain(max_models=3)
+
+    assert chain == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.6-flash",
+    ]
+
 def test_friendly_gemini_error_hides_provider_details():
     monkeypatch = pytest.MonkeyPatch()
     try:
