@@ -6,7 +6,8 @@ import {
   Video, Mic, WandSparkles, X, Activity, SlidersHorizontal, MessageSquarePlus, Trash2, RefreshCw, Square, Pencil,
 } from 'lucide-react'
 import { getSocraticState, generateSocraticQuickCheck, gradeSocraticQuickCheck, streamChat } from './api/apolloApi'
-import { generateNotebookMindMap, generateStudioOutput } from './api/studioApi'
+import { generateNotebookMindMap, generateStudioOutput, generateStudyReport, regenerateStudyReportSection, exportStudyReportDocx } from './api/studioApi'
+import StudyReportViewer from './StudyReportViewer'
 import PastSessionsPage from './PastSessionsPage'
 import ProgressDashboardPage from './ProgressDashboardPage'
 import StudyPlannerPage from './StudyPlannerPage'
@@ -420,6 +421,9 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
   const [availableModels, setAvailableModels] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
   const [speaking, setSpeaking] = useState(false)
+  const [reportMode, setReportMode] = useState('study')
+  const [reportFocus, setReportFocus] = useState('')
+  const [reportProgress, setReportProgress] = useState(null)
   const abortRef = useRef(null)
 
   const transformations = [
@@ -451,15 +455,27 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
-    const timeout = window.setTimeout(() => controller.abort(), 65000)
+    const timeout = window.setTimeout(() => controller.abort(), tool === 'report' ? 180000 : 65000)
     setGenerating(true)
     setError('')
     setDiagram(null)
     setOutput(null)
+    if (tool !== 'report') setReportProgress(null)
     try {
       if (tool === 'mindmap') {
         const result = await generateNotebookMindMap(activeId, activeSources, null, userId, controller.signal)
         setDiagram(result)
+      } else if (tool === 'report') {
+        setReportProgress({ type: 'progress', stage: 'planning', percentage: 0, message: 'Preparing your Study Report…' })
+        const result = await generateStudyReport(activeId, activeSources, {
+          reportMode,
+          reportFocus,
+          userId,
+          signal: controller.signal,
+          onProgress: setReportProgress,
+        })
+        setOutput(result)
+        setReportProgress({ type: 'progress', stage: 'complete', percentage: 100, message: 'Study Report ready.' })
       } else {
         const result = await generateStudioOutput(activeId, tool, activeSources, {
           transformationType: tool === 'transform' ? transformation : null,
@@ -497,6 +513,39 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
     setSpeaking(false)
   }
 
+  const regenerateReportSection = async (heading) => {
+    const result = await regenerateStudyReportSection(activeId, heading, activeSources, {
+      reportMode,
+      reportFocus,
+      userId,
+    })
+    setOutput((current) => {
+      if (!current?.data?.sections) return current
+      const nextSections = current.data.sections.map((section) => (
+        section.heading === heading ? result.section : section
+      ))
+      return {
+        ...current,
+        data: { ...current.data, sections: nextSections },
+      }
+    })
+  }
+
+  const exportReportDocx = async () => {
+    if (!output?.markdown) return
+    const result = await exportStudyReportDocx(
+      activeId,
+      output.markdown,
+      output.data?.title || 'Marklyf Study Report',
+      userId,
+    )
+    downloadBase64File(
+      result.content_base64,
+      result.filename || 'Marklyf-Study-Report.docx',
+      result.mime_type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
+  }
+
   const activeNames = sources.filter((source) => activeSources.includes(source.name)).map((source) => source.name)
   const canGenerate = Boolean(activeId && activeSources.length && !generating)
 
@@ -512,6 +561,26 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         <strong style={{ display: 'block', marginBottom: 5, color: 'var(--text)' }}>Grounded in</strong>
         <span style={{ color: 'var(--tertiary)' }}>{activeNames.join(', ') || 'no active sources'}</span>
       </div>
+
+      {tool === 'report' && <div style={{ display: 'grid', gap: 8, marginBottom: 12, padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
+        <div className="muted-label">REPORT MODE</div>
+        <select value={reportMode} onChange={(e) => { setReportMode(e.target.value); setOutput(null); setReportProgress(null) }} style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}>
+          <option value="study">Study Notes — adaptive revision report</option>
+          <option value="deep">Deep Study — notebook + web research</option>
+          <option value="academic">Academic Report — formal report structure</option>
+        </select>
+        <label className="muted-label" htmlFor="marklyf-report-focus">REPORT FOCUS</label>
+        <input
+          id="marklyf-report-focus"
+          value={reportFocus}
+          onChange={(e) => setReportFocus(e.target.value)}
+          placeholder="Optional focus, e.g. Chapter 8 Heredity and Genetic Variation"
+          style={{ width: '100%', padding: '8px 9px', borderRadius: 8 }}
+        />
+        <div style={{ color: 'var(--tertiary)', fontSize: 9.5, lineHeight: 1.45 }}>
+          Study uses notebook RAG. Deep adds bounded Tavily research. Academic will not invent unsupported methodology or results.
+        </div>
+      </div>}
 
       {tool === 'transform' && <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
         <label className="muted-label" htmlFor="apollo-transformation">TRANSFORMATION</label>
@@ -568,10 +637,12 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
         </article>)}
       </div>}
 
-      {output?.tool === 'report' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}>
-        {output.warning && <div className="grounding-review" role="status"><strong>Grounding review</strong><span>{output.warning}</span><span>Source overlap: {Math.round((output.overlap_ratio || 0) * 100)}%</span></div>}
-        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.markdown}</pre>
-      </div>}
+      {output?.tool === 'report' && <StudyReportViewer
+        output={output}
+        progress={reportProgress}
+        onRegenerateSection={regenerateReportSection}
+        onExportDocx={exportReportDocx}
+      />}
 
       {output?.tool === 'transform' && <div style={{ marginBottom: 12, maxHeight: 420, overflow: 'auto', padding: 10, borderRadius: 10, background: 'var(--surface-container)', border: '1px solid var(--surface-high)' }}><pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5 }}>{output.content}</pre></div>}
 
@@ -594,7 +665,7 @@ function StudioPanel({ close, tool, setTool, activeId, sources, activeSources, u
       </div>}
     </>}
 
-    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
+    <div className="studio-tool-list">{STUDIO_TOOLS.map(({ id, label, description, icon: Icon }) => <button key={id} className={`studio-tool ${tool === id ? 'selected' : ''}`} onClick={() => { setTool(id); setError(''); setDiagram(null); setOutput(null); setReportProgress(null) }}><span className="studio-tool-icon"><Icon size={17} /></span><span><strong>{label}</strong><small>{description}</small></span></button>)}</div>
     <div className="studio-footer"><div><strong>{current.label}</strong><span>{generating ? 'Generating…' : (diagram || output ? 'Generated' : 'Ready')}</span></div><button className="studio-generate" disabled={!canGenerate || (tool === 'transform' && transformation === 'custom' && !customPrompt.trim())} onClick={generate}><Sparkles size={15} /> {generating ? 'Generating…' : 'Generate'}</button></div>
   </aside>
 }
